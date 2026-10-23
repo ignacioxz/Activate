@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Check-in RDQ-6 (versión chilena del Roland-Morris, 6 ítems textuales). Una vez por día laboral;
 /// si ya existe, muestra el puntaje con "Volver a responder". Sin caritas, sin premio por responder.
-/// "¿Dónde le duele?" es de selección múltiple (mínimo una zona), prellenada con las zonas habituales.
+/// "¿Dónde le duele?" es de selección múltiple, con la opción "No me duele" (sin zonas), prellenada con las zonas habituales.
 struct CheckInView: View {
     let name: String
     let existing: DailyCheckIn?
@@ -20,13 +20,13 @@ struct CheckInView: View {
     @State private var zones: [PainZone]? = nil
     @State private var moment: Moment? = nil
 
-    private var chosenZones: [PainZone] { zones ?? PainZone.normalized(initialZones) }
+    private var chosenZones: [PainZone] { zones ?? PainZone.ordered(initialZones) }
     private var chosenMoment: Moment { moment ?? initialMoment }
     private var allAnswered: Bool { answers.allSatisfy { $0 != nil } }
     private var answeredCount: Int { answers.compactMap { $0 }.count }
 
     private var zonesBinding: Binding<[PainZone]> {
-        Binding(get: { chosenZones }, set: { zones = PainZone.normalized($0, fallback: chosenZones.first ?? .lumbar) })
+        Binding(get: { chosenZones }, set: { zones = PainZone.ordered($0) })
     }
 
     var body: some View {
@@ -105,7 +105,11 @@ struct CheckInView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
-                SectionTitle(title: "¿Dónde le duele?", subtitle: "Marque una o más zonas.")
+                SectionTitle(title: "¿Dónde le duele?", subtitle: "Marque una o más zonas, o «No me duele».")
+                SelectionChip(title: PainZone.noPainOption, isSelected: chosenZones.isEmpty, systemImage: "checkmark.seal") {
+                    zones = []
+                }
+                .accessibilityHint("Desmarca todas las zonas.")
                 MultiSelectChips(items: PainZone.allCases, selection: zonesBinding, title: { $0.title })
             }
             .padding(.top, 8)

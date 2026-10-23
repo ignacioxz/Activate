@@ -225,12 +225,12 @@ final class PauseCoordinator {
     }
 
     /// Quita las actividades de cámara sin consentimiento. Si la receta queda vacía (relevo: cuello + ojos)
-    /// y las reglas lo permiten, deja la respiración, que solo usa la pantalla.
+    /// y las reglas lo permiten, deja el Stroop, que solo usa la pantalla.
     nonisolated static func consentFiltered(_ recipe: Recipe, consentGiven: Bool, allowed: [ActivityKind], demo: Bool) -> Recipe {
         guard !consentGiven, !recipe.activities.isEmpty else { return recipe }
         var activities = recipe.activities.filter { !usesCamera($0.kind) }
-        if activities.isEmpty, allowed.contains(.respiracion) {
-            activities = [Recipes.assignment(.respiracion, demo: demo)]
+        if activities.isEmpty, allowed.contains(.stroop) {
+            activities = [Recipes.assignment(.stroop, demo: demo)]
         }
         return Recipe(kind: recipe.kind, activities: activities)
     }

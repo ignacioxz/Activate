@@ -83,7 +83,7 @@ struct MomentCard: View {
         case .extensionLumbar: "Espalda"
         case .pasos: "Pasos"
         case .sentadilla: "Sentadillas"
-        case .cuello: "Cuello"
+        case .cuello: "Cervical"
         case .respiracion: "Respiración"
         case .ojos: "Pestañeo"
         case .stroop: "Reflejos"

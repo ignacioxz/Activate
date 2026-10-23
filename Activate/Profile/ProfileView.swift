@@ -443,6 +443,8 @@ struct ProfileChoiceRow<Option: Hashable>: View {
 struct ProfilePainZonePicker: View {
     @Binding var selection: [PainZone]
     var showsSilhouette = true
+    /// Opción para marcar que no hay dolor habitual (selección vacía).
+    var noPainTitle: String? = "Sin dolor habitual"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -450,6 +452,11 @@ struct ProfilePainZonePicker: View {
                 ProfileSilhouette(zones: selection)
                     .frame(height: 200)
                     .frame(maxWidth: .infinity)
+            }
+            if let noPainTitle {
+                SelectionChip(title: noPainTitle, isSelected: selection.isEmpty, systemImage: "checkmark.seal") {
+                    selection = []
+                }
             }
             MultiSelectChips(items: PainZone.allCases, selection: $selection, title: { $0.title })
         }
@@ -497,7 +504,7 @@ struct ProfileSilhouette: View {
                     .scaledToFit()
                     .foregroundStyle(.secondary.opacity(0.6))
                     .frame(width: geo.size.width, height: geo.size.height)
-                ForEach(PainZone.normalized(zones)) { zone in
+                ForEach(PainZone.ordered(zones)) { zone in
                     if let marker = Self.marker(for: zone) {
                         Circle()
                             .fill(Theme.accent)

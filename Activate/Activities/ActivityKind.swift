@@ -16,12 +16,30 @@ nonisolated enum ActivityKind: String, Codable, CaseIterable, Sendable, Identifi
 
     var id: String { rawValue }
 
+    /// Orden fijo de ejecución en toda pausa (pedido del usuario), aunque la receta o las reglas
+    /// descarten algunas: caminata → (pararse y sentarse) → sentadillas → movilidad cervical → Stroop
+    /// → pestañeo → extensión lumbar.
+    static let sessionOrder: [ActivityKind] = [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
+
+    /// Posición en `sessionOrder` (las retiradas van al final).
+    var sessionRank: Int { Self.sessionOrder.firstIndex(of: self) ?? Self.sessionOrder.count }
+
+    /// Retiradas del catálogo: no se ofrecen en ninguna pausa (se conservan para leer sesiones antiguas).
+    var isRetired: Bool { self == .respiracion }
+
+    /// Ordena según `sessionOrder` conservando el orden relativo de los empates.
+    static func inSessionOrder<T>(_ items: [T], kind: (T) -> ActivityKind) -> [T] {
+        items.enumerated()
+            .sorted { (kind($0.element).sessionRank, $0.offset) < (kind($1.element).sessionRank, $1.offset) }
+            .map(\.element)
+    }
+
     var name: String {
         switch self {
         case .extensionLumbar: "Párese y estírese hacia atrás"
         case .pasos: "Camine"
         case .sentadilla: "Sentadilla minera"
-        case .cuello: "Cuello: sí, no, quizás"
+        case .cuello: "Movilidad cervical"
         case .respiracion: "Respire con la guata"
         case .ojos: "Pestañeo completo"
         case .stroop: "Reflejos 60"

@@ -116,11 +116,11 @@ extension AppStore {
         return entry
     }
 
-    /// Selección explícita > zona única > zonas de respaldo (nunca vacía).
+    /// Selección explícita (vacía = "No me duele") > zona única > zonas de respaldo.
     nonisolated static func resolvedZones(_ zones: [PainZone]?, zone: PainZone?, fallback: [PainZone]) -> [PainZone] {
-        if let zones, !zones.isEmpty { return PainZone.normalized(zones) }
+        if let zones { return PainZone.ordered(zones) }
         if let zone { return [zone] }
-        return PainZone.normalized(fallback)
+        return PainZone.ordered(fallback)
     }
 
     // MARK: Sesiones

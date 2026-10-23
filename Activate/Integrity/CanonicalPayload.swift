@@ -133,7 +133,7 @@ nonisolated struct CanonicalPayload: Codable, Sendable, Hashable {
         checkIn = (s.checkInScore == nil && s.checkInAnswers.isEmpty)
             ? nil
             : CheckIn(score: s.checkInScore, answers: s.checkInAnswers, zone: s.zone,
-                      zones: s.zones.map { PainZone.normalized($0, fallback: s.zone) })
+                      zones: s.zones.map { PainZone.ordered($0) })
         postResponse = s.postResponse
         activities = s.activities.map(Activity.init)
         counted = s.counted

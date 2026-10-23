@@ -99,12 +99,12 @@ nonisolated enum DemoSeed {
         switch moment.recipe {
         case .relevo60: [.cuello, .ojos]
         case .colacion3: [.pasos, .cuello, .ojos]
-        case .campamento5: [.pasos, .sentadilla, .extensionLumbar, .cuello, .ojos, .stroop, .respiracion]
+        case .campamento5: [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
         }
     }
 
     /// Campamento sin agacharse (RDQ ≥ 4 con "no agacharse" o plan suave).
-    static let gentleCampamento: [ActivityKind] = [.pasos, .cuello, .ojos, .stroop, .respiracion]
+    static let gentleCampamento: [ActivityKind] = [.pasos, .cuello, .stroop, .ojos]
 
     /// Lectura del coach pregenerada para hoy (una frase por línea).
     static let pregeneratedReading = """

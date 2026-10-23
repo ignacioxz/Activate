@@ -5,16 +5,18 @@ import Foundation
 // ejecuta por bloques de sensor y `PauseCoordinator` detiene una fuente antes de arrancar la otra.
 
 nonisolated enum SensorBlockPlanner {
-    /// Orden fijo de ejecución: [pasos] → [cámara de cuerpo] → [cara] → [pantalla].
-    static let blockOrder: [SensorBlock] = [.pedometer, .cameraPose, .face, .screen]
-
-    /// Agrupa las actividades por bloque de sensor en `blockOrder`, conservando el orden interno.
-    /// Los bloques sin actividades no aparecen.
+    /// Ordena según `ActivityKind.sessionOrder` (orden fijo pedido por el usuario) y agrupa en tramos
+    /// consecutivos del mismo sensor; un mismo bloque puede repetirse (p. ej. cara → pantalla → cara).
     static func order(_ activities: [ActivityAssignment]) -> [[ActivityAssignment]] {
-        blockOrder.compactMap { block in
-            let group = activities.filter { $0.kind.sensorBlock == block }
-            return group.isEmpty ? nil : group
+        var groups: [[ActivityAssignment]] = []
+        for a in ordered(activities) {
+            if let last = groups.last?.last, last.kind.sensorBlock == a.kind.sensorBlock {
+                groups[groups.count - 1].append(a)
+            } else {
+                groups.append([a])
+            }
         }
+        return groups
     }
 
     /// Aplana los grupos en una sola lista (orden de ejecución).
@@ -22,9 +24,9 @@ nonisolated enum SensorBlockPlanner {
         groups.flatMap { $0 }
     }
 
-    /// Lista plana ya ordenada por bloque.
+    /// Lista plana en el orden fijo de la sesión (sin actividades retiradas).
     static func ordered(_ activities: [ActivityAssignment]) -> [ActivityAssignment] {
-        flatten(order(activities))
+        ActivityKind.inSessionOrder(activities.filter { !$0.kind.isRetired }, kind: { $0.kind })
     }
 
     /// Bloques presentes, en orden de ejecución.
