@@ -23,8 +23,9 @@ struct ActivateApp: App {
         _game = State(initialValue: GameStore(store: s))
         // Un builder por actividad (verificador + fuente); en simulador siempre replay.
         VerifierWiring.register(sensors: hub, store: s)
-        // Sentadilla: en las manos (ARKit cara + mundo, sin mostrar cámara) o apoyado; reemplaza el builder genérico.
+        // Sentadilla y extensión lumbar: en las manos (ARKit cara + mundo). Nunca se muestra la cámara.
         SquatWiring.register(hub: hub, store: s)
+        ExtensionWiring.register(hub: hub, store: s)
     }
 
     var body: some Scene {
@@ -39,7 +40,7 @@ struct ActivateApp: App {
                 .preferredColorScheme(outdoorMode ? .light : nil)
                 .tint(Theme.accent)
                 // La pantalla no se bloquea mientras la app está abierta (pedido del usuario): las pausas
-                // se hacen con el teléfono en la mano o apoyado y sin tocarlo. Al salir se restaura.
+                // se hacen con el teléfono en la mano (o en el bolsillo al caminar) y sin tocarlo. Al salir se restaura.
                 .onAppear { ScreenAwake.update(for: .active) }
                 .onChange(of: scenePhase) { _, phase in ScreenAwake.update(for: phase) }
         }

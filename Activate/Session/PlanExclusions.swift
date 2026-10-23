@@ -15,7 +15,6 @@ nonisolated enum PlanExclusions {
     static let avoidsBending = "Usted marcó que evita agacharse o arrodillarse."
     static let notAdvisable = "No conviene con sus respuestas de hoy."
     static let relevo = "Eligió la pausa rápida de 1 minuto."
-    static let needsPropping = "Necesita apoyar el teléfono a 2 metros: va en el campamento."
     static let campamento = "Va en el campamento, con más tiempo."
     static let coachRemoved = "El coach la dejó para otra pausa según su historial."
     static let unavailable = "No disponible hoy."
@@ -37,14 +36,14 @@ nonisolated enum PlanExclusions {
 
     private static func reason(for kind: ActivityKind, recipe: RecipeKind, decision: SafetyRules.Decision,
                                avoids: Bool, consentGiven: Bool, inBase: Bool, removedByCoach: Bool) -> String {
-        let camera = kind.sensorBlock == .face || kind.sensorBlock == .cameraPose
+        let camera = kind.sensorBlock.usesFrontCamera
         if !consentGiven && camera { return noConsent }
         if decision.gentle && !Recipes.gentleKinds.contains(kind) { return gentle }
         if !decision.allowed.contains(kind) { return avoids ? avoidsBending : notAdvisable }
         if !inBase {
             switch recipe {
             case .relevo60: return relevo
-            case .colacion3: return kind.sensorBlock == .cameraPose ? needsPropping : campamento
+            case .colacion3: return campamento
             case .campamento5: return unavailable
             }
         }

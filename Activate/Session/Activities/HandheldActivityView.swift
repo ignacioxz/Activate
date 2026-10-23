@@ -1,12 +1,11 @@
-import AVFoundation
 import SwiftUI
 
-/// A3 sentadilla parcial dentro del flujo de pausa: selector sobrio de modo ("En las manos" por defecto ·
-/// "Apoyado"), instrucción corta, contador con anillo, consigna grande del desafío, gate visible, háptica
-/// por rep y "Saltar (no suma)". No hay botón "hecho": solo el runner cierra la actividad.
-/// En demo, una línea gris con lo que bajaron el teléfono y la cara (para calibrar en el iPhone).
-struct SquatActivityView: View {
-    let runner: SquatRunner
+/// A3 sentadilla y A1 extensión lumbar con el teléfono en las manos, dentro del flujo de pausa: instrucción
+/// corta, contador con anillo, consigna grande del desafío, gate visible, háptica por rep y "Saltar (no suma)".
+/// Nunca se muestra la imagen de la cámara: ARKit mide por detrás. No hay botón "hecho": solo el runner
+/// cierra la actividad. En demo, una línea gris de depuración (para calibrar en el iPhone).
+struct HandheldActivityView: View {
+    let runner: any ActivityRunning
     let assignment: ActivityAssignment
     var position: Int = 1
     var total: Int = 1
@@ -15,28 +14,24 @@ struct SquatActivityView: View {
 
     /// Segundos que se muestra "Listo." antes de pasar a la siguiente actividad.
     static let handoffSeconds: Double = 1.1
-    /// Alto de la tarjeta del contador (con el preview de la cámara de fondo en el modo apoyado).
-    static let cardHeight: CGFloat = 340
+    /// Alto de la tarjeta del contador.
+    static let cardHeight: CGFloat = 300
+
+    /// Ejercicios que se hacen con el teléfono en las dos manos frente al pecho.
+    static func handles(_ kind: ActivityKind) -> Bool { kind == .sentadilla || kind == .extensionLumbar }
+
+    /// Instrucción de 1-2 frases según el ejercicio.
+    static func instructions(for kind: ActivityKind) -> String {
+        kind == .extensionLumbar ? HandheldExtensionCopy.instructions : HandheldSquatCopy.instructions
+    }
 
     @Environment(AppStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var mode: SquatMode
     @State private var showDone = false
     @State private var delivered = false
     @State private var debugReference: HandheldSquatSample?
     @ScaledMetric(relativeTo: .largeTitle) private var counterSize: CGFloat = 76
     @ScaledMetric(relativeTo: .largeTitle) private var ringSize: CGFloat = 220
-
-    init(runner: SquatRunner, assignment: ActivityAssignment, position: Int = 1, total: Int = 1,
-         onFinish: @escaping (ActivityOutcome) -> Void = { _ in }, onSkip: @escaping () -> Void = {}) {
-        self.runner = runner
-        self.assignment = assignment
-        self.position = position
-        self.total = total
-        self.onFinish = onFinish
-        self.onSkip = onSkip
-        _mode = State(initialValue: runner.mode)
-    }
 
     private var progress: VerifierProgress { runner.progress }
 
@@ -45,8 +40,7 @@ struct SquatActivityView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
-                    modePicker
-                    Text(mode.instructions)
+                    Text(Self.instructions(for: assignment.kind))
                         .font(.title3)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -79,7 +73,7 @@ struct SquatActivityView: View {
         .sensoryFeedback(.impact(weight: .medium), trigger: challengeText) { _, new in new != nil }
     }
 
-    // MARK: Encabezado y modo
+    // MARK: Encabezado
 
     private var header: some View {
         VStack(spacing: 4) {
@@ -93,42 +87,11 @@ struct SquatActivityView: View {
         }
     }
 
-    private var modePicker: some View {
-        Picker("Cómo hacerla", selection: $mode) {
-            ForEach(SquatMode.allCases) { m in
-                Label(m.title, systemImage: m.symbol).tag(m)
-            }
-        }
-        .pickerStyle(.segmented)
-        .tint(Theme.accent)
-        .disabled(!runner.canSwitchMode || showDone || delivered)
-        .onChange(of: mode) { _, newMode in
-            SquatWiring.store(newMode)
-            runner.switchMode(newMode)
-        }
-        .accessibilityHint("Se puede cambiar antes de la primera repetición")
-    }
-
-    // MARK: Contador
+    // MARK: Contador (sin imagen de cámara)
 
     private var counterCard: some View {
         ZStack {
-            if runner.mode == .supported {
-                if let session = runner.captureSession {
-                    CameraPreviewView(session: session)
-                        .accessibilityLabel("Cámara frontal")
-                } else {
-                    Color(.secondarySystemBackground)
-                        .overlay(alignment: .topLeading) {
-                            Label("Cámara frontal", systemImage: "camera.fill")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(12)
-                        }
-                }
-            } else {
-                Color(.secondarySystemBackground)
-            }
+            Color(.secondarySystemBackground)
             counterRing
         }
         .frame(maxWidth: .infinity)
@@ -163,9 +126,9 @@ struct SquatActivityView: View {
 
     // MARK: Desafío y gate
 
-    /// Consigna del desafío vigente ("Quédese abajo 2 segundos").
+    /// Consigna del desafío vigente ("Quédese abajo / atrás 2 segundos").
     private var challengeText: String? {
-        guard progress.gate == .ready, let cue = runner.cue, SquatHoldChallenge.cueTexts.contains(cue.text) else { return nil }
+        guard progress.gate == .ready, let cue = runner.cue, HoldChallengeCopy.allCueTexts.contains(cue.text) else { return nil }
         return cue.text
     }
 
@@ -202,7 +165,7 @@ struct SquatActivityView: View {
                     .foregroundStyle(Theme.danger)
             case .ready:
                 if challengeText == nil, let cue = runner.cue {
-                    Label(cue.text, systemImage: cue.symbol ?? "figure.cross.training")
+                    Label(cue.text, systemImage: cue.symbol ?? assignment.kind.symbol)
                         .font(.title2.weight(.heavy))
                 } else if challengeText == nil, !progress.hint.isEmpty {
                     Text(progress.hint).font(.title2.weight(.bold))
@@ -220,16 +183,19 @@ struct SquatActivityView: View {
 
     private var debugLine: some View {
         Group {
-            if runner.mode == .handheld, let s = runner.handheldTelemetry {
+            if let debug = progress.debug, !debug.isEmpty {
+                // Extensión: inclinación del teléfono, cara hacia atrás y encuadre (lo arma el verificador).
+                Text(debug)
+            } else if let s = runner.handheldTelemetry {
                 let ref = debugReference ?? s
                 let phone = Double(ref.phonePos.y - s.phonePos.y) * 100
                 let face = Double(ref.facePos.y - s.facePos.y) * 100
                 let source = s.worldTrackingNormal ? "mundo" : "respaldo"
                 Text(String(format: "Teléfono %.0f cm · cara %.0f cm · %@ · %.0f°", phone, face, source, s.phonePitchDeg))
-            } else if runner.isReplay {
+            } else if runner.isHandheldReplay {
                 Text("Depuración: simulado")
             } else {
-                Text("Depuración: modo \(runner.mode.title.lowercased())")
+                Text("Depuración: sin datos")
             }
         }
         .font(.caption2.monospacedDigit())

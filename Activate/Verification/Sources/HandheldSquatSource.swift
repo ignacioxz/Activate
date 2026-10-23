@@ -5,19 +5,24 @@ import Observation
 import UIKit
 import simd
 
-// Dueño: agente "squats". Fuente en vivo de la sentadilla EN LAS MANOS: una `ARSession` propia (no la de
-// `FaceSource`) con `ARFaceTrackingConfiguration` (una cara, TrueDepth) y, cuando el equipo lo soporta,
+// Dueño: agente "squats". Fuente en vivo de los ejercicios EN LAS MANOS (A3 sentadilla y A1 extensión
+// lumbar; alias `HandheldBodySource`): una `ARSession` propia (no la de `FaceSource`) con
+// `ARFaceTrackingConfiguration` (una cara, TrueDepth) y, cuando el equipo lo soporta,
 // `isWorldTrackingEnabled = true`: la cámara trasera + IMU dan la pose 6DOF del teléfono en el mundo
 // (`worldAlignment = .gravity`, eje Y hacia arriba) mientras la frontal sigue la cara.
+// Ninguna imagen de cámara llega a la pantalla: la sesión no tiene vista y solo entrega números.
 //
 // En cada `ARFrame` (cola serial propia del delegate) se convierte a `HandheldSquatSample`: posición del
 // teléfono (`camera.transform`), cara en el mundo (`ARFaceAnchor.transform`) y en el espacio del teléfono
 // (`camera⁻¹ · face`), energía de 8 blendShapes, estado del seguimiento del mundo y lo último del
 // `SensorHub` (gravedad y aceleración vertical de deviceMotion, altímetro, podómetro). Nada de ARKit sale
-// de este archivo. `ARSession` y `AVCaptureSession` no conviven: el coordinador / `SquatRunner` hacen
-// `stop()` de una antes del `start()` de la otra.
+// de este archivo. Dos `ARSession` no corren a la vez: el runner hace `stop()` (pausa) al terminar y el
+// coordinador recién entonces arranca la fuente siguiente (cuello / pestañeo).
 
-/// `SampleSource` de la sentadilla en las manos. Vive en MainActor; el trabajo corre en la cola del relay.
+/// Fuente única de la sentadilla y la extensión lumbar en las manos (misma `ARSession`, mismas muestras).
+typealias HandheldBodySource = HandheldSquatSource
+
+/// `SampleSource` de los ejercicios en las manos. Vive en MainActor; el trabajo corre en la cola del relay.
 @Observable
 final class HandheldSquatSource: SampleSource {
     typealias Sample = HandheldSquatSample

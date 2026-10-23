@@ -86,7 +86,7 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
 
     @ObservationIgnored private var verifier: V
     /// Fuente de muestras. Visible para que el flujo de pausa comparta la misma instancia con la vista
-    /// (p. ej. `ScreenSource` de Stroop/respiración, `AVCaptureSession` del preview de cámara).
+    /// (p. ej. `ScreenSource` de Stroop/respiración, telemetría de depuración de `HandheldBodySource`).
     @ObservationIgnored let source: S
     @ObservationIgnored private let timeOf: ((S.Sample) -> Double)?
     @ObservationIgnored private let clock = ContinuousClock()
@@ -308,26 +308,26 @@ private func durationSeconds(_ d: Duration) -> Double {
 ///
 ///     ActivityRunnerFactory.register(.sentadilla) { assignment, demo, replay in
 ///         let spec = VerificationSpec.standard(for: .sentadilla, target: assignment.target, demo: demo)
-///         let verifier = SquatVerifier(spec: spec)
+///         let verifier = HandheldSquatVerifier(spec: spec)
 ///         if replay {
-///             let source = ReplaySource(samples: FixtureSynth.squats(count: assignment.target), speed: 1)
+///             let source = ReplaySource(samples: HandheldSquatSynth.replay(target: spec.target, challengeRep: 0), speed: 1)
 ///             return ActivityRunner(assignment: assignment, verifier: verifier, source: source)
 ///         }
-///         return ActivityRunner(assignment: assignment, verifier: verifier, source: CameraPoseSource())
+///         return ActivityRunner(assignment: assignment, verifier: verifier, source: HandheldBodySource(hub: hub))
 ///     }
 ///
 /// Por kind (fuente en vivo / fixture de replay):
 /// - `.pasos` (A2): `PedometerVerifier` ← `SensorHub` (StepSample: podómetro + movimiento + actividad) / `FixtureSynth.walk(steps:)`.
-/// - `.sentadilla` (A3): `SquatVerifier` ← `CameraPoseSource` (PoseSample) / `FixtureSynth.squats(count:)`.
-/// - `.extensionLumbar` (A1): `ExtensionVerifier` ← `CameraPoseSource` / fixture grabada (`Fixture<PoseSample>.load`).
+/// - `.sentadilla` (A3): `HandheldSquatVerifier` ← `HandheldBodySource` (ARKit cara + mundo, en las manos) / `HandheldSquatSynth`.
+/// - `.extensionLumbar` (A1): `HandheldExtensionVerifier` ← la misma `HandheldBodySource` / `HandheldExtensionSynth`.
 /// - `.cuello` (A5): `NeckVerifier` (challenge aleatorio con semilla) ← `FaceSource` (FaceSample) / `FixtureSynth.neckSequence(_:)`.
 /// - `.ojos` (A9): `EyeRestVerifier` ← la misma `FaceSource` / `FixtureSynth.blinks(count:)` + `gaze(seconds:awayDegrees:)`.
 /// - `.respiracion` (A8): `BreathVerifier` ← fuente de pantalla (ScreenSample touchDown/touchUp) / `ReplaySource<ScreenSample>`.
 /// - `.stroop` (A10): `StroopVerifier` ← fuente de pantalla (ScreenSample stroopShown/stroopAnswer) / `ReplaySource<ScreenSample>`.
 ///
 /// `replay` se fuerza en Simulator (`#if targetEnvironment(simulator)`) y en tests; el runner marca
-/// todo lo reproducido como `simulated`. `ARSession` y `AVCaptureSession` no conviven: el coordinador
-/// hace `stop()` de un runner antes de `start()` del siguiente bloque de sensor.
+/// todo lo reproducido como `simulated`. Ninguna fuente muestra la imagen de la cámara; dos `ARSession` no
+/// corren a la vez: el runner hace `stop()` de su fuente al terminar, antes del `start()` del siguiente.
 @MainActor
 enum ActivityRunnerFactory {
     typealias Builder = @MainActor (_ assignment: ActivityAssignment, _ demo: Bool, _ replay: Bool) -> any ActivityRunning

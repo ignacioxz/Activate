@@ -1,8 +1,10 @@
 import Foundation
 
 // Dueño: agente "activities".
-// ARSession (cara) y AVCaptureSession (pose) no pueden compartir la cámara frontal: la pausa se
-// ejecuta por bloques de sensor y `PauseCoordinator` detiene una fuente antes de arrancar la otra.
+// La pausa se ejecuta por bloques de sensor y `PauseCoordinator` detiene una fuente antes de arrancar la
+// otra. Todas las actividades de cámara usan ARSession sin vista (bloque `face`): la sentadilla y la
+// extensión lumbar en las manos comparten bloque con cuello y pestañeo, y entre ellas basta con que cada
+// fuente pause su `ARSession` al terminar (no hay relevo `AVCaptureSession` ↔ `ARSession`).
 
 nonisolated enum SensorBlockPlanner {
     /// Ordena según `ActivityKind.sessionOrder` (orden fijo pedido por el usuario) y agrupa en tramos
@@ -39,7 +41,8 @@ nonisolated enum SensorBlockPlanner {
         group.first?.kind.sensorBlock
     }
 
-    /// Entre `from` y `to` hay que soltar la cámara frontal (stop de una fuente antes del start de la otra).
+    /// Entre `from` y `to` hay que esperar el relevo de la cámara frontal (dos bloques de cámara distintos).
+    /// Con un solo bloque de cámara (`face`) nunca ocurre; se conserva la regla para el coordinador.
     static func needsCameraHandoff(from: SensorBlock, to: SensorBlock) -> Bool {
         from != to && from.usesFrontCamera && to.usesFrontCamera
     }

@@ -109,7 +109,7 @@ struct VerifierWiringTests {
             let replay = VerifierWiring.builder(for: kind, sensors: hub, store: store)(assignment, true, true)
             #expect(replay.screenSource != nil)
             #expect(replay.screenSource?.level == .replay)
-            #expect(replay.cameraCaptureSession == nil)
+            #expect(!replay.isHandheldRunner)
             let live = VerifierWiring.builder(for: kind, sensors: hub, store: store)(assignment, true, false)
             #expect(live.screenSource?.level == (VerifierWiring.forcesReplay ? .replay : .live))
         }

@@ -153,8 +153,8 @@ nonisolated enum HandheldSquatTuning {
     static let barometerMinSeconds = 8.0
     static let barometerMinReadingGap = 0.5
 
-    /// Para que la métrica `minDescentRatio` sea comparable con el modo apoyado (descenso / estatura en
-    /// el cuadro ≈ cuello-tobillo de un adulto).
+    /// Para que la métrica `minDescentRatio` sea comparable con las sesiones antiguas de cámara apoyada
+    /// (descenso / estatura en el cuadro ≈ cuello-tobillo de un adulto).
     static let descentRatioReferenceMeters = 1.40
 }
 
@@ -193,37 +193,83 @@ nonisolated enum HandheldSquatAnomaly {
     static let worldJump = "worldJump"
 }
 
-// MARK: - Desafío "Quédese abajo 2 segundos" (compartido con el modo apoyado)
+// MARK: - Desafío de pausa (sentadilla "Quédese abajo", extensión lumbar "Quédese atrás")
 
-/// En una rep elegida al azar (semilla por sesión) la consigna pide quedarse abajo; la rep solo cuenta
-/// si se mantiene ≥ 1,5 s. Fallarlo 2 veces → `holdChallengeFailed` (hard) y el desafío se cierra.
+/// Consigna del desafío según el ejercicio: misma regla, distinto texto.
+nonisolated enum HoldChallengeCopy: String, Sendable, Hashable, Codable, CaseIterable {
+    case squat
+    case backExtension
+
+    var cue: Cue {
+        switch self {
+        case .squat: Cue(text: "Quédese abajo 2 segundos", symbol: "pause.circle")
+        case .backExtension: Cue(text: "Quédese atrás 2 segundos", symbol: "pause.circle")
+        }
+    }
+
+    var missedCue: Cue {
+        switch self {
+        case .squat: Cue(text: "No contó. Quédese abajo 2 segundos", symbol: "pause.circle")
+        case .backExtension: Cue(text: "No contó. Quédese atrás 2 segundos", symbol: "pause.circle")
+        }
+    }
+
+    var doneCue: Cue {
+        switch self {
+        case .squat: Cue(text: "Ya. Suba.", symbol: "arrow.up")
+        case .backExtension: Cue(text: "Ya. Vuelva derecho.", symbol: "figure.stand")
+        }
+    }
+
+    var failureDetail: String {
+        switch self {
+        case .squat: "No se quedó abajo cuando se le pidió"
+        case .backExtension: "No se quedó atrás cuando se le pidió"
+        }
+    }
+
+    /// Textos que la vista muestra como consigna grande (todas las variantes).
+    static var allCueTexts: Set<String> { Set(allCases.flatMap { [$0.cue.text, $0.missedCue.text] }) }
+}
+
+/// El desafío lo comparten la sentadilla y la extensión lumbar en las manos.
+typealias HoldChallenge = SquatHoldChallenge
+
+/// En una rep elegida al azar (semilla por sesión) la consigna pide quedarse abajo (o atrás); la rep solo
+/// cuenta si se mantiene ≥ 1,5 s. Fallarlo 2 veces → `holdChallengeFailed` (hard) y el desafío se cierra.
 nonisolated struct SquatHoldChallenge: Sendable, Hashable, Codable {
     static let anomalyKind = "holdChallengeFailed"
     static let requiredSeconds = 1.5
     static let maxFailures = 2
     /// La rep del desafío se elige entre la 2ª y esta (si la meta alcanza).
     static let latestRep = 6
-    static let cue = Cue(text: "Quédese abajo 2 segundos", symbol: "pause.circle")
-    static let missedCue = Cue(text: "No contó. Quédese abajo 2 segundos", symbol: "pause.circle")
-    static let doneCue = Cue(text: "Ya. Suba.", symbol: "arrow.up")
-    /// Textos que la vista muestra como consigna grande.
+    static let cue = HoldChallengeCopy.squat.cue
+    static let missedCue = HoldChallengeCopy.squat.missedCue
+    static let doneCue = HoldChallengeCopy.squat.doneCue
+    /// Textos de la sentadilla que la vista muestra como consigna grande.
     static var cueTexts: Set<String> { [cue.text, missedCue.text] }
 
     /// Número (1-based) de la rep que lleva el desafío; 0 = sin desafío.
     let repNumber: Int
+    /// Texto de las consignas (sentadilla por defecto).
+    let copy: HoldChallengeCopy
     private(set) var failures = 0
     private(set) var passed = false
     private var announcedForFailures: Int? = nil
 
-    init(repNumber: Int) {
+    init(repNumber: Int, copy: HoldChallengeCopy = .squat) {
         self.repNumber = max(0, repNumber)
+        self.copy = copy
     }
 
-    init(seed: UInt64, target: Int) {
-        self.init(repNumber: Self.repNumber(seed: seed, target: target))
+    init(seed: UInt64, target: Int, copy: HoldChallengeCopy = .squat) {
+        self.init(repNumber: Self.repNumber(seed: seed, target: target), copy: copy)
     }
 
     static let none = SquatHoldChallenge(repNumber: 0)
+
+    /// El mismo desafío sin intentos (al reiniciar la actividad).
+    var restarted: SquatHoldChallenge { SquatHoldChallenge(repNumber: repNumber, copy: copy) }
 
     var isEnabled: Bool { repNumber > 0 }
     var isFinished: Bool { !isEnabled || passed || failures >= Self.maxFailures }
@@ -235,7 +281,7 @@ nonisolated struct SquatHoldChallenge: Sendable, Hashable, Codable {
     mutating func announcement(nextRep: Int) -> Cue? {
         guard isArmed(nextRep: nextRep), announcedForFailures != failures else { return nil }
         announcedForFailures = failures
-        return failures == 0 ? Self.cue : Self.missedCue
+        return failures == 0 ? copy.cue : copy.missedCue
     }
 
     mutating func pass() { passed = true }
@@ -245,7 +291,7 @@ nonisolated struct SquatHoldChallenge: Sendable, Hashable, Codable {
         guard !isFinished else { return nil }
         failures += 1
         guard failures >= Self.maxFailures else { return nil }
-        return Anomaly(kind: Self.anomalyKind, severity: .hard, at: t, detail: "No se quedó abajo cuando se le pidió")
+        return Anomaly(kind: Self.anomalyKind, severity: .hard, at: t, detail: copy.failureDetail)
     }
 
     /// Rep del desafío para una meta: entre la 2ª y la penúltima (máx. `latestRep`), determinista por semilla.
@@ -598,7 +644,7 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier {
     // MARK: ActivityVerifier
 
     mutating func start(at t: Double) {
-        let fresh = HandheldSquatVerifier(spec: spec, challenge: SquatHoldChallenge(repNumber: challenge.repNumber))
+        let fresh = HandheldSquatVerifier(spec: spec, challenge: challenge.restarted)
         self = fresh
         startT = t
     }

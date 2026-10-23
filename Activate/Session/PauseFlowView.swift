@@ -160,13 +160,14 @@ private struct PauseFlowContent: View {
                                        onSkip: { coordinator.skipCurrent() })
                         .id(coordinator.runnerGeneration)
                         .transition(stageTransition)
-                } else if assignment.kind == .sentadilla, let squat = runner.squatRunner {
-                    SquatActivityView(runner: squat,
-                                      assignment: assignment,
-                                      position: index + 1,
-                                      total: coordinator.plan.count,
-                                      onFinish: { coordinator.activityFinished($0, at: index) },
-                                      onSkip: { coordinator.skipCurrent() })
+                } else if HandheldActivityView.handles(assignment.kind), runner.isHandheldRunner {
+                    // Sentadilla y extensión lumbar en las manos: contador sin imagen de cámara.
+                    HandheldActivityView(runner: runner,
+                                         assignment: assignment,
+                                         position: index + 1,
+                                         total: coordinator.plan.count,
+                                         onFinish: { coordinator.activityFinished($0, at: index) },
+                                         onSkip: { coordinator.skipCurrent() })
                         .id(coordinator.runnerGeneration)
                         .transition(stageTransition)
                 } else {
@@ -180,7 +181,7 @@ private struct PauseFlowContent: View {
                         .transition(stageTransition)
                 }
             } else {
-                // Relevo de cámara entre bloques (ARSession ↔ AVCaptureSession) o runner aún no creado.
+                // Relevo entre bloques de sensor o runner aún no creado.
                 ProgressView(coordinator.plan.indices.contains(index)
                              ? coordinator.plan[index].kind.sensorBlock.preparingCopy
                              : "Preparando sensor…")

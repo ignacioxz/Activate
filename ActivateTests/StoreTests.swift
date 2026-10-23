@@ -230,7 +230,7 @@ struct StoreTests {
         for s in store.data.sessions {
             #expect(s.workDayKey == wc.key(for: s.startedAt))
             #expect(s.turnoKey == wc.turnoKey(for: s.startedAt))
-            #expect(s.recipe == s.moment.recipe)
+            #expect(s.recipe == DemoSeed.seededRecipe(for: s.moment))
             #expect(Moment.infer(date: s.startedAt, shift: .day, calendar: wc.calendar) == s.moment)
             #expect(s.endedAt != nil && s.monotonicSeconds > 0)
             #expect(s.counted == VerificationPolicy.counts(s.activities))
@@ -399,7 +399,7 @@ struct StoreTests {
         var s = store.makeSession(moment: .colacion, startedAt: n)
         #expect(s.workDayKey == store.calendar.key(for: n))
         #expect(s.turnoKey == store.calendar.turnoKey(for: n))
-        #expect(s.recipe == .colacion3)
+        #expect(s.recipe == Moment.colacion.recipe)
         #expect(s.checkInScore == 2 && s.checkInAnswers == checkIn.answers)
         #expect(s.zone == store.profile.usualZone)
         store.addSession(s)

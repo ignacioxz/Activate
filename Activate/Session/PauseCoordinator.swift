@@ -26,7 +26,8 @@ final class PauseCoordinator {
     static let coachTimeoutSeconds: Double = 3.5
     /// Nivel que se registra cuando el runner no declara ninguno: nunca se asume verificación.
     static let undeclaredLevel: VerificationLevel = .suspicious
-    /// Espera entre `stop()` de una fuente de cámara y `start()` de la otra (ARSession ↔ AVCaptureSession).
+    /// Espera entre `stop()` de una fuente de cámara y `start()` de la de otro bloque de cámara
+    /// (`SensorBlockPlanner.needsCameraHandoff`; hoy todas comparten el bloque `face` y no hay espera).
     static let cameraHandoffSeconds: Double = 1.0
 
     // MARK: Dependencias
@@ -222,9 +223,9 @@ final class PauseCoordinator {
         requestCoachPlan(base: filtered, allowed: allowed, demo: demo, reducedTargets: reduced)
     }
 
-    /// Actividades que usan la cámara (cara con ARKit, cuerpo con Vision).
+    /// Actividades que usan la cámara (ARKit sin vista: cara; sentadilla y extensión también el mundo).
     nonisolated static func usesCamera(_ kind: ActivityKind) -> Bool {
-        kind.sensorBlock == .face || kind.sensorBlock == .cameraPose
+        kind.sensorBlock.usesFrontCamera
     }
 
     /// Tipos permitidos para el coach: sin consentimiento, fuera los de cámara.
@@ -399,7 +400,7 @@ final class PauseCoordinator {
             enter(index: next)
             return
         }
-        // ARSession y AVCaptureSession no conviven: la fuente anterior ya hizo `stop()` al cerrar el runner;
+        // Dos bloques de cámara distintos no conviven: la fuente anterior ya hizo `stop()` al cerrar el runner;
         // se espera un instante ("Preparando cámara…") antes del `start()` de la siguiente.
         stage = .activity(next)
         handoffTask = Task { [weak self] in
@@ -415,8 +416,7 @@ final class PauseCoordinator {
     func appWentToBackground() {
         integrity.noteBackgrounded()
         guard let index = currentIndex, index > finishedIndex, let runner, runner.outcome == nil else { return }
-        let block = plan[index].kind.sensorBlock
-        guard block == .cameraPose || block == .face else { return }
+        guard plan[index].kind.sensorBlock.usesFrontCamera else { return }
         restartAfterBackground = true
         runner.stop(reason: .backgrounded)
     }

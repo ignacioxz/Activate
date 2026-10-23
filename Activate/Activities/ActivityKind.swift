@@ -1,7 +1,9 @@
 import Foundation
 
-/// Bloque de sensor que necesita una actividad (ARSession y AVCaptureSession no pueden convivir).
-nonisolated enum SensorBlock: String, Codable, Sendable { case pedometer, cameraPose, face, screen }
+/// Bloque de sensor que necesita una actividad. Todo lo que usa cámara va por ARKit sin vista (`face`):
+/// cuello y pestañeo con la cara; sentadilla y extensión lumbar con la cara + la pose del teléfono en el
+/// mundo, con el teléfono en las manos. Ninguna actividad muestra la imagen de la cámara.
+nonisolated enum SensorBlock: String, Codable, Sendable { case pedometer, face, screen }
 
 /// Catálogo del pitch (7 actividades). Contrato congelado: el agente de Activities agrega copy e
 /// instrucciones largas con extensiones; no cambia los casos ni las propiedades de aquí.
@@ -61,8 +63,9 @@ nonisolated enum ActivityKind: String, Codable, CaseIterable, Sendable, Identifi
     var sensorBlock: SensorBlock {
         switch self {
         case .pasos: .pedometer
-        case .extensionLumbar, .sentadilla: .cameraPose
-        case .cuello, .ojos: .face
+        // ARSession sin vista con la cara (TrueDepth); sentadilla y extensión, en las manos, además siguen
+        // la pose del teléfono con la cámara trasera.
+        case .extensionLumbar, .sentadilla, .cuello, .ojos: .face
         case .respiracion, .stroop: .screen
         }
     }
@@ -113,9 +116,6 @@ nonisolated enum ActivityKind: String, Codable, CaseIterable, Sendable, Identifi
         case .respiracion: 8
         }
     }
-
-    /// El teléfono debe estar apoyado (cámara de cuerpo entero).
-    var requiresPhoneSupported: Bool { sensorBlock == .cameraPose }
 
     /// Verificación débil por naturaleza → nivel máximo `reduced`.
     var weakByNature: Bool { self == .respiracion }

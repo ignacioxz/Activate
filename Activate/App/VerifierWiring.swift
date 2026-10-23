@@ -1,10 +1,11 @@
-import AVFoundation
 import Foundation
 
 // Integración: cableado de `ActivityRunnerFactory`. Un builder por `ActivityKind` que arma el
 // verificador (máquina de estados pura) con su fuente de muestras (sensor en vivo o replay).
 //
-// - En dispositivo: sensores reales (`StepSource`, `CameraPoseSource`, `FaceSource`, `ScreenSource`).
+// - En dispositivo: sensores reales (`StepSource`, `HandheldBodySource`, `FaceSource`, `ScreenSource`).
+//   Ninguna fuente muestra la imagen de la cámara: la sentadilla y la extensión lumbar se hacen con el
+//   teléfono en las manos (`SquatWiring` / `ExtensionWiring`, ARKit sin vista).
 // - Con `replay == true` y SIEMPRE en simulador: `ReplaySource` con fixtures sintéticas de
 //   `FixtureSynth` que completan la actividad; la política marca todo lo reproducido como `simulated`.
 //   Stroop y respiración no tienen sensor (la pantalla es la fuente): en replay se usa un
@@ -27,16 +28,6 @@ enum VerifierWiring {
         #else
         false
         #endif
-    }
-
-    /// Una sola `AVCaptureSession` reutilizada entre A3 y A1 (`start()` tras `stop()` rearranca sin reconfigurar).
-    private static var sharedCameraSource: CameraPoseSource?
-
-    private static func cameraSource() -> CameraPoseSource {
-        if let sharedCameraSource { return sharedCameraSource }
-        let source = CameraPoseSource()
-        sharedCameraSource = source
-        return source
     }
 
     /// Registra un builder por tipo de actividad. Se llama una vez desde `ActivateApp.init`.
@@ -63,26 +54,12 @@ enum VerifierWiring {
             }
 
         case .sentadilla:
-            return { assignment, demo, replay in
-                let spec = VerificationSpec.standard(for: .sentadilla, target: assignment.target, demo: demo)
-                let verifier = SquatVerifier(spec: spec)
-                if replay || forcesReplay {
-                    let source = ReplaySource(samples: ReplayFixtures.squats(spec: spec), speed: speed)
-                    return ActivityRunner(assignment: assignment, verifier: verifier, source: source)
-                }
-                return ActivityRunner(assignment: assignment, verifier: verifier, source: cameraSource())
-            }
+            // En las manos (ARKit cara + mundo, sin mostrar la cámara).
+            return SquatWiring.builder(hub: sensors, store: store, speed: speed)
 
         case .extensionLumbar:
-            return { assignment, demo, replay in
-                let spec = VerificationSpec.standard(for: .extensionLumbar, target: assignment.target, demo: demo)
-                let verifier = ExtensionVerifier(spec: spec)
-                if replay || forcesReplay {
-                    let source = ReplaySource(samples: ReplayFixtures.extensions(spec: spec), speed: speed)
-                    return ActivityRunner(assignment: assignment, verifier: verifier, source: source)
-                }
-                return ActivityRunner(assignment: assignment, verifier: verifier, source: cameraSource())
-            }
+            // En las manos, con la misma fuente que la sentadilla.
+            return ExtensionWiring.builder(hub: sensors, store: store, speed: speed)
 
         case .cuello:
             return { assignment, demo, replay in
@@ -133,12 +110,6 @@ extension ActivityRunning {
             ?? (self as? ActivityRunner<BreathVerifier, ScreenSource>)?.source
     }
 
-    /// Sesión de captura para `CameraPreviewView` (solo runners de cámara de cuerpo entero en vivo).
-    var cameraCaptureSession: AVCaptureSession? {
-        (self as? ActivityRunner<SquatVerifier, CameraPoseSource>)?.source.captureSession
-            ?? (self as? ActivityRunner<ExtensionVerifier, CameraPoseSource>)?.source.captureSession
-    }
-
     /// Fuente de pasos en vivo (para `resumeReconciliation()` al volver a `.active`).
     var stepSource: StepSource? {
         (self as? ActivityRunner<PedometerVerifier, StepSource>)?.source
@@ -158,7 +129,8 @@ nonisolated enum ReplayFixtures {
         return FixtureSynth.walk(steps: max(byTarget, byDuration), options: options)
     }
 
-    /// Sentadillas válidas con 2 s de pie para el gating/calibración.
+    /// Sentadillas válidas con 2 s de pie para el gating/calibración (pose de cámara: solo tests de los
+    /// verificadores de pose, que la app ya no usa porque nunca muestra la cámara).
     static func squats(spec: VerificationSpec) -> [PoseSample] {
         var options = FixtureSynth.SquatOptions()
         options.leadInSeconds = 2
@@ -184,7 +156,8 @@ nonisolated enum ReplayFixtures {
         init() {}
     }
 
-    /// Extensiones lumbares de pie: hombros, cuello y nariz se desplazan y vuelven; cadera y tobillos quietos.
+    /// Extensiones lumbares de pie vistas por una cámara de cuerpo (solo tests de `ExtensionVerifier`):
+    /// hombros, cuello y nariz se desplazan y vuelven; cadera y tobillos quietos.
     static func extensions(spec: VerificationSpec) -> [PoseSample] {
         extensions(count: spec.target)
     }
