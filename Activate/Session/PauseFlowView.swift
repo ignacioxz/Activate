@@ -1,16 +1,166 @@
 import SwiftUI
 
-// Dueño: agente "session". Placeholder con la firma de entrada congelada.
+/// Flujo de la pausa (fullScreenCover): check-in → alarma? → plan → actividad(i) → cierre → premio.
+/// Firma de entrada congelada: `PauseFlowView(moment:)`. Toma AppStore, GameStore y CoachService del entorno.
 struct PauseFlowView: View {
     let moment: Moment
+
+    @Environment(AppStore.self) private var store
+    @Environment(GameStore.self) private var game
+    @Environment(CoachService.self) private var coach
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var coordinator: PauseCoordinator?
+
     var body: some View {
-        VStack(spacing: 16) {
-            Text(moment.title).font(.largeTitle.weight(.heavy))
-            Text("Flujo de pausa en construcción").foregroundStyle(.secondary)
-            PrimaryButton(title: "CERRAR") { dismiss() }
+        Group {
+            if let coordinator {
+                PauseFlowContent(coordinator: coordinator) { close() }
+            } else {
+                ProgressView()
+            }
         }
-        .padding()
         .appScreen()
+        .onAppear {
+            if coordinator == nil {
+                coordinator = PauseCoordinator(moment: moment, store: store, game: game, coach: coach)
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .background: coordinator?.appWentToBackground()
+            case .active: coordinator?.appBecameActive()
+            default: break
+            }
+        }
+        .onDisappear { coordinator?.cancel() }
+        .interactiveDismissDisabled()
+    }
+
+    private func close() {
+        coordinator?.cancel()
+        dismiss()
+    }
+}
+
+/// Contenido por etapa; separado para que el coordinador exista antes del primer render de la etapa.
+private struct PauseFlowContent: View {
+    let coordinator: PauseCoordinator
+    let onClose: () -> Void
+
+    private var name: String { coordinator.profileName }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if coordinator.stage != .reward {
+                header
+            }
+            stageView
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .animation(.smooth, value: coordinator.stage)
+    }
+
+    // MARK: Encabezado: cerrar + barra de avance
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            Button("Cerrar", systemImage: "xmark") { onClose() }
+                .labelStyle(.iconOnly)
+                .font(.headline)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .frame(minWidth: 44, minHeight: 44)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(coordinator.moment.title)
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(.secondary)
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.08))
+                        Capsule()
+                            .fill(Theme.copper)
+                            .frame(width: max(12, geo.size.width * coordinator.progressFraction))
+                    }
+                }
+                .frame(height: 10)
+                .animation(.spring(duration: 0.5), value: coordinator.progressFraction)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .contain)
+    }
+
+    // MARK: Etapas
+
+    private var stageTransition: AnyTransition {
+        .asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .move(edge: .leading).combined(with: .opacity))
+    }
+
+    @ViewBuilder
+    private var stageView: some View {
+        switch coordinator.stage {
+        case .checkIn:
+            CheckInView(name: name,
+                        existing: coordinator.existingCheckIn,
+                        initialZone: coordinator.usualZone,
+                        initialMoment: coordinator.moment,
+                        onSubmit: { answers, zone, moment in coordinator.submitCheckIn(answers: answers, zone: zone, moment: moment) },
+                        onContinueExisting: { coordinator.continueWithExistingCheckIn() },
+                        onAnswerAgain: { coordinator.answerAgain() })
+                .id(coordinator.existingCheckIn?.id)
+                .transition(stageTransition)
+
+        case .alarm:
+            AlarmView(name: name, score: coordinator.checkIn?.score ?? 0) { coordinator.submitAlarm(answers: $0) }
+                .transition(stageTransition)
+
+        case .stopped:
+            StopCardView(name: name, reason: coordinator.decision?.reason, onClose: onClose)
+                .transition(stageTransition)
+
+        case .planning:
+            PlanView(name: name,
+                     recipe: coordinator.recipeKind,
+                     activities: coordinator.plan,
+                     why: coordinator.coachWhy,
+                     startMessage: coordinator.coachStartMessage,
+                     gentle: coordinator.isGentle,
+                     onStart: { coordinator.startActivities() },
+                     onClose: onClose)
+                .transition(stageTransition)
+
+        case .activity(let index):
+            if let runner = coordinator.runner, coordinator.plan.indices.contains(index) {
+                // INTEGRACIÓN: para `.stroop` y `.respiracion` usar StroopView / BreathView (paquete stroop-breath)
+                // cuando existan; mientras tanto la vista genérica muestra el contador del runner.
+                ActivityRunView(runner: runner,
+                                assignment: coordinator.plan[index],
+                                position: index + 1,
+                                total: coordinator.plan.count,
+                                onFinish: { coordinator.activityFinished($0, at: index) },
+                                onSkip: { coordinator.skipCurrent() })
+                    .id(coordinator.runnerGeneration)
+                    .transition(stageTransition)
+            } else {
+                ProgressView("Preparando sensor…")
+                    .transition(.opacity)
+            }
+
+        case .postCheck:
+            PostCheckView(name: name) { coordinator.submitPost($0) }
+                .transition(stageTransition)
+
+        case .reward:
+            if let reward = coordinator.reward {
+                CelebrationView(reward: reward, post: coordinator.post, onClose: onClose)
+                    .transition(.opacity)
+            } else {
+                ProgressView("Guardando…")
+                    .transition(.opacity)
+            }
+        }
     }
 }
