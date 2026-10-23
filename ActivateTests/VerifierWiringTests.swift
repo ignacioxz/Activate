@@ -129,16 +129,18 @@ struct VerifierWiringTests {
         #expect(replay.outcome?.completed == true)
         #expect(replay.outcome?.kind == .pararseSentarse)
         #expect(replay.level == .simulated)
-        // En vivo: la ARSession de la sentadilla en las manos; nunca un preview de cámara ni el selector de modo.
+        // En vivo: la ARSession de la sentadilla en las manos (bloque `face`); nunca un preview de cámara ni un
+        // modo "Apoyado". La muestra `SitToStandActivityView`, no la vista de sentadilla / extensión.
         let live = SitStandWiring.builder(hub: SensorHub(), store: store, seed: 7)(assignment, true, false)
         if SitStandWiring.forcesReplay {
             #expect(live is ActivityRunner<SitToStandVerifier, ReplaySource<SitStandSample>>)
         } else {
             #expect(live is ActivityRunner<SitToStandVerifier, HandheldSitStandSource>)
         }
-        #expect(live.cameraCaptureSession == nil)
-        #expect(live.squatRunner == nil)
-        #expect(!ActivityKind.pararseSentarse.requiresPhoneSupported)
+        #expect(!live.isHandheldRunner)
+        #expect(!HandheldActivityView.handles(.pararseSentarse))
+        #expect(ActivityKind.pararseSentarse.sensorBlock == .face)
+        #expect(ActivityKind.pararseSentarse.sensorBlock == ActivityKind.sentadilla.sensorBlock)
         #expect(ActivityKind.pararseSentarse.placement == "Teléfono en las dos manos, frente al pecho")
     }
 
@@ -170,7 +172,7 @@ struct VerifierWiringTests {
             let replay = VerifierWiring.builder(for: kind, sensors: hub, store: store)(assignment, true, true)
             #expect(replay.screenSource != nil)
             #expect(replay.screenSource?.level == .replay)
-            #expect(replay.cameraCaptureSession == nil)
+            #expect(!replay.isHandheldRunner)
             let live = VerifierWiring.builder(for: kind, sensors: hub, store: store)(assignment, true, false)
             #expect(live.screenSource?.level == (VerifierWiring.forcesReplay ? .replay : .live))
         }

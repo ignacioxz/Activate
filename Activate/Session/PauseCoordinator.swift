@@ -26,7 +26,8 @@ final class PauseCoordinator {
     static let coachTimeoutSeconds: Double = 3.5
     /// Nivel que se registra cuando el runner no declara ninguno: nunca se asume verificación.
     static let undeclaredLevel: VerificationLevel = .suspicious
-    /// Espera entre `stop()` de una fuente de cámara y `start()` de la otra (ARSession ↔ AVCaptureSession).
+    /// Espera entre `stop()` de una fuente de cámara y `start()` de la de otro bloque de cámara
+    /// (`SensorBlockPlanner.needsCameraHandoff`; hoy todas comparten el bloque `face` y no hay espera).
     static let cameraHandoffSeconds: Double = 1.0
 
     // MARK: Dependencias
@@ -222,17 +223,17 @@ final class PauseCoordinator {
         requestCoachPlan(base: filtered, allowed: allowed, demo: demo, reducedTargets: reduced)
     }
 
-    /// Relevo de cámara entre dos actividades seguidas: cambio de bloque (ARSession ↔ AVCaptureSession), o
-    /// pararse y sentarse (ARSession en las manos) → sentadilla apoyada (AVCaptureSession), que comparten
-    /// bloque pero no la sesión de cámara. Con la sentadilla en las manos (por defecto) van seguidas, sin relevo.
-    nonisolated static func needsCameraHandoff(from: ActivityKind, to: ActivityKind, squatMode: SquatMode) -> Bool {
-        if SensorBlockPlanner.needsCameraHandoff(from: from.sensorBlock, to: to.sensorBlock) { return true }
-        return from == .pararseSentarse && to == .sentadilla && squatMode == .supported
+    /// Relevo de cámara entre dos actividades seguidas: solo al cambiar entre dos bloques de cámara
+    /// distintos. Pararse y sentarse, la sentadilla y la extensión lumbar (en las manos) comparten el bloque
+    /// `face` con cuello y pestañeo, así que hoy van seguidas, sin relevo (cada fuente pausa su `ARSession`).
+    nonisolated static func needsCameraHandoff(from: ActivityKind, to: ActivityKind) -> Bool {
+        SensorBlockPlanner.needsCameraHandoff(from: from.sensorBlock, to: to.sensorBlock)
     }
 
-    /// Actividades que usan la cámara (cara con ARKit, cuerpo con Vision).
+    /// Actividades que usan la cámara (ARKit sin vista: cara; sentadilla, pararse y sentarse y extensión
+    /// también el mundo).
     nonisolated static func usesCamera(_ kind: ActivityKind) -> Bool {
-        kind.sensorBlock == .face || kind.sensorBlock == .cameraPose
+        kind.sensorBlock.usesFrontCamera
     }
 
     /// Tipos permitidos para el coach: sin consentimiento, fuera los de cámara.
@@ -401,11 +402,11 @@ final class PauseCoordinator {
             stage = .postCheck
             return
         }
-        guard Self.needsCameraHandoff(from: plan[index].kind, to: plan[next].kind, squatMode: SquatWiring.storedMode()) else {
+        guard Self.needsCameraHandoff(from: plan[index].kind, to: plan[next].kind) else {
             enter(index: next)
             return
         }
-        // ARSession y AVCaptureSession no conviven: la fuente anterior ya hizo `stop()` al cerrar el runner;
+        // Dos bloques de cámara distintos no conviven: la fuente anterior ya hizo `stop()` al cerrar el runner;
         // se espera un instante ("Preparando cámara…") antes del `start()` de la siguiente.
         stage = .activity(next)
         handoffTask = Task { [weak self] in
@@ -421,8 +422,7 @@ final class PauseCoordinator {
     func appWentToBackground() {
         integrity.noteBackgrounded()
         guard let index = currentIndex, index > finishedIndex, let runner, runner.outcome == nil else { return }
-        let block = plan[index].kind.sensorBlock
-        guard block == .cameraPose || block == .face else { return }
+        guard plan[index].kind.sensorBlock.usesFrontCamera else { return }
         restartAfterBackground = true
         runner.stop(reason: .backgrounded)
     }

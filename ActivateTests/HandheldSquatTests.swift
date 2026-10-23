@@ -503,51 +503,41 @@ struct HandheldSquatTests {
     // MARK: Integración con el runner y el cableado
 
     @MainActor
-    @Test(arguments: [SquatMode.handheld, .supported])
-    func builderDeReplayCompletaComoSimulado(mode: SquatMode) async {
+    @Test func builderDeReplayCompletaComoSimulado() async {
         let store = AppStore(inMemory: true)
-        let builder = SquatWiring.builder(hub: SensorHub(), store: store, mode: mode, seed: 9, speed: .infinity)
+        let builder = SquatWiring.builder(hub: SensorHub(), store: store, seed: 9, speed: .infinity)
         let assignment = Recipes.assignment(.sentadilla, demo: true)
         let runner = builder(assignment, true, true)
-        #expect(runner.squatRunner?.mode == mode)
-        #expect(runner.squatRunner?.isReplay == true)
+        #expect(runner.isHandheldReplay)
+        #expect(runner.isHandheldRunner)
         runner.start()
         for _ in 0..<400 where runner.outcome == nil {
             try? await Task.sleep(for: .milliseconds(10))
         }
-        #expect(runner.outcome?.completed == true, "\(mode) debe completar en replay")
+        #expect(runner.outcome?.completed == true, "la sentadilla debe completar en replay")
         #expect(runner.level == .simulated)
         #expect(runner.verifiedResult?.level == .simulated)
         #expect(runner.verifiedResult?.kind == .sentadilla)
     }
 
     @MainActor
-    @Test func cambiarDeModoAntesDeEmpezarReemplazaElRunner() async {
-        let store = AppStore(inMemory: true)
-        let builder = SquatWiring.builder(hub: SensorHub(), store: store, mode: .handheld, seed: 3, speed: .infinity)
-        let assignment = Recipes.assignment(.sentadilla, demo: true)
-        guard let runner = builder(assignment, true, true).squatRunner else {
-            Issue.record("se esperaba SquatRunner")
-            return
-        }
-        let first = runner.generation
-        #expect(runner.canSwitchMode)
-        runner.switchMode(.supported)
-        #expect(runner.mode == .supported && runner.generation == first + 1)
-        #expect(runner.outcome == nil)
-        runner.start()
-        for _ in 0..<400 where runner.outcome == nil {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(runner.outcome?.completed == true)
-        #expect(runner.level == .simulated)
-        #expect(!runner.canSwitchMode)
+    @Test func sentadillaYExtensionEnVivoSoloUsanLaFuenteEnLasManos() {
+        // Sin modo "Apoyado": la fuente en vivo es la ARSession sin vista (nunca una cámara con preview).
+        let squat = SquatWiring.makeRunner(assignment: Recipes.assignment(.sentadilla, demo: true), demo: true,
+                                           replay: false, hub: nil, seed: 3)
+        let ext = ExtensionWiring.makeRunner(assignment: Recipes.assignment(.extensionLumbar, demo: true), demo: true,
+                                             replay: false, hub: nil, seed: 3)
+        #expect(squat is ActivityRunner<HandheldSquatVerifier, HandheldBodySource>)
+        #expect(ext is ActivityRunner<HandheldExtensionVerifier, HandheldBodySource>)
+        #expect(squat.isHandheldRunner && !squat.isHandheldReplay)
+        #expect(ext.isHandheldRunner && !ext.isHandheldReplay)
+        #expect(squat.handheldTelemetry == nil && ext.handheldTelemetry == nil)
     }
 
     @MainActor
     @Test func saltarEntregaResultadoConTestigo() {
         let store = AppStore(inMemory: true)
-        let builder = SquatWiring.builder(hub: SensorHub(), store: store, mode: .handheld, seed: 3, speed: 1)
+        let builder = SquatWiring.builder(hub: SensorHub(), store: store, seed: 3, speed: 1)
         let runner = builder(Recipes.assignment(.sentadilla, demo: true), true, true)
         runner.start()
         runner.stop(reason: .skipped)

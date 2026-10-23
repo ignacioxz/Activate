@@ -1,8 +1,8 @@
-import AVFoundation
 import SwiftUI
 
 /// Una actividad verificada: gating con copy en vivo, consigna grande, contador + anillo en el HUD de vidrio,
 /// tick háptico por rep y "Listo." al completar. No hay botón "hecho": solo el runner cierra la actividad.
+/// Nunca se muestra la imagen de la cámara: las fuentes de cara (ARKit) miden sin vista.
 struct ActivityRunView: View {
     let runner: any ActivityRunning
     let assignment: ActivityAssignment
@@ -43,14 +43,6 @@ struct ActivityRunView: View {
                         .font(.largeTitle.weight(.heavy))
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
-
-                    if assignment.kind.sensorBlock == .cameraPose {
-                        if let session = runner.cameraCaptureSession {
-                            cameraPreview(session)
-                        } else {
-                            cameraPlaceholder
-                        }
-                    }
 
                     if isNeck {
                         hud(compact: true)
@@ -154,45 +146,10 @@ struct ActivityRunView: View {
         .animation(.smooth, value: runner.cue)
     }
 
-    // MARK: Cámara (cuerpo entero)
-
-    /// Alto del preview de la cámara frontal (contenido plano; el HUD de vidrio va debajo).
-    static let cameraPreviewHeight: CGFloat = 300
-
-    /// Preview en vivo de la `AVCaptureSession` del runner (no se persiste ningún cuadro).
-    private func cameraPreview(_ session: AVCaptureSession) -> some View {
-        CameraPreviewView(session: session)
-            .frame(maxWidth: .infinity)
-            .frame(height: Self.cameraPreviewHeight)
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
-            .accessibilityLabel("Cámara frontal")
-    }
-
-    /// Sin cámara (simulador / replay): marcador plano en el mismo lugar.
-    private var cameraPlaceholder: some View {
-        RoundedRectangle(cornerRadius: Theme.cardRadius)
-            .fill(Color(.secondarySystemBackground))
-            .frame(maxWidth: .infinity)
-            .frame(height: 170)
-            .overlay {
-                VStack(spacing: 6) {
-                    Image(systemName: "camera.fill").font(.title)
-                    Text("Cámara frontal").font(.caption)
-                }
-                .foregroundStyle(.secondary)
-            }
-            .accessibilityHidden(true)
-    }
-
     // MARK: Pie
 
     private var footer: some View {
         VStack(spacing: 8) {
-            if assignment.kind.requiresPhoneSupported {
-                Label(PlanRow.placement(for: .cameraPose), systemImage: "iphone")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
             Button("Saltar (no suma)") { onSkip() }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)

@@ -8,8 +8,8 @@ import Foundation
 // MARK: - Recetas
 
 nonisolated enum Recipes {
-    /// La cámara de cuerpo entero (Vision pose) queda lista el día 5. Hasta entonces, Colación no
-    /// incluye A1 (extensión lumbar con el teléfono apoyado en la mesa).
+    /// Sin efecto: la ruta completa trae siempre todo el orden fijo y la extensión lumbar se hace en las
+    /// manos (no hay cámara de cuerpo). Se conserva la firma para tests y previews.
     static let cameraPoseReady = false
 
     /// Factor de la meta de pasos en el plan suave (RDQ-6 ≥ umbral).

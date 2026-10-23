@@ -11,7 +11,6 @@ nonisolated extension SensorBlock {
     var title: String {
         switch self {
         case .pedometer: "Pasos"
-        case .cameraPose: "Cámara de cuerpo"
         case .face: "Cámara frontal"
         case .screen: "Pantalla"
         }
@@ -21,7 +20,6 @@ nonisolated extension SensorBlock {
     var placement: String {
         switch self {
         case .pedometer: "Guarde el teléfono en el bolsillo del pecho y camine"
-        case .cameraPose: "Apoye el teléfono a 2 metros, cuerpo entero en pantalla"
         case .face: "Teléfono en la mano a distancia selfie"
         case .screen: "Pantalla en la mano"
         }
@@ -31,7 +29,6 @@ nonisolated extension SensorBlock {
     var gatingCopy: [String] {
         switch self {
         case .pedometer: ["Guarde el teléfono. Camine.", "No lo bloquee."]
-        case .cameraPose: ["Apoye el teléfono. Aléjese.", "Lo veo entero.", "3 · 2 · 1"]
         case .face: ["Sáquese casco y lentes.", "Mire al teléfono.", "Quieto un segundo."]
         case .screen: ["Pantalla en la mano.", "3 · 2 · 1"]
         }
@@ -41,13 +38,14 @@ nonisolated extension SensorBlock {
     var preparingCopy: String {
         switch self {
         case .pedometer: "Preparando el contador de pasos…"
-        case .cameraPose, .face: "Preparando cámara…"
+        case .face: "Preparando cámara…"
         case .screen: "Preparando…"
         }
     }
 
-    /// `cameraPose` (AVCaptureSession) y `face` (ARSession) no pueden convivir en la cámara frontal.
-    var usesFrontCamera: Bool { self == .cameraPose || self == .face }
+    /// Usa la cámara frontal (ARSession sin vista). Es el único bloque de cámara: la app no abre ninguna
+    /// `AVCaptureSession` ni muestra la imagen.
+    var usesFrontCamera: Bool { self == .face }
 }
 
 // MARK: - Copy por actividad
@@ -60,7 +58,7 @@ nonisolated extension ActivityKind {
     var instructions: String {
         switch self {
         case .extensionLumbar:
-            "Párese con los pies al ancho de las caderas y las manos en la cintura. Lleve el tronco hacia atrás, aguante un segundo y vuelva derecho."
+            "Tome el teléfono con las dos manos frente al pecho y mírelo. Inclínese hacia atrás con todo el tronco, hasta donde no duela, y vuelva."
         case .pasos:
             "Guarde el teléfono en el bolsillo del pecho y camine a paso firme, sin apuro. El teléfono vibra al llegar a la meta."
         case .sentadilla:
@@ -81,9 +79,8 @@ nonisolated extension ActivityKind {
     /// Dónde va el teléfono (texto del bloque de sensor).
     var placement: String {
         switch self {
-        // Modo por defecto de la sentadilla y único de pararse y sentarse: en las manos (cámaras +
-        // sensores, sin mostrar la cámara).
-        case .sentadilla, .pararseSentarse: "Teléfono en las dos manos, frente al pecho"
+        // En las manos (cámaras + sensores, sin mostrar la cámara): sentadilla, pararse y sentarse y extensión.
+        case .sentadilla, .pararseSentarse, .extensionLumbar: "Teléfono en las dos manos, frente al pecho"
         default: sensorBlock.placement
         }
     }
@@ -94,9 +91,10 @@ nonisolated extension ActivityKind {
         case .stroop: ["Pantalla en la mano.", "Toque el color, no la palabra.", "3 · 2 · 1"]
         case .sentadilla: ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Baje como si se sentara."]
         case .pararseSentarse: ["Siéntese con el teléfono frente al pecho.", "Quieto un segundo.", "Párese sin usar las manos."]
+        case .extensionLumbar: ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Inclínese hacia atrás."]
         case .respiracion: ["Pantalla en la mano.", "Dedo en el botón al exhalar."]
         case .ojos: ["Sáquese los lentes.", "Mire al teléfono.", "Cierre bien los ojos."]
-        case .extensionLumbar, .pasos, .cuello: sensorBlock.gatingCopy
+        case .pasos, .cuello: sensorBlock.gatingCopy
         }
     }
 

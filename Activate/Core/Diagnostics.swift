@@ -158,3 +158,10 @@ extension HandheldSquatVerifier: AttemptDiagnosticsProviding {
     var attemptCount: Int { diagnostics.count }
     func attemptLine(_ index: Int) -> String { String(describing: diagnostics[index]) }
 }
+
+/// Extensión lumbar en las manos: por intento, inclinación máxima, cambio de la cara en el encuadre
+/// (geometría y dirección), recorrido de la cara hacia atrás, bajada del teléfono, segundos, pausa y rechazo.
+extension HandheldExtensionVerifier: AttemptDiagnosticsProviding {
+    var attemptCount: Int { diagnostics.count }
+    func attemptLine(_ index: Int) -> String { String(describing: diagnostics[index]) }
+}

@@ -165,7 +165,6 @@ struct PlanRow: View {
     static func placement(for block: SensorBlock) -> String {
         switch block {
         case .pedometer: "Teléfono en el bolsillo"
-        case .cameraPose: "Teléfono apoyado, a 2 metros"
         case .face: "Teléfono en la mano"
         case .screen: "Teléfono en la mano"
         }
@@ -174,7 +173,6 @@ struct PlanRow: View {
     static func placementSymbol(for block: SensorBlock) -> String {
         switch block {
         case .pedometer: "figure.walk.motion"
-        case .cameraPose: "camera.fill"
         case .face: "faceid"
         case .screen: "hand.tap.fill"
         }

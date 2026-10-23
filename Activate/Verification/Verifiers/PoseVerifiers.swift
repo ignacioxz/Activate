@@ -3,8 +3,11 @@ import simd
 
 // Dueño: agente "pose" (sentadilla endurecida: agente "squats"). Máquinas de estado puras para las
 // actividades de cámara de cuerpo (A3 sentadilla parcial en modo "Apoyado", A1 extensión lumbar de pie).
-// Sin imports de Vision/AVFoundation/CoreMotion: consumen `PoseSample` (Vision ya convertido en
-// `CameraPoseSource`) y `MotionSample` (SensorHub) y corren igual con fixtures.
+// SIN USO EN LA APP: ningún ejercicio muestra la cámara en el iPhone, así que la sentadilla y la extensión
+// se hacen en las manos (`HandheldSquatVerifier`, `HandheldExtensionVerifier`). Se conservan solo porque
+// sus tests (`PoseVerifierTests`, fixtures de `ReplayFixtures`) los ejercitan; no hay fuente en vivo.
+// Sin imports de Vision/AVFoundation/CoreMotion: consumen `PoseSample` (pose ya convertida) y
+// `MotionSample` (SensorHub) y corren igual con fixtures.
 //
 // Sentadilla apoyada, anti-trampa:
 // - Rodillas que se doblan de verdad: en el cuadro el muslo se acorta (la cadera baja más que la rodilla),
@@ -944,7 +947,7 @@ nonisolated struct SquatVerifier: ActivityVerifier {
         return events
     }
 
-    /// deviceMotion del teléfono (solo en el modo apoyado con `SupportedSquatSource`).
+    /// deviceMotion del teléfono (modo apoyado retirado; solo tests).
     mutating func ingest(motion m: MotionSample, at t: Double) -> [VerifierEvent] {
         let moving = stillness.ingest(m, at: t)
         guard moving else {

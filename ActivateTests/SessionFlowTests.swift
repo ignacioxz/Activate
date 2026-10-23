@@ -63,15 +63,17 @@ struct SessionFlowTests {
     }
 
     @Test func pararseYSentarseVaPegadoALaSentadillaEnLasManos() {
-        // Misma ARSession en las manos: sin relevo de cámara entre ellas.
-        #expect(!PauseCoordinator.needsCameraHandoff(from: .pararseSentarse, to: .sentadilla, squatMode: .handheld))
-        #expect(!PauseCoordinator.needsCameraHandoff(from: .pasos, to: .pararseSentarse, squatMode: .handheld))
-        // La sentadilla apoyada abre otra sesión de cámara (AVCaptureSession): ahí sí hay relevo.
-        #expect(PauseCoordinator.needsCameraHandoff(from: .pararseSentarse, to: .sentadilla, squatMode: .supported))
-        // Hacia la cara (cervical) se suelta la cámara como desde la sentadilla.
-        #expect(PauseCoordinator.needsCameraHandoff(from: .pararseSentarse, to: .cuello, squatMode: .handheld))
-        #expect(PauseCoordinator.needsCameraHandoff(from: .sentadilla, to: .cuello, squatMode: .handheld))
-        #expect(!PauseCoordinator.needsCameraHandoff(from: .cuello, to: .stroop, squatMode: .supported))
+        // Pararse y sentarse, la sentadilla y la extensión van en las manos con ARKit sin vista (bloque `face`,
+        // el mismo de cuello y pestañeo): nunca hay relevo de cámara entre ellas ni modo "Apoyado".
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .pararseSentarse, to: .sentadilla))
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .pasos, to: .pararseSentarse))
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .pararseSentarse, to: .cuello))
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .sentadilla, to: .cuello))
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .ojos, to: .extensionLumbar))
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .cuello, to: .stroop))
+        for kind in [ActivityKind.pararseSentarse, .sentadilla, .extensionLumbar] {
+            #expect(kind.sensorBlock == .face, "\(kind)")
+        }
         #expect(PauseCoordinator.usesCamera(.pararseSentarse))
     }
 
@@ -448,9 +450,8 @@ struct SessionFlowTests {
         #expect(total == ActivityKind.sessionOrder.count)           // ruta completa
         for i in 0..<total {
             #expect(c.stage == .activity(i))
-            // Durante el relevo de cámara (cuerpo ↔ cara) todavía no hay runner; saltar igual funciona.
-            let handoff = i > 0 && PauseCoordinator.needsCameraHandoff(from: c.plan[i - 1].kind, to: c.plan[i].kind,
-                                                                        squatMode: SquatWiring.storedMode())
+            // Durante un relevo de cámara todavía no habría runner (hoy no hay ninguno); saltar igual funciona.
+            let handoff = i > 0 && PauseCoordinator.needsCameraHandoff(from: c.plan[i - 1].kind, to: c.plan[i].kind)
             #expect((c.runner == nil) == handoff, "actividad \(i)")
             c.skipCurrent()
         }

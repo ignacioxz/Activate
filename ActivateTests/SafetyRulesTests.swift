@@ -170,7 +170,8 @@ struct SafetyRulesTests {
     @Test func recetasBase() {
         // Pausa rápida (solo si la persona elige "Solo tengo 1 minuto"): lo que cabe con el teléfono en la mano.
         #expect(kinds(Recipes.base(.relevo60, demo: false)) == [.cuello, .ojos])
-        // Ruta completa: colación y campamento hacen todo el orden fijo, esté o no lista la cámara de cuerpo.
+        // Ruta completa: colación y campamento hacen todo el orden fijo (el flag de cámara de cuerpo ya no
+        // cambia nada: pararse y sentarse, la sentadilla y la extensión van en las manos).
         for kind in [RecipeKind.colacion3, .campamento5] {
             for ready in [false, true] {
                 #expect(kinds(Recipes.base(kind, demo: false, cameraPoseReady: ready)) == ActivityKind.sessionOrder, "\(kind) ready=\(ready)")
@@ -266,15 +267,15 @@ struct SafetyRulesTests {
         #expect(ActivityKind.cuello.placement == "Teléfono en la mano a distancia selfie")
         #expect(ActivityKind.ojos.placement == ActivityKind.cuello.placement)
         #expect(ActivityKind.pasos.placement == "Guarde el teléfono en el bolsillo del pecho y camine")
-        #expect(ActivityKind.extensionLumbar.placement == "Apoye el teléfono a 2 metros, cuerpo entero en pantalla")
-        #expect(ActivityKind.extensionLumbar.placement == SensorBlock.cameraPose.placement)
-        // Sentadilla minera: por defecto con el teléfono en las manos (no sigue al bloque de cámara de cuerpo).
+        // Sentadilla, pararse y sentarse y extensión lumbar: en las manos, nunca apoyado con la cámara en pantalla.
         #expect(ActivityKind.sentadilla.placement == "Teléfono en las dos manos, frente al pecho")
+        #expect(ActivityKind.extensionLumbar.placement == ActivityKind.sentadilla.placement)
+        #expect(ActivityKind.pararseSentarse.placement == ActivityKind.sentadilla.placement)
         #expect(ActivityKind.stroop.placement == "Pantalla en la mano" && ActivityKind.respiracion.placement == "Pantalla en la mano")
         #expect(ActivityKind.cuello.gatingCopy == ["Sáquese casco y lentes.", "Mire al teléfono.", "Quieto un segundo."])
-        #expect(ActivityKind.extensionLumbar.gatingCopy == ["Apoye el teléfono. Aléjese.", "Lo veo entero.", "3 · 2 · 1"])
         #expect(ActivityKind.sentadilla.gatingCopy == ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Baje como si se sentara."])
         #expect(ActivityKind.pararseSentarse.gatingCopy == ["Siéntese con el teléfono frente al pecho.", "Quieto un segundo.", "Párese sin usar las manos."])
+        #expect(ActivityKind.extensionLumbar.gatingCopy == ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Inclínese hacia atrás."])
         #expect(ActivityKind.pasos.gatingCopy == ["Guarde el teléfono. Camine.", "No lo bloquee."])
     }
 }
@@ -285,18 +286,19 @@ struct SensorBlockPlannerTests {
     private func a(_ k: ActivityKind) -> ActivityAssignment { ActivityAssignment(kind: k, target: k.defaultTarget) }
 
     @Test func campamentoSigueElOrdenFijoEnTramosDeSensor() {
+        // Pararse y sentarse, sentadilla y extensión en las manos usan ARKit sin vista: mismo bloque que
+        // cuello y pestañeo, así que comparten tramo (sin relevo de cámara).
         let groups = SensorBlockPlanner.order(Recipes.base(.campamento5, demo: false).activities)
-        // Pararse y sentarse y la sentadilla comparten tramo (la misma ARSession en las manos).
-        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.pararseSentarse, .sentadilla], [.cuello], [.stroop], [.ojos], [.extensionLumbar]])
-        #expect(groups.compactMap(SensorBlockPlanner.block(of:)) == [.pedometer, .cameraPose, .face, .screen, .face, .cameraPose])
+        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.pararseSentarse, .sentadilla, .cuello], [.stroop], [.ojos, .extensionLumbar]])
+        #expect(groups.compactMap(SensorBlockPlanner.block(of:)) == [.pedometer, .face, .screen, .face])
         #expect(SensorBlockPlanner.blocks(Recipes.base(.campamento5, demo: false).activities)
-                == [.pedometer, .cameraPose, .face, .screen, .face, .cameraPose])
+                == [.pedometer, .face, .screen, .face])
     }
 
     @Test func desordenadoSeOrdenaPorLaSesionYDescartaRetiradas() {
         let input = [a(.ojos), a(.stroop), a(.sentadilla), a(.pasos), a(.cuello), a(.pararseSentarse), a(.respiracion), a(.extensionLumbar)]
         let groups = SensorBlockPlanner.order(input)
-        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.pararseSentarse, .sentadilla], [.cuello], [.stroop], [.ojos], [.extensionLumbar]])
+        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.pararseSentarse, .sentadilla, .cuello], [.stroop], [.ojos, .extensionLumbar]])
         #expect(SensorBlockPlanner.ordered(input).map(\.kind) == ActivityKind.sessionOrder)
         #expect(SensorBlockPlanner.ordered([a(.respiracion)]).isEmpty)
     }
@@ -333,6 +335,8 @@ struct SensorBlockPlannerTests {
         let parcial = [a(.pasos), a(.cuello), a(.ojos), a(.extensionLumbar)]
         #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(parcial)) == parcial)
         #expect(SensorBlockPlanner.ordered(parcial).map(\.kind) == [.pasos, .cuello, .ojos, .extensionLumbar])
+        let colacion = Recipes.base(.colacion3, demo: false, cameraPoseReady: true).activities
+        #expect(SensorBlockPlanner.ordered(colacion).map(\.kind) == ActivityKind.sessionOrder)
         let mixed = [a(.extensionLumbar), a(.ojos), a(.stroop), a(.pasos), a(.cuello)]
         #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(mixed)) == SensorBlockPlanner.ordered(mixed))
     }
@@ -343,28 +347,27 @@ struct SensorBlockPlannerTests {
         #expect(flat.map(\.target) == [125, 15, 6])
     }
 
-    @Test func handoffDeCamaraSoloEntreCuerpoYCara() {
-        #expect(SensorBlockPlanner.needsCameraHandoff(from: .cameraPose, to: .face))
-        #expect(SensorBlockPlanner.needsCameraHandoff(from: .face, to: .cameraPose))
+    @Test func sinCamaraDeCuerpoNoHayRelevoDeCamara() {
+        // Un solo bloque de cámara (ARKit sin vista): nunca hay relevo AVCaptureSession ↔ ARSession.
+        #expect(SensorBlock.face.usesFrontCamera)
+        #expect(!SensorBlock.pedometer.usesFrontCamera && !SensorBlock.screen.usesFrontCamera)
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .pedometer, to: .face))
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .face, to: .screen))
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .face, to: .face))
-        // Ruta completa: sentadilla → cervical (cuerpo → cara) y pestañeo → extensión (cara → cuerpo).
+        // Ruta completa: pararse y sentarse → sentadilla → cervical y pestañeo → extensión siguen sin esperar la cámara.
         for kind in [RecipeKind.colacion3, .campamento5] {
-            let handoffs = SensorBlockPlanner.cameraHandoffs(Recipes.base(kind, demo: false).activities)
-            #expect(handoffs.map { [$0.from, $0.to] } == [[.cameraPose, .face], [.face, .cameraPose]], "\(kind)")
+            #expect(SensorBlockPlanner.cameraHandoffs(Recipes.base(kind, demo: false).activities).isEmpty, "\(kind)")
         }
-        // Pausa rápida: cuello + pestañeo, un solo bloque de cara.
         #expect(SensorBlockPlanner.cameraHandoffs(Recipes.base(.relevo60, demo: false).activities).isEmpty)
-        // Sin sentadilla: solo pestañeo → extensión lumbar.
-        let sinSentadilla = SensorBlockPlanner.cameraHandoffs([a(.pasos), a(.cuello), a(.ojos), a(.extensionLumbar)])
-        #expect(sinSentadilla.map { [$0.from, $0.to] } == [[.face, .cameraPose]])
+        #expect(SensorBlockPlanner.cameraHandoffs(Recipes.base(.colacion3, demo: false, cameraPoseReady: true).activities).isEmpty)
+        // Sin sentadilla: pestañeo → extensión lumbar tampoco.
+        #expect(SensorBlockPlanner.cameraHandoffs([a(.pasos), a(.cuello), a(.ojos), a(.extensionLumbar)]).isEmpty)
         // Cara → pantalla → cara no suelta la cámara entre medio.
         #expect(SensorBlockPlanner.cameraHandoffs([a(.cuello), a(.stroop), a(.ojos)]).isEmpty)
         // Pararse y sentarse → sentadilla: mismo bloque, sin relevo entre ellas.
         #expect(ActivityKind.pararseSentarse.sensorBlock == ActivityKind.sentadilla.sensorBlock)
         #expect(SensorBlockPlanner.cameraHandoffs([a(.pasos), a(.pararseSentarse), a(.sentadilla)]).isEmpty)
-        // Sin sentadilla: pararse y sentarse → cervical sí suelta la cámara.
-        #expect(SensorBlockPlanner.cameraHandoffs([a(.pararseSentarse), a(.cuello)]).map { [$0.from, $0.to] } == [[.cameraPose, .face]])
+        // Sin sentadilla: pararse y sentarse → cervical tampoco (mismo bloque `face`).
+        #expect(SensorBlockPlanner.cameraHandoffs([a(.pararseSentarse), a(.cuello)]).isEmpty)
     }
 }
