@@ -30,10 +30,6 @@ struct ProfileView: View {
     @State private var notificationsDenied = false
     @FocusState private var nameFocused: Bool
 
-    /// TODO(integración): poner en `true` y llamar `DemoSeed.load(into: store, now: .now)` en `loadDemo()`
-    /// cuando el paquete store aporte `DemoSeed`. En este worktree no existe.
-    private static let demoSeedAvailable = false
-
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -265,13 +261,6 @@ struct ProfileView: View {
             }
             .buttonStyle(.plain)
             SecondaryButton(title: "Cargar demo (Marco, día 2)", systemImage: "square.and.arrow.down", action: loadDemo)
-                .disabled(!Self.demoSeedAvailable)
-                .opacity(Self.demoSeedAvailable ? 1 : 0.5)
-            if !Self.demoSeedAvailable {
-                Text("Pendiente: semilla de demo del paquete store.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
             Button(role: .destructive) {
                 confirmReset = true
             } label: {
@@ -393,10 +382,12 @@ struct ProfileView: View {
         store.mutate { $0.profile.name = trimmed }
     }
 
+    /// Semilla "Marco, día 2" (paquete store): reemplaza todo el estado y deja el alta hecha.
     private func loadDemo() {
-        // TODO(integración): DemoSeed.load(into: store, now: .now); luego sincronizar draftName y coach.override.
+        DemoSeed.load(into: store, now: .now)
         draftName = store.profile.name
         coach.override = store.data.demo.coachOverride
+        notificationsDenied = false
     }
 
     private func resetAll() {

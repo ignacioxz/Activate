@@ -52,23 +52,39 @@ struct SessionFlowTests {
         #expect(!SessionPlanCheck.accepts(p, allowed: ActivityKind.allCases, base: base, minutes: 1, demo: false))
     }
 
-    // MARK: SessionSensorOrder
+    // MARK: Orden por bloque de sensor (SensorBlockPlanner, paquete activities)
 
     @Test func ordenaPorBloqueDeSensorConservandoElOrdenInterno() {
         let mixed = [a(.cuello, 15), a(.pasos, 250), a(.stroop, 40), a(.sentadilla, 10), a(.respiracion, 6), a(.ojos, 15), a(.extensionLumbar, 10)]
-        let ordered = SessionSensorOrder.ordered(mixed).map(\.kind)
+        let ordered = SensorBlockPlanner.ordered(mixed).map(\.kind)
         #expect(ordered == [.pasos, .sentadilla, .extensionLumbar, .cuello, .ojos, .stroop, .respiracion])
     }
 
-    // MARK: SessionRecipes
+    // MARK: Receta suave (Recipes.gentle vía SafetyRules.apply)
 
     @Test func recetaSuaveSinSentadillaYConPasosReducidos() {
-        let gentle = SessionRecipes.gentle(.campamento5, demo: false)
+        let gentle = Recipes.gentle(.campamento5, demo: false)
         let kinds = gentle.activities.map(\.kind)
         #expect(kinds == [.pasos, .cuello, .respiracion])
         #expect(gentle.activities[0].target == 125)
-        let relevo = SessionRecipes.gentle(.relevo60, demo: true)
-        #expect(relevo.activities.map(\.kind) == [.cuello, .respiracion])
+    }
+
+    // MARK: Plan del coach: PlanValidator solo para el LLM, SessionPlanCheck para todos
+
+    @Test func planDelLLMPasaPorPlanValidatorYLaPlantillaNo() {
+        let base = Recipes.base(.campamento5, demo: false)
+        let input = CoachInput(profileName: "Marco", treatment: .usted, checkIn: nil, moment: .campamento,
+                               minutesAvailable: 5, baseRecipe: base, allowedKinds: ActivityKind.allCases,
+                               historyLines: [], gentle: false)
+        // La plantilla por reglas devuelve las 7 actividades de campamento: la acepta SessionPlanCheck.
+        let rules = PausePlan(activities: base.activities, reasoning: "", why: "", startMessage: "", backend: .rules)
+        #expect(PauseCoordinator.validated(rules, input: input, base: base, minutes: 5, demo: false)?.count == 7)
+        // El mismo plan "del LLM" supera el máximo de 5 ejercicios del prompt: PlanValidator lo rechaza.
+        let llm = PausePlan(activities: base.activities, reasoning: "", why: "", startMessage: "", backend: .foundationModels)
+        #expect(PauseCoordinator.validated(llm, input: input, base: base, minutes: 5, demo: false) == nil)
+        // Un plan corto y permitido del LLM pasa las dos barreras.
+        let short = PausePlan(activities: [a(.pasos, 200), a(.cuello, 10)], reasoning: "", why: "", startMessage: "", backend: .foundationModels)
+        #expect(PauseCoordinator.validated(short, input: input, base: base, minutes: 5, demo: false)?.map(\.kind) == [.pasos, .cuello])
     }
 
     // MARK: PauseCoordinator
@@ -92,7 +108,7 @@ struct SessionFlowTests {
         #expect(store.data.checkIns[0].source == .pausa)
         #expect(c.stage == .planning)
         #expect(!c.plan.isEmpty)
-        #expect(c.plan.map(\.kind) == SessionSensorOrder.ordered(Recipes.base(.colacion3, demo: false).activities).map(\.kind))
+        #expect(c.plan.map(\.kind) == SensorBlockPlanner.ordered(Recipes.base(.colacion3, demo: false).activities).map(\.kind))
     }
 
     @MainActor
@@ -162,14 +178,31 @@ struct SessionFlowTests {
         #expect((c.session?.monotonicSeconds ?? -1) >= 0)
     }
 
-    @Test func resultadoDesdeOutcomeConservaCampos() {
-        let outcome = ActivityOutcome(kind: .cuello, target: 15, achieved: 15, completed: true, durationSeconds: 20,
-                                      metrics: .neck(rotations: 5, flexions: 5, tilts: 5, maxYaw: 50, maxPitch: 30, maxRoll: 25, cueMatches: 15, cueMismatches: 0),
-                                      anomalies: [], reason: .completed)
-        let r = PauseCoordinator.result(from: outcome, level: .full)
-        #expect(r.kind == .cuello && r.achieved == 15 && r.completed && r.level == .full && !r.skipped)
-        let skipped = PauseCoordinator.result(from: ActivityOutcome(kind: .ojos, target: 15, achieved: 2, completed: false, durationSeconds: 3,
-                                                                    metrics: .none, anomalies: [], reason: .skipped), level: .suspicious)
-        #expect(skipped.skipped && !skipped.completed)
+    /// El `ActivityResult` sale solo del runner (testigo `Verified`): el coordinador ya no lo arma.
+    @MainActor
+    @Test func resultadoSaleSoloDelRunner() {
+        let placeholder = PlaceholderRunner(assignment: a(.ojos, 15))
+        #expect(placeholder.verifiedResult == nil)
+        placeholder.stop(reason: .skipped)
+        let skipped = try? #require(placeholder.verifiedResult)
+        #expect(skipped?.kind == .ojos && skipped?.skipped == true && skipped?.completed == false && skipped?.level == .simulated)
+    }
+
+    @MainActor
+    @Test func sesionCerradaLlevaBanderasDeIntegridadYMonotonico() async {
+        let (c, _) = makeCoordinator(moment: .entrada)
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zone: .lumbar, moment: .entrada)
+        c.startActivities()
+        while case .activity = c.stage { c.skipCurrent() }
+        c.submitPost(.mejor)
+        for _ in 0..<50 where c.stage != .reward {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        let session = try? #require(c.session)
+        // Sin cambios de hora ni segundo plano no hay banderas duras; el monotónico viene del IntegrityMonitor.
+        #expect(session?.integrityFlags.contains { $0.severity == .hard } == false)
+        #expect((session?.monotonicSeconds ?? -1) >= 0)
+        #expect(session?.level == .suspicious) // todas saltadas
+        #expect(session?.counted == false)
     }
 }

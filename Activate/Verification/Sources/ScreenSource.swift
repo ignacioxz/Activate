@@ -12,12 +12,15 @@ import Foundation
 final class ScreenSource: SampleSource {
     typealias Sample = ScreenSample
 
-    let level: SourceLevel = .live
+    /// `.live` en dispositivo; `.replay` cuando el flujo corre en simulador (la política marca `simulated`).
+    let level: SourceLevel
 
     private var continuation: AsyncStream<ScreenSample>.Continuation?
     private var origin: ContinuousClock.Instant?
 
-    init() {}
+    init(level: SourceLevel = .live) {
+        self.level = level
+    }
 
     /// `true` entre `start()` y `stop()`.
     var isActive: Bool { continuation != nil }

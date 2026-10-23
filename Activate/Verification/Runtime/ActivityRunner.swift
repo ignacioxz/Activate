@@ -85,7 +85,9 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
     var isFinished: Bool { outcome != nil }
 
     @ObservationIgnored private var verifier: V
-    @ObservationIgnored private let source: S
+    /// Fuente de muestras. Visible para que el flujo de pausa comparta la misma instancia con la vista
+    /// (p. ej. `ScreenSource` de Stroop/respiración, `AVCaptureSession` del preview de cámara).
+    @ObservationIgnored let source: S
     @ObservationIgnored private let timeOf: ((S.Sample) -> Double)?
     @ObservationIgnored private let clock = ContinuousClock()
     @ObservationIgnored private var startInstant: ContinuousClock.Instant? = nil
@@ -273,6 +275,24 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
     }
 }
 
+// MARK: - Resultado con testigo
+
+/// Lo implementan los runners que producen un `ActivityResult` con testigo (`ActivityRunner`, `PlaceholderRunner`).
+@MainActor
+protocol VerifiedResultProviding: AnyObject {
+    var result: ActivityResult? { get }
+}
+
+extension ActivityRunner: VerifiedResultProviding {}
+
+extension ActivityRunning {
+    /// Resultado listo para la sesión; `nil` hasta que el runner tenga `outcome`.
+    /// Es la única vía por la que el flujo de pausa obtiene un `ActivityResult`.
+    var verifiedResult: ActivityResult? {
+        (self as? any VerifiedResultProviding)?.result
+    }
+}
+
 /// Segundos de un `Duration` (sin extensión pública para no chocar con otros paquetes).
 private func durationSeconds(_ d: Duration) -> Double {
     let c = d.components
@@ -344,7 +364,7 @@ enum ActivityRunnerFactory {
 
 /// Runner provisional que no verifica nada (queda como fallback cuando un kind no tiene builder).
 @Observable
-final class PlaceholderRunner: ActivityRunning {
+final class PlaceholderRunner: ActivityRunning, VerifiedResultProviding {
     let assignment: ActivityAssignment
     var progress: VerifierProgress
     var cue: Cue? = Cue(text: "Verificador en construcción")
@@ -352,6 +372,7 @@ final class PlaceholderRunner: ActivityRunning {
     var outcome: ActivityOutcome? = nil
     var level: VerificationLevel? = nil
     var isRunning = false
+    private(set) var result: ActivityResult? = nil
 
     init(assignment: ActivityAssignment) {
         self.assignment = assignment
@@ -360,9 +381,12 @@ final class PlaceholderRunner: ActivityRunning {
 
     func start() { isRunning = true }
     func stop(reason: FinishReason) {
+        guard outcome == nil else { return }
         isRunning = false
-        outcome = ActivityOutcome(kind: assignment.kind, target: assignment.target, achieved: 0, completed: false,
+        let out = ActivityOutcome(kind: assignment.kind, target: assignment.target, achieved: 0, completed: false,
                                   durationSeconds: 0, metrics: .none, anomalies: [], reason: reason)
+        outcome = out
         level = .simulated
+        result = ActivityResult(outcome: out, level: .simulated, witness: Verified())
     }
 }

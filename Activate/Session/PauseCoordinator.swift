@@ -26,6 +26,8 @@ final class PauseCoordinator {
     static let coachTimeoutSeconds: Double = 3.5
     /// Nivel que se registra cuando el runner no declara ninguno: nunca se asume verificación.
     static let undeclaredLevel: VerificationLevel = .suspicious
+    /// Espera entre `stop()` de una fuente de cámara y `start()` de la otra (ARSession ↔ AVCaptureSession).
+    static let cameraHandoffSeconds: Double = 1.0
 
     // MARK: Dependencias
 
@@ -41,7 +43,7 @@ final class PauseCoordinator {
     private(set) var existingCheckIn: DailyCheckIn?
     private(set) var checkIn: DailyCheckIn?
     private(set) var decision: SafetyRules.Decision?
-    /// Plan vigente: receta fija al instante, ajustada por el coach solo si pasa `SessionPlanCheck`.
+    /// Plan vigente: receta fija al instante, ajustada por el coach solo si pasa la validación.
     private(set) var plan: [ActivityAssignment] = []
     private(set) var coachWhy: String?
     private(set) var coachStartMessage: String?
@@ -60,7 +62,10 @@ final class PauseCoordinator {
 
     private let startedAt = Date.now
     private let monoStart = ContinuousClock.now
+    /// Relojes de pared y monotónico + cambios de hora y segundo plano (viaja firmado en `integrityFlags`).
+    @ObservationIgnored private let integrity = IntegrityMonitor()
     @ObservationIgnored private var planTask: Task<Void, Never>?
+    @ObservationIgnored private var handoffTask: Task<Void, Never>?
     @ObservationIgnored private var finishedIndex = -1
     @ObservationIgnored private var restartAfterBackground = false
 
@@ -70,6 +75,7 @@ final class PauseCoordinator {
         self.game = game
         self.coach = coach
         existingCheckIn = Self.todayPauseCheckIn(in: store)
+        integrity.begin()
         coach.prewarm()
         Haptics.shared.prepare()
     }
@@ -110,10 +116,8 @@ final class PauseCoordinator {
     }
 
     /// Último check-in de hoy hecho desde una pausa (los "Me duele ahora" no cuentan).
-    /// INTEGRACIÓN: si el paquete store expone `AppStore.todayCheckIn`, usarlo aquí.
     static func todayPauseCheckIn(in store: AppStore, now: Date = .now) -> DailyCheckIn? {
-        let key = store.calendar.key(for: now)
-        return store.data.checkIns.last { $0.workDayKey == key && $0.source == .pausa }
+        store.todayCheckIn(now: now)
     }
 
     // MARK: Check-in
@@ -121,11 +125,8 @@ final class PauseCoordinator {
     /// Guarda el check-in al instante (cuenta para estadísticas aunque no siga) y evalúa seguridad.
     func submitCheckIn(answers: [Bool], zone: PainZone, moment checkInMoment: Moment) {
         guard answers.count == RDQ6.items.count else { return }
-        let cal = store.calendar
-        let now = Date.now
-        let entry = DailyCheckIn(date: now, workDayKey: cal.key(for: now), turnoKey: cal.turnoKey(for: now),
-                                 source: .pausa, answers: answers, zone: zone, moment: checkInMoment)
-        store.mutate { $0.checkIns.append(entry) }
+        let entry = store.makeCheckIn(date: .now, source: .pausa, answers: answers, zone: zone, moment: checkInMoment)
+        store.addCheckIn(entry)
         checkIn = entry
         existingCheckIn = nil
         evaluateSafety()
@@ -167,12 +168,7 @@ final class PauseCoordinator {
     func submitAlarm(answers: [Bool]) {
         guard var current = checkIn, answers.count == RDQ6.alarmQuestions.count else { return }
         current.alarmAnswers = answers
-        let id = current.id
-        store.mutate { data in
-            if let i = data.checkIns.firstIndex(where: { $0.id == id }) {
-                data.checkIns[i].alarmAnswers = answers
-            }
-        }
+        store.addCheckIn(current)
         checkIn = current
         let d = SafetyRules.evaluate(checkIn: current)
         decision = d
@@ -189,10 +185,9 @@ final class PauseCoordinator {
     private func buildPlan() {
         let demo = store.data.demo.shortTargets
         let d = decision ?? SafetyRules.evaluate(checkIn: checkIn)
-        // INTEGRACIÓN: cuando el paquete activities exponga `Recipes.gentle`, reemplazar `SessionRecipes.gentle`.
-        let base = isGentle ? SessionRecipes.gentle(moment.recipe, demo: demo) : Recipes.base(moment.recipe, demo: demo)
-        let filtered = SafetyRules.apply(d, to: base)
-        plan = SessionSensorOrder.ordered(filtered.activities)
+        // `apply` reemplaza la base por `Recipes.gentle` cuando la decisión es suave, filtra y escala metas.
+        let filtered = SafetyRules.apply(d, to: Recipes.base(moment.recipe, demo: demo), demo: demo)
+        plan = SensorBlockPlanner.ordered(filtered.activities)
         coachWhy = nil
         coachStartMessage = nil
         coachBackend = nil
@@ -212,13 +207,26 @@ final class PauseCoordinator {
             guard let self else { return }
             guard let proposal = await self.planWithTimeout(input) else { return }
             guard !Task.isCancelled, self.stage == .planning else { return }
-            // INTEGRACIÓN: si el paquete coach expone `PlanValidator`, usarlo además de `SessionPlanCheck`.
-            guard SessionPlanCheck.accepts(proposal, allowed: allowed, base: base, minutes: minutes, demo: demo) else { return }
-            self.plan = SessionSensorOrder.ordered(proposal.activities)
+            guard let accepted = Self.validated(proposal, input: input, base: base, minutes: minutes, demo: demo) else { return }
+            self.plan = SensorBlockPlanner.ordered(accepted)
             self.coachWhy = proposal.why.isEmpty ? nil : proposal.why
             self.coachStartMessage = proposal.startMessage.isEmpty ? nil : proposal.startMessage
             self.coachBackend = proposal.backend
         }
+    }
+
+    /// El LLM nunca decide solo: su plan pasa por `PlanValidator` (ids, duplicados, reps, duración) y,
+    /// como todo plan del coach, por `SessionPlanCheck` (segunda barrera). La plantilla por reglas no
+    /// pasa por `PlanValidator` (campamento trae más ejercicios que el máximo del prompt).
+    nonisolated static func validated(_ proposal: PausePlan, input: CoachInput, base: Recipe, minutes: Int, demo: Bool) -> [ActivityAssignment]? {
+        var activities = proposal.activities
+        if proposal.backend == .foundationModels {
+            let proposed = activities.map { ProposedExercise(id: $0.kind.rawValue, reps: $0.target) }
+            guard case .success(let valid) = PlanValidator.validate(proposed, input: input) else { return nil }
+            activities = valid
+        }
+        guard SessionPlanCheck.accepts(proposal, allowed: input.allowedKinds, base: base, minutes: minutes, demo: demo) else { return nil }
+        return activities
     }
 
     private func planWithTimeout(_ input: CoachInput) async -> PausePlan? {
@@ -252,8 +260,6 @@ final class PauseCoordinator {
 
     private func enter(index: Int) {
         guard plan.indices.contains(index) else { return }
-        // INTEGRACIÓN: para `.stroop` y `.respiracion` el paquete stroop-breath aporta StroopView / BreathView;
-        // el runner sigue saliendo de esta fábrica y la vista se elige en PauseFlowView.
         let demo = store.data.demo.shortTargets
         runner = ActivityRunnerFactory.make(assignment: plan[index], demo: demo)
         runnerGeneration += 1
@@ -268,51 +274,54 @@ final class PauseCoordinator {
             restartAfterBackground = true
             return
         }
+        // El `ActivityResult` sale SOLO del runner (testigo `Verified`): nunca se arma aquí.
+        guard let result = runner?.verifiedResult, result.kind == outcome.kind else { return }
         finishedIndex = index
-        let level = runner?.level ?? Self.undeclaredLevel
-        results.append(Self.result(from: outcome, level: level))
+        results.append(result)
         advance(from: index)
     }
 
     /// "Saltar (no suma)": detiene el runner y registra la actividad como saltada.
     func skipCurrent() {
         guard let index = currentIndex, index > finishedIndex else { return }
-        if let runner {
-            if runner.outcome == nil { runner.stop(reason: .skipped) }
-            if let outcome = runner.outcome {
-                activityFinished(outcome, at: index)
-                return
-            }
-        }
-        finishedIndex = index
-        let a = plan[index]
-        results.append(ActivityResult(kind: a.kind, target: a.target, achieved: 0, durationSeconds: 0, completed: false,
-                                      level: Self.undeclaredLevel, metrics: .none, anomalies: [], skipped: true))
-        advance(from: index)
+        // Sin runner (p. ej. durante el relevo de cámara) se usa el provisional, que también entrega un resultado con testigo.
+        let current = runner ?? PlaceholderRunner(assignment: plan[index])
+        if current.outcome == nil { current.stop(reason: .skipped) }
+        guard let outcome = current.outcome else { return }
+        runner = current
+        activityFinished(outcome, at: index)
     }
 
     private func advance(from index: Int) {
         runner = nil
+        handoffTask?.cancel()
+        handoffTask = nil
         let next = index + 1
-        if next < plan.count {
-            enter(index: next)
-        } else {
+        guard next < plan.count else {
             stage = .postCheck
+            return
         }
-    }
-
-    /// Junta `ActivityResult` desde el outcome y el nivel que declaró el runner.
-    /// INTEGRACIÓN: el testigo `Verified` del runtime no existe en este worktree; se usa el init memberwise.
-    nonisolated static func result(from outcome: ActivityOutcome, level: VerificationLevel) -> ActivityResult {
-        ActivityResult(kind: outcome.kind, target: outcome.target, achieved: outcome.achieved,
-                       durationSeconds: outcome.durationSeconds, completed: outcome.completed, level: level,
-                       metrics: outcome.metrics, anomalies: outcome.anomalies, skipped: outcome.reason == .skipped)
+        let from = plan[index].kind.sensorBlock
+        let to = plan[next].kind.sensorBlock
+        guard SensorBlockPlanner.needsCameraHandoff(from: from, to: to) else {
+            enter(index: next)
+            return
+        }
+        // ARSession y AVCaptureSession no conviven: la fuente anterior ya hizo `stop()` al cerrar el runner;
+        // se espera un instante ("Preparando cámara…") antes del `start()` de la siguiente.
+        stage = .activity(next)
+        handoffTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.cameraHandoffSeconds))
+            guard let self, !Task.isCancelled, self.stage == .activity(next), self.runner == nil else { return }
+            self.enter(index: next)
+        }
     }
 
     // MARK: Ciclo de vida de la app
 
     /// A background a mitad de una actividad de cámara/cara: se detiene y se reinicia al volver (no se completa).
     func appWentToBackground() {
+        integrity.noteBackgrounded()
         guard let index = currentIndex, index > finishedIndex, let runner, runner.outcome == nil else { return }
         let block = plan[index].kind.sensorBlock
         guard block == .cameraPose || block == .face else { return }
@@ -321,6 +330,9 @@ final class PauseCoordinator {
     }
 
     func appBecameActive() {
+        integrity.noteForegrounded()
+        // La caminata sigue en background: al volver se acredita lo que contó el coprocesador.
+        runner?.stepSource?.resumeReconciliation()
         guard restartAfterBackground, let index = currentIndex, index > finishedIndex else { return }
         restartAfterBackground = false
         enter(index: index)
@@ -330,8 +342,11 @@ final class PauseCoordinator {
     func cancel() {
         planTask?.cancel()
         planTask = nil
+        handoffTask?.cancel()
+        handoffTask = nil
         if let runner, runner.outcome == nil { runner.stop(reason: .userStopped) }
         runner = nil
+        integrity.cancel()
         Haptics.shared.release()
     }
 
@@ -349,11 +364,7 @@ final class PauseCoordinator {
     func finish() async {
         var s = composeSession()
         do {
-            let signed = try await SessionSigner.shared.sign(s)
-            s.payloadData = signed.payloadData
-            s.signature = signed.signature
-            s.keyID = signed.keyID
-            s.backing = signed.backing
+            s = try await SessionSigner.shared.signed(s)
             signError = nil
         } catch {
             signError = error.localizedDescription
@@ -368,72 +379,36 @@ final class PauseCoordinator {
         reward = r
         isFinishing = false
         stage = .reward
-        if r.counted {
-            Haptics.shared.celebrate(strong: r.isDoblete || r.isTiroLimpio)
-        }
+        // El aviso diario de hoy ya no hace falta si la pausa contó.
+        DailyNotice.refresh(store: store)
+        // La háptica de celebración la dispara `CelebrationView` junto con su escalera (no se duplica aquí).
     }
 
     private func composeSession() -> PauseSession {
         let cal = store.calendar
+        // Leer el monotónico antes de `end()` (que cierra el monitor) y adjuntar sus banderas firmadas.
+        let monotonic = integrity.monotonicSeconds
+        let flags = integrity.end()
+        let hardIntegrity = flags.contains { $0.severity == .hard }
         let simulated = results.contains { $0.level == .simulated }
-        let counted = VerificationPolicy.counts(results) && !simulated && checkIn != nil && post != nil
-        return PauseSession(workDayKey: cal.key(for: startedAt), turnoKey: cal.turnoKey(for: startedAt),
-                            recipe: moment.recipe, moment: moment, startedAt: startedAt, endedAt: .now,
-                            monotonicSeconds: elapsedSeconds, checkInScore: checkIn?.score,
-                            checkInAnswers: checkIn?.answers ?? [], zone: checkIn?.zone ?? store.profile.usualZone,
-                            postResponse: post, activities: results, counted: counted,
-                            level: VerificationPolicy.sessionLevel(results), simulated: simulated, coachNote: coachWhy)
-    }
-}
-
-// MARK: - Receta suave (fallback local)
-
-/// Plan suave cuando RDQ ≥ umbral: caminata corta + cuello + respiración.
-/// INTEGRACIÓN: reemplazar por `Recipes.gentle` cuando el paquete activities lo exponga.
-nonisolated enum SessionRecipes {
-    /// Fracción de la meta de pasos en el plan suave.
-    static let gentleStepsFraction = 0.5
-
-    static func gentle(_ kind: RecipeKind, demo: Bool) -> Recipe {
-        func target(_ k: ActivityKind) -> Int { demo ? k.demoTarget : k.defaultTarget }
-        var acts: [ActivityAssignment] = []
-        if kind != .relevo60 {
-            let steps = max(1, Int((Double(target(.pasos)) * gentleStepsFraction).rounded()))
-            acts.append(ActivityAssignment(kind: .pasos, target: steps))
-        }
-        acts.append(ActivityAssignment(kind: .cuello, target: target(.cuello)))
-        acts.append(ActivityAssignment(kind: .respiracion, target: target(.respiracion)))
-        return Recipe(kind: kind, activities: acts)
-    }
-}
-
-// MARK: - Orden por bloque de sensor
-
-/// ARSession y AVCaptureSession no comparten la cámara: [pasos] → [cámara-pose] → [cara] → [pantalla].
-/// INTEGRACIÓN: reemplazar por `SensorBlockPlanner` cuando el paquete activities lo exponga.
-nonisolated enum SessionSensorOrder {
-    static func rank(_ block: SensorBlock) -> Int {
-        switch block {
-        case .pedometer: 0
-        case .cameraPose: 1
-        case .face: 2
-        case .screen: 3
-        }
-    }
-
-    /// Orden estable: por bloque, conservando el orden de la receta dentro de cada bloque.
-    static func ordered(_ activities: [ActivityAssignment]) -> [ActivityAssignment] {
-        activities.enumerated().sorted { a, b in
-            let ra = rank(a.element.kind.sensorBlock), rb = rank(b.element.kind.sensorBlock)
-            return ra != rb ? ra < rb : a.offset < b.offset
-        }.map(\.element)
+        var level = VerificationPolicy.sessionLevel(results)
+        if hardIntegrity { level = min(level, .suspicious) }
+        let counted = VerificationPolicy.counts(results) && !simulated && !hardIntegrity && checkIn != nil && post != nil
+        var s = PauseSession(workDayKey: cal.key(for: startedAt), turnoKey: cal.turnoKey(for: startedAt),
+                             recipe: moment.recipe, moment: moment, startedAt: startedAt, endedAt: .now,
+                             monotonicSeconds: monotonic, checkInScore: checkIn?.score,
+                             checkInAnswers: checkIn?.answers ?? [], zone: checkIn?.zone ?? store.profile.usualZone,
+                             postResponse: post, activities: results, counted: counted,
+                             level: level, simulated: simulated, coachNote: coachWhy)
+        s.integrityFlags = flags
+        return s
     }
 }
 
 // MARK: - Validación del plan del coach
 
 /// El LLM nunca decide solo: ids permitidos, sin repetidos, reps acotadas y duración dentro del momento.
-/// INTEGRACIÓN: el paquete coach puede aportar `PlanValidator`; esta validación se mantiene como segunda barrera.
+/// Segunda barrera después de `PlanValidator` (paquete coach); usa la duración mínima de verificación.
 nonisolated enum SessionPlanCheck {
     /// Máximo de actividades que acepta el plan del coach (el `@Guide(.count(1...5))` del prompt).
     static let maxActivities = 5

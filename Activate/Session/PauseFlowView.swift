@@ -134,18 +134,33 @@ private struct PauseFlowContent: View {
 
         case .activity(let index):
             if let runner = coordinator.runner, coordinator.plan.indices.contains(index) {
-                // INTEGRACIÓN: para `.stroop` y `.respiracion` usar StroopView / BreathView (paquete stroop-breath)
-                // cuando existan; mientras tanto la vista genérica muestra el contador del runner.
-                ActivityRunView(runner: runner,
-                                assignment: coordinator.plan[index],
-                                position: index + 1,
-                                total: coordinator.plan.count,
-                                onFinish: { coordinator.activityFinished($0, at: index) },
-                                onSkip: { coordinator.skipCurrent() })
-                    .id(coordinator.runnerGeneration)
-                    .transition(stageTransition)
+                let assignment = coordinator.plan[index]
+                if assignment.kind.sensorBlock == .screen, let source = runner.screenSource {
+                    // Stroop / respiración: la vista alimenta la MISMA `ScreenSource` que consume el runner.
+                    ScreenActivityView(runner: runner,
+                                       source: source,
+                                       assignment: assignment,
+                                       position: index + 1,
+                                       total: coordinator.plan.count,
+                                       onFinish: { coordinator.activityFinished($0, at: index) },
+                                       onSkip: { coordinator.skipCurrent() })
+                        .id(coordinator.runnerGeneration)
+                        .transition(stageTransition)
+                } else {
+                    ActivityRunView(runner: runner,
+                                    assignment: assignment,
+                                    position: index + 1,
+                                    total: coordinator.plan.count,
+                                    onFinish: { coordinator.activityFinished($0, at: index) },
+                                    onSkip: { coordinator.skipCurrent() })
+                        .id(coordinator.runnerGeneration)
+                        .transition(stageTransition)
+                }
             } else {
-                ProgressView("Preparando sensor…")
+                // Relevo de cámara entre bloques (ARSession ↔ AVCaptureSession) o runner aún no creado.
+                ProgressView(coordinator.plan.indices.contains(index)
+                             ? coordinator.plan[index].kind.sensorBlock.preparingCopy
+                             : "Preparando sensor…")
                     .transition(.opacity)
             }
 

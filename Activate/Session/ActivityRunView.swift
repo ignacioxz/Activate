@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 /// Una actividad verificada: gating con copy en vivo, consigna grande, contador + anillo en el HUD de vidrio,
@@ -37,7 +38,11 @@ struct ActivityRunView: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     if assignment.kind.sensorBlock == .cameraPose {
-                        cameraPlaceholder
+                        if let session = runner.cameraCaptureSession {
+                            cameraPreview(session)
+                        } else {
+                            cameraPlaceholder
+                        }
                     }
 
                     hud
@@ -48,7 +53,7 @@ struct ActivityRunView: View {
             footer
         }
         .overlay {
-            if showDone { doneOverlay }
+            if showDone { ActivityDoneOverlay() }
         }
         .task(id: ObjectIdentifier(runner)) {
             if !runner.isRunning && runner.outcome == nil { runner.start() }
@@ -133,7 +138,19 @@ struct ActivityRunView: View {
 
     // MARK: Cámara (cuerpo entero)
 
-    /// INTEGRACIÓN: reemplazar por `CameraPreviewView` (paquete camera-pose) cuando exista en el proyecto.
+    /// Alto del preview de la cámara frontal (contenido plano; el HUD de vidrio va debajo).
+    static let cameraPreviewHeight: CGFloat = 300
+
+    /// Preview en vivo de la `AVCaptureSession` del runner (no se persiste ningún cuadro).
+    private func cameraPreview(_ session: AVCaptureSession) -> some View {
+        CameraPreviewView(session: session)
+            .frame(maxWidth: .infinity)
+            .frame(height: Self.cameraPreviewHeight)
+            .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius))
+            .accessibilityLabel("Cámara frontal")
+    }
+
+    /// Sin cámara (simulador / replay): marcador plano en el mismo lugar.
     private var cameraPlaceholder: some View {
         RoundedRectangle(cornerRadius: Theme.cardRadius)
             .fill(Color(.secondarySystemBackground))
@@ -169,27 +186,6 @@ struct ActivityRunView: View {
 
     // MARK: Listo.
 
-    private var doneOverlay: some View {
-        VStack(spacing: 10) {
-            if reduceMotion {
-                doneCheck.transition(.opacity)
-            } else {
-                doneCheck.transition(.symbolEffect(.drawOn))
-            }
-            Text(Self.doneCopy)
-                .font(.largeTitle.weight(.heavy))
-        }
-        .padding(32)
-        .functionalGlass(tint: Theme.mint, cornerRadius: 32)
-        .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
-    }
-
-    private var doneCheck: some View {
-        Image(systemName: "checkmark.circle.fill")
-            .font(.system(size: 72))
-            .foregroundStyle(Theme.mint)
-    }
-
     private func handle(_ outcome: ActivityOutcome?) {
         guard let outcome, !delivered else { return }
         delivered = true
@@ -202,5 +198,31 @@ struct ActivityRunView: View {
         } else {
             onFinish(outcome)
         }
+    }
+}
+
+/// "Listo." sobre vidrio funcional; lo comparten la vista genérica y las de pantalla (Stroop / respiración).
+struct ActivityDoneOverlay: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if reduceMotion {
+                doneCheck.transition(.opacity)
+            } else {
+                doneCheck.transition(.symbolEffect(.drawOn))
+            }
+            Text(ActivityRunView.doneCopy)
+                .font(.largeTitle.weight(.heavy))
+        }
+        .padding(32)
+        .functionalGlass(tint: Theme.mint, cornerRadius: 32)
+        .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
+    }
+
+    private var doneCheck: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 72))
+            .foregroundStyle(Theme.mint)
     }
 }
