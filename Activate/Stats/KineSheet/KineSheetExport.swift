@@ -3,9 +3,10 @@ import UIKit
 import UniformTypeIdentifiers
 
 // Dueño: paquete "kine-ai" (antes agente "kine-sheet").
-// Exportación de la hoja: ImageRenderer (MainActor, no es Sendable) → PNG a escala 3 para WhatsApp
-// desde el campamento, y PDF de una página con render { size, draw in … } sobre un CGContext.
-// Todo ocurre en el teléfono; nada sale sin que la persona toque Compartir.
+// Exportación del Reporte de Salud: ImageRenderer (MainActor, no es Sendable) → PNG a escala 3 para
+// WhatsApp desde el campamento, y PDF de una página con render { size, draw in … } sobre un CGContext.
+// Archivos "Reporte de Salud - Marco.png/.pdf". Todo ocurre en el teléfono; nada sale sin que la
+// persona toque Compartir.
 
 @MainActor
 enum KineSheetExport {
@@ -31,12 +32,14 @@ enum KineSheetExport {
 
     static func pdfData(_ content: KineSheetContent) -> Data? {
         let renderer = ImageRenderer(content: exportView(content))
+        let info = [kCGPDFContextTitle as String: fileStem(for: content.profile),
+                    kCGPDFContextCreator as String: "Activate"] as CFDictionary
         var result: Data?
         renderer.render { size, draw in
             var box = CGRect(origin: .zero, size: size)
             let buffer = NSMutableData()
             guard let consumer = CGDataConsumer(data: buffer as CFMutableData),
-                  let context = CGContext(consumer: consumer, mediaBox: &box, nil) else { return }
+                  let context = CGContext(consumer: consumer, mediaBox: &box, info) else { return }
             context.beginPDFPage(nil)
             draw(context)
             context.endPDFPage()
@@ -46,9 +49,10 @@ enum KineSheetExport {
         return result
     }
 
+    /// "Reporte de Salud - Marco" (sin nombre, "Reporte de Salud"). Nombre del archivo y título del PDF.
     nonisolated static func fileStem(for profile: PlayerProfile) -> String {
         let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "Hoja kine" : "Hoja kine \(name)"
+        return name.isEmpty ? HealthReport.title : "\(HealthReport.title) - \(name)"
     }
 }
 

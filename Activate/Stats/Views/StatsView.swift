@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Dueño: agente "stats-ui" (enlace a la hoja del kine: paquete kine-ai). Pestaña Estadísticas:
+// Dueño: agente "stats-ui" (enlace al Reporte de Salud: paquete kine-ai). Pestaña Estadísticas:
 // "Este turno" arriba, dashboard histórico debajo. Todo el contenido es plano (flatCard).
 
 struct StatsView: View {
@@ -266,7 +266,7 @@ private struct CoachReadingCard: View {
     }
 }
 
-// MARK: - Hoja para el kine
+// MARK: - Reporte de Salud (antes "Hoja para el kine")
 
 /// Fila plana que abre `KineSheetScreen` (Apple Intelligence prepara la consulta; PNG o PDF).
 private struct KineSheetLink: View {
@@ -284,9 +284,11 @@ private struct KineSheetLink: View {
                     .background(Theme.accent.opacity(0.12), in: .circle)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Hoja para el kine")
+                    Text(HealthReport.title)
                         .font(.headline)
-                    Text(coach.kineModelReady ? "Prepare su consulta con Apple Intelligence" : "Sus cifras listas para compartir")
+                    Text(coach.kineModelReady
+                         ? "\(HealthReport.audience). Prepárelo con Apple Intelligence."
+                         : "\(HealthReport.audience), con sus cifras listas para compartir.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -300,7 +302,7 @@ private struct KineSheetLink: View {
             .flatCard()
         }
         .buttonStyle(.plain)
-        .accessibilityHint("Abre la hoja para llevar a la consulta")
+        .accessibilityHint("Abre el Reporte de Salud para llevar a la consulta")
     }
 }
 

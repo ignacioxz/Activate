@@ -15,6 +15,8 @@ nonisolated enum KineFactID: String, CaseIterable, Sendable {
     case itemFrecuente = "item_frecuente"
     case ejercicioQueAyuda = "ejercicio_que_ayuda"
     case alertas = "alertas"
+    /// Nivel de pausas completas (`LevelProgress`, calculado en Swift; el modelo solo lo cita).
+    case nivel = "nivel"
 
     static let all: [String] = allCases.map(\.rawValue)
 }

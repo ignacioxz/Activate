@@ -392,7 +392,8 @@ struct CoachValidationTests {
     @Test func hallazgoGuideListsExactlyTheFactIds() throws {
         let json = String(decoding: try JSONEncoder().encode(Hallazgo.generationSchema), as: UTF8.self)
         for id in KineFactID.all { #expect(json.contains("\"\(id)\""), "falta \(id) en el @Guide") }
-        #expect(KineFactID.all.count == 8)
+        #expect(KineFactID.all.count == 9)
+        #expect(KineFactID.all.last == "nivel")
         let note = String(decoding: try JSONEncoder().encode(NotaPaciente.generationSchema), as: UTF8.self)
         for z in PainZone.allCases { #expect(note.contains("\"\(z.rawValue)\"")) }
         for m in Moment.allCases { #expect(note.contains("\"\(m.rawValue)\"")) }

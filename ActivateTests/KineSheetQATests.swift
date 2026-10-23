@@ -32,14 +32,16 @@ struct KineSheetQATests {
         try await shoot(window, dir, "kine-ai-4-oscuro", offsets: [0, 900])
         window.overrideUserInterfaceStyle = .unspecified
 
-        // 4) Vista previa de la hoja (papel) y fila de Estadísticas.
+        // 4) Vista previa del Reporte de Salud (papel, con el nivel) y fila de Estadísticas.
         let data = DemoSeed.data(now: .now)
-        let summary = StatsEngine.summary(data: data, calendar: WorkCalendar(profile: data.profile), now: .now)
+        let work = WorkCalendar(profile: data.profile)
+        let summary = StatsEngine.summary(data: data, calendar: work, now: .now)
         let facts = KineFacts.build(data: data, summary: summary)
         var sheet = KineSheet(consult: KineConsultRules.template(facts, profile: data.profile), note: nil,
                               factsSignature: KineConsultRules.signature(facts), preparedAt: .now)
         sheet.note = KineConsultRules.noteTemplate(KineSheetQA.sampleNote)
-        let content = KineSheetContent(sheet: sheet, facts: facts, summary: summary, profile: data.profile)
+        let content = KineSheetContent(sheet: sheet, facts: facts, summary: summary, profile: data.profile,
+                                       level: LevelProgress.compute(sessions: data.sessions, calendar: work))
         try await show(NavigationStack { KineSheetPreviewScreen(content: content) }.fontDesign(.rounded), in: window)
         try await shoot(window, dir, "kine-ai-5-vista-previa", offsets: [0, 700, 1400, 2100])
 

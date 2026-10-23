@@ -93,6 +93,17 @@ final class GameStore {
         return value
     }
 
+    // MARK: Nivel (pausa completa por día; reglas en `LevelProgress`)
+
+    /// Nivel derivado del historial: cada día con la pausa completa sube 1 nivel y una pausa parcial suma
+    /// su parte (5 de 7 = +71 %), que se arrastra a los días siguientes. No sale del XP.
+    var levelProgress: LevelProgress { levelProgress(at: .now) }
+
+    /// Nivel con `date` como "hoy" (para el aporte del día).
+    func levelProgress(at date: Date) -> LevelProgress {
+        LevelProgress.compute(sessions: store.data.sessions, calendar: calendar, now: date)
+    }
+
     // MARK: Cierre de día
 
     /// Cierra días laborales pasados sin pausa (comodín automático) y repone el comodín del turno.

@@ -42,7 +42,7 @@ nonisolated struct LecturaDatos {
 
 @Generable(description: "Un hecho de la lista, elegido y explicado para el kinesiólogo")
 nonisolated struct Hallazgo {
-    @Guide(description: "Id del hecho elegido, tal como aparece en la lista", .anyOf(["rdq_tendencia", "peor_fase_turno", "contexto_dominante", "mejora_post", "adherencia", "item_frecuente", "ejercicio_que_ayuda", "alertas"]))
+    @Guide(description: "Id del hecho elegido, tal como aparece en la lista", .anyOf(["rdq_tendencia", "peor_fase_turno", "contexto_dominante", "mejora_post", "adherencia", "item_frecuente", "ejercicio_que_ayuda", "alertas", "nivel"]))
     var datoId: String
     @Guide(description: "Una frase de máximo 20 palabras, en tercera persona (el paciente), que dice con otras palabras lo que dice el resumen de ese hecho. Sin números.")
     var frase: String

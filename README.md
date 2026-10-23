@@ -3,9 +3,9 @@
 App nativa de iPhone (Swift / SwiftUI, iOS 27, Xcode 27.1) de **pausas activas verificadas por sensores** para operadores de camión de extracción en faenas mineras (caso "Marco": turno 7×7, dolor lumbar, sin señal en el rajo).
 
 - **No falseable**: cada actividad se verifica con sensores en vivo (podómetro, cámara frontal con Vision, ARKit Face Tracking, test Stroop) y la sesión queda firmada en el Secure Enclave del teléfono.
-- **IA local**: Foundation Models (Apple Intelligence on-device) orquesta la pausa, lee las estadísticas y redacta la hoja para el kinesiólogo. Nada sale del teléfono.
+- **IA local**: Foundation Models (Apple Intelligence on-device) orquesta la pausa, lee las estadísticas y redacta el Reporte de Salud para el kinesiólogo o la mutual. Nada sale del teléfono.
 - **Check-in** con el Cuestionario Roland-Morris chileno abreviado (6 ítems Sí/No; Guic, Galdames y Rebolledo, Rev Med Chile 2014).
-- **Gamificación** estilo Duolingo adaptada al 7×7: racha por día laboral, "Doblete" al segundo día seguido, "Tiro limpio" al completar el turno.
+- **Gamificación** estilo Duolingo adaptada al 7×7: racha por día laboral, "Doblete" al segundo día seguido, "Tiro limpio" al completar el turno. Niveles por pausa completa: cada día con el 100 % de la pausa sube un nivel y una pausa parcial suma su parte (5 de 7 = +71 %), que se arrastra a los días siguientes.
 - **Diseño** flat + Liquid Glass; feedback visual grande y háptico (sin voz: en la mina hay ruido).
 
 ## Requisitos

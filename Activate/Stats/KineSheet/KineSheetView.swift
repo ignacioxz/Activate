@@ -1,10 +1,19 @@
 import SwiftUI
 
 // Dueño: paquete "kine-ai".
-// Hoja para el kinesiólogo / la mutual tal como se comparte (PNG/PDF). Vista PLANA: sin glassEffect ni
-// materiales, porque ImageRenderer la rasteriza tal cual. Arriba "Para la consulta" (3 hallazgos con su
-// cifra de Swift, 3 preguntas y un foco), luego "En palabras de Marco" si escribió algo, y debajo las
-// cifras por turno que calcula Swift: la redacción nunca es la única fuente. Copy sin diagnóstico.
+// "Reporte de Salud" (antes "Hoja para el kine"), para el kinesiólogo o la mutual, tal como se comparte
+// (PNG/PDF). Vista PLANA: sin glassEffect ni materiales, porque ImageRenderer la rasteriza tal cual.
+// Arriba el nivel por pausas completas (Swift), luego "Para la consulta" (3 hallazgos con su cifra de
+// Swift, 3 preguntas y un foco), "En palabras de Marco" si escribió algo, y debajo las cifras por turno
+// que calcula Swift: la redacción nunca es la única fuente. Copy sin diagnóstico. Los tipos conservan el
+// prefijo `Kine`; lo que ve la persona dice "Reporte de Salud".
+
+/// Nombre visible del documento y a quién va dirigido.
+nonisolated enum HealthReport {
+    static let title = "Reporte de Salud"
+    /// Subtítulo corto bajo el título (pantalla, PNG y PDF).
+    static let audience = "Para el kinesiólogo o la mutual"
+}
 
 /// Todo lo que necesita la hoja exportada (Sendable: viaja en `Transferable`).
 nonisolated struct KineSheetContent: Sendable, Hashable {
@@ -15,6 +24,14 @@ nonisolated struct KineSheetContent: Sendable, Hashable {
     /// Líneas de alarma calculadas desde los check-ins (vacío si no hay).
     var extraAlerts: [String] = []
     var generatedAt: Date = .now
+    /// Nivel por pausas completas (`LevelProgress`, Swift). `nil` o sin días: el reporte no lo muestra.
+    var level: LevelProgress? = nil
+
+    /// Nivel que se muestra (solo si hay al menos un día con pausa verificada).
+    var shownLevel: LevelProgress? {
+        guard let level, level.daysWithPause > 0 else { return nil }
+        return level
+    }
 
     /// Hallazgos con su hecho (los que perdieron su hecho, p. ej. caché antigua, no se muestran).
     var findings: [(fact: KineFact, sentence: String)] {
@@ -59,7 +76,8 @@ struct KineSheetView: View {
 
     var body: some View {
         let table = KineSheetTable.build(summary: content.summary, profile: profile,
-                                         extraAlerts: content.extraAlerts, now: content.generatedAt)
+                                         extraAlerts: content.extraAlerts, level: content.shownLevel,
+                                         now: content.generatedAt)
         VStack(alignment: .leading, spacing: 18) {
             header(table)
             consultSection
@@ -78,7 +96,7 @@ struct KineSheetView: View {
         .fontDesign(.rounded)
         .environment(\.colorScheme, .light)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Hoja para el kinesiólogo de \(profile.name)")
+        .accessibilityLabel("\(HealthReport.title) de \(profile.name)")
     }
 
     // MARK: Cabecera
@@ -87,12 +105,15 @@ struct KineSheetView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Hoja para el kinesiólogo")
-                        .font(.caption.weight(.bold))
-                        .textCase(.uppercase)
+                    Text(HealthReport.title)
+                        .font(.headline.weight(.bold))
                         .foregroundStyle(Paper.accent)
+                    Text(HealthReport.audience)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Paper.inkSecondary)
                     Text(profile.name)
                         .font(.title.weight(.heavy))
+                        .padding(.top, 4)
                     Text("Operador CAEX · \(profile.roster.rawValue) · \(profile.shiftType.title.lowercased())")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Paper.inkSecondary)
@@ -117,8 +138,19 @@ struct KineSheetView: View {
                     Text(profile.allUsualZones.count > 1 ? "Zonas habituales" : "Zona habitual").foregroundStyle(Paper.inkSecondary)
                     Text(PainZone.listTitle(profile.allUsualZones)).fontWeight(.semibold)
                 }
+                if let level = content.shownLevel {
+                    GridRow(alignment: .firstTextBaseline) {
+                        Text("Nivel").foregroundStyle(Paper.inkSecondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(level.levelLine).fontWeight(.semibold)
+                            Text(level.fullDaysLine)
+                                .foregroundStyle(Paper.inkSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
                 GridRow {
-                    Text("Generada").foregroundStyle(Paper.inkSecondary)
+                    Text("Generado").foregroundStyle(Paper.inkSecondary)
                     Text(KineSheetFormat.longDate(content.generatedAt)).fontWeight(.semibold)
                 }
             }
@@ -532,7 +564,14 @@ nonisolated struct KineSheetTable: Sendable, Equatable {
 
     var truncated: Bool { totalTurnos > columns.count }
 
+    /// Filas del nivel por pausas completas (solo si hay días con pausa verificada).
+    static let levelFullDaysLabel = "Días con pausa completa"
+    static let levelReachedLabel = "Nivel alcanzado"
+
+    /// `level`: nivel por pausas completas (`LevelProgress`); agrega por turno los días con pausa completa
+    /// y el nivel alcanzado al cierre de cada turno (el turno actual, hasta hoy).
     static func build(summary: StatsSummary, profile: PlayerProfile, extraAlerts: [String] = [],
+                      level: LevelProgress? = nil,
                       now: Date = .now, calendar: Calendar = .current) -> KineSheetTable {
         let work = WorkCalendar(profile: profile, calendar: calendar)
 
@@ -551,9 +590,17 @@ nonisolated struct KineSheetTable: Sendable, Equatable {
                    isCurrent: turno.turnoKey == currentKey)
         }
 
-        let rows: [Row] = [
+        var rows: [Row] = [
             Row(label: "Días con pausa", values: shown.map { "\($0.daysWithPause) de \($0.workDays)" }),
             Row(label: "Pausas verificadas", values: shown.map { KineSheetFormat.int($0.countedPauses) }),
+        ]
+        if let level, level.daysWithPause > 0 {
+            rows.append(Row(label: levelFullDaysLabel,
+                            values: shown.map { KineSheetFormat.int(level.fullDays(inTurno: $0.turnoKey)) }))
+            rows.append(Row(label: levelReachedLabel,
+                            values: shown.map { level.through(turnoKey: $0.turnoKey).compactValue }))
+        }
+        rows += [
             Row(label: "RDQ-6 promedio", values: shown.map { $0.meanRDQ.map(KineSheetFormat.decimal) ?? "—" }),
             Row(label: "RDQ-6 máximo", values: shown.map { $0.maxRDQ.map { "\($0) de \(RDQ6.maxScore)" } ?? "—" }),
             Row(label: "Mejor después", values: shown.map { betterFraction($0) }),
@@ -710,12 +757,27 @@ enum KineSheetSample {
                   factsSignature: KineConsultRules.signature(facts), preparedAt: .now)
     }
 
+    /// Días con pausa de los tres turnos de muestra (pausa completa = 7 de 7, o 3 de 3 en el plan suave).
+    static let level: LevelProgress = {
+        func day(_ key: String, _ turno: String, _ done: Int, of planned: Int = 7) -> LevelProgress.Day {
+            LevelProgress.Day(dayKey: key, turnoKey: turno, completed: done, planned: planned,
+                              sessionID: UUID(), startedAt: .now)
+        }
+        return LevelProgress(days: [
+            day("2026-09-14", "2026-09-14", 7), day("2026-09-16", "2026-09-14", 2), day("2026-09-18", "2026-09-14", 5),
+            day("2026-09-28", "2026-09-28", 7), day("2026-09-29", "2026-09-28", 3, of: 3), day("2026-10-01", "2026-09-28", 7),
+            day("2026-10-02", "2026-09-28", 5), day("2026-10-04", "2026-09-28", 7),
+            day("2026-10-12", "2026-10-12", 7), day("2026-10-13", "2026-10-12", 6), day("2026-10-15", "2026-10-12", 7),
+            day("2026-10-16", "2026-10-12", 2),
+        ], todayKey: "2026-10-16")
+    }()
+
     static var content: KineSheetContent {
-        KineSheetContent(sheet: sheet, facts: facts, summary: summary, profile: profile)
+        KineSheetContent(sheet: sheet, facts: facts, summary: summary, profile: profile, level: level)
     }
 }
 
-#Preview("Hoja (plantilla)") {
+#Preview("Reporte de Salud (plantilla)") {
     ScrollView {
         KineSheetView(content: KineSheetSample.content)
             .padding(16)

@@ -2,8 +2,9 @@ import SwiftUI
 import UIKit
 
 // Dueño: paquete "kine-ai".
-// "Hoja para el kine": Apple Intelligence como asistente que PREPARA LA CONSULTA, anclado a datos.
-// Swift calcula los hechos (KineFacts) y la tabla; la persona toca "Preparar con Apple Intelligence"
+// "Reporte de Salud" (antes "Hoja para el kine"), para el kinesiólogo o la mutual: Apple Intelligence
+// como asistente que PREPARA LA CONSULTA, anclado a datos. Swift calcula los hechos (KineFacts), el
+// nivel por pausas completas (LevelProgress) y la tabla; la persona toca "Preparar con Apple Intelligence"
 // y ve cómo el modelo elige los 3 hechos más relevantes, los explica, propone 3 preguntas y un foco
 // (streaming). Todo texto es editable antes de compartir; la cifra de cada hallazgo la pone Swift.
 // Sin Apple Intelligence: hechos + preguntas de plantilla y el botón deshabilitado con la razón.
@@ -16,6 +17,7 @@ struct KineSheetScreen: View {
     @State private var loaded = false
     @State private var summary: StatsSummary?
     @State private var facts: [KineFact] = []
+    @State private var level: LevelProgress?
     @State private var sheet: KineSheet?
     @State private var draft: KineConsultDraft?
     @State private var noteText = ""
@@ -70,7 +72,7 @@ struct KineSheetScreen: View {
         guard var s = sheet, let summary else { return nil }
         s.note = Self.resolvedNote(s, noteText: noteText)
         return KineSheetContent(sheet: s, facts: facts, summary: summary, profile: store.profile,
-                                extraAlerts: alarmLines, generatedAt: generatedAt)
+                                extraAlerts: alarmLines, generatedAt: generatedAt, level: level)
     }
 
     // MARK: Vista
@@ -79,13 +81,18 @@ struct KineSheetScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 if let sheet, summary != nil {
+                    Text("\(HealthReport.audience). Usted decide cuándo compartirlo.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    levelCard
                     assistantCard(sheet)
                     consultSection(sheet)
                     noteSection
                     factsSection(sheet)
                     previewLink
                 } else {
-                    ProgressView("Preparando la hoja")
+                    ProgressView("Preparando el reporte")
                         .frame(maxWidth: .infinity, minHeight: 200)
                 }
             }
@@ -95,7 +102,7 @@ struct KineSheetScreen: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .appScreen()
-        .navigationTitle("Hoja para el kine")
+        .navigationTitle(HealthReport.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -122,6 +129,43 @@ struct KineSheetScreen: View {
             Button("Cancelar", role: .cancel) {}
         } message: {
             Text("Se reemplazan los textos que editó.")
+        }
+    }
+
+    // MARK: Nivel por pausas completas (Swift; va en el reporte)
+
+    @ViewBuilder
+    private var levelCard: some View {
+        if let level, level.daysWithPause > 0 {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "chart.bar.fill")
+                    .font(.title2)
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 30)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(level.levelLine).font(.headline)
+                    ProgressView(value: level.fractionToNext)
+                        .tint(Theme.accent)
+                        .accessibilityHidden(true)
+                    Text(level.fullDaysLine)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let today = level.todayLine {
+                        Text(today)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Cada día con la pausa completa sube un nivel; una pausa incompleta suma su parte.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .combine)
+            .flatCard()
         }
     }
 
@@ -170,26 +214,26 @@ struct KineSheetScreen: View {
         switch phase {
         case .writing: return "Escribiendo en su iPhone"
         case .summarizing: return "Resumiendo sus palabras"
-        case .idle: return isPrepared ? "Listo para la consulta" : "Prepare su consulta"
+        case .idle: return isPrepared ? "Reporte listo para la consulta" : "Prepare su Reporte de Salud"
         }
     }
 
     private var assistantSubtitle: String {
         switch phase {
-        case .writing: return "Apple Intelligence elige los datos más importantes y redacta las preguntas."
-        case .summarizing: return "Apple Intelligence ordena lo que escribió para el kine."
+        case .writing: return "Apple Intelligence elige los datos más importantes del reporte y redacta las preguntas."
+        case .summarizing: return "Apple Intelligence ordena lo que escribió para el reporte."
         case .idle:
-            if facts.isEmpty { return "Aún no hay datos suficientes. Haga algunas pausas y vuelva." }
+            if facts.isEmpty { return "Aún no hay datos suficientes para el reporte. Haga algunas pausas y vuelva." }
             if isPrepared {
-                var text = "Redactado en su iPhone con Apple Intelligence. Revise antes de compartir."
+                var text = "Reporte redactado en su iPhone con Apple Intelligence. Revíselo antes de compartir."
                 if dataChanged { text += " Hay datos nuevos desde que lo preparó." }
                 return text
             }
             if let reason = coach.kineUnavailableReason {
-                return reason + " Mientras tanto, la hoja usa una plantilla con sus cifras."
+                return reason + " Mientras tanto, el reporte usa una plantilla con sus cifras."
             }
-            if modelFailed { return "Apple Intelligence no pudo redactar esta vez. Se muestra la plantilla con sus cifras." }
-            return "Apple Intelligence elige los 3 datos más importantes y le sugiere preguntas para el kine. Todo queda en su iPhone."
+            if modelFailed { return "Apple Intelligence no pudo redactar esta vez. El reporte muestra la plantilla con sus cifras." }
+            return "Apple Intelligence elige los 3 datos más importantes para su reporte y le sugiere preguntas para el kine. Todo queda en su iPhone."
         }
     }
 
@@ -301,7 +345,7 @@ struct KineSheetScreen: View {
     private var noteSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionTitle(title: "En sus palabras",
-                         subtitle: "Opcional. Lo que quiere contarle al kine; va en la hoja.")
+                         subtitle: "Opcional. Lo que quiere contarle al kine; va en el reporte.")
             VStack(alignment: .trailing, spacing: 6) {
                 TextField("Por ejemplo: me duele la espalda al bajar del camión y de noche me cuesta dormir.",
                           text: $noteText, axis: .vertical)
@@ -339,7 +383,7 @@ struct KineSheetScreen: View {
             } else if !trimmedNote.isEmpty && coach.kineModelReady && phase == .idle {
                 SecondaryButton(title: "Resumir con Apple Intelligence", systemImage: Self.aiSymbol) { summarizeNote() }
                 if noteFailed {
-                    Text("No se pudo resumir esta vez. En la hoja va su texto tal cual.")
+                    Text("No se pudo resumir esta vez. En el reporte va su texto tal cual.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -421,8 +465,8 @@ struct KineSheetScreen: View {
                         .foregroundStyle(Theme.accent)
                         .frame(width: 30)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Ver la hoja completa").font(.headline)
-                        Text("Así la recibe el kine, con las cifras por turno.")
+                        Text("Ver el reporte completo").font(.headline)
+                        Text("Así lo recibe el kinesiólogo o la mutual, con las cifras por turno.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -448,7 +492,7 @@ struct KineSheetScreen: View {
         }
     }
 
-    // MARK: Bindings (editar marca la hoja como editada)
+    // MARK: Bindings (editar marca el reporte como editado)
 
     private func findingBinding(_ i: Int) -> Binding<String> {
         Binding(get: { sheet?.consult.findings.indices.contains(i) == true ? sheet!.consult.findings[i].sentence : "" },
@@ -496,6 +540,7 @@ struct KineSheetScreen: View {
         let signature = KineConsultRules.signature(built)
         summary = computed
         facts = built
+        level = LevelProgress.compute(sessions: store.data.sessions, calendar: store.calendar, now: now)
         if let cached = KineSheetCache.decode(store.data.lastKineSheetJSON), KineSheetCache.usable(cached, facts: built) {
             sheet = cached
             if let original = cached.note?.original, !original.isEmpty { noteText = original }
@@ -578,7 +623,7 @@ struct KineSheetScreen: View {
         Self.persist(s, noteText: noteText, store: store)
     }
 
-    /// Nota que va en la hoja: el resumen si corresponde al texto actual; si no, el texto tal cual.
+    /// Nota que va en el reporte: el resumen si corresponde al texto actual; si no, el texto tal cual.
     static func resolvedNote(_ sheet: KineSheet, noteText: String) -> PatientNote? {
         let text = KineConsultRules.trimmedNote(noteText)
         guard !text.isEmpty else { return nil }
@@ -635,12 +680,13 @@ private struct FindingCard<Content: View>: View {
     }
 }
 
-/// Compartir la hoja: imagen (WhatsApp) y PDF. Vidrio solo en estos controles.
+/// Compartir el Reporte de Salud: imagen (WhatsApp) y PDF. Vidrio solo en estos controles.
 struct KineShareButtons: View {
     let content: KineSheetContent
     var prominent: Bool = true
 
-    private var name: String { content.profile.name }
+    /// "Reporte de Salud - Marco" (mismo nombre que el archivo).
+    private var title: String { KineSheetExport.fileStem(for: content.profile) }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -650,7 +696,7 @@ struct KineShareButtons: View {
                 imageLink.buttonStyle(.glass)
             }
             ShareLink(item: KineSheetPDF(content: content),
-                      preview: SharePreview("Hoja para el kine · \(name) (PDF)", image: Image(systemName: "doc"))) {
+                      preview: SharePreview("\(title) (PDF)", image: Image(systemName: "doc"))) {
                 Label("PDF", systemImage: "doc")
                     .font(.headline)
                     .padding(.horizontal, 6)
@@ -658,7 +704,8 @@ struct KineShareButtons: View {
                     .contentShape(.rect)
             }
             .buttonStyle(.glass)
-            .accessibilityHint("Guarda la hoja como PDF")
+            .accessibilityLabel("\(HealthReport.title) en PDF")
+            .accessibilityHint("Guarda el reporte como PDF")
         }
         .buttonBorderShape(.capsule)
         .tint(Theme.accent)
@@ -666,17 +713,17 @@ struct KineShareButtons: View {
 
     private var imageLink: some View {
         ShareLink(item: KineSheetPNG(content: content),
-                  preview: SharePreview("Hoja para el kine · \(name)", image: Image(systemName: "doc.richtext"))) {
-            Label("Compartir hoja", systemImage: "square.and.arrow.up")
+                  preview: SharePreview(title, image: Image(systemName: "doc.richtext"))) {
+            Label("Compartir reporte", systemImage: "square.and.arrow.up")
                 .font(.headline)
                 .frame(maxWidth: .infinity, minHeight: KineSheetScreen.shareButtonHeight)
                 .contentShape(.rect)
         }
-        .accessibilityHint("Comparte la hoja como imagen")
+        .accessibilityHint("Comparte el Reporte de Salud como imagen")
     }
 }
 
-/// La hoja tal como la recibe el kine (papel plano) con los mismos botones de compartir.
+/// El Reporte de Salud tal como lo recibe el kine o la mutual (papel plano) con los mismos botones de compartir.
 struct KineSheetPreviewScreen: View {
     let content: KineSheetContent
 
@@ -698,7 +745,7 @@ struct KineSheetPreviewScreen: View {
 }
 
 #if DEBUG
-#Preview("Hoja para el kine") {
+#Preview("Reporte de Salud") {
     KineSheetQARoot()
 }
 

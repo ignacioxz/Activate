@@ -128,7 +128,7 @@ nonisolated enum CelebrationCopy {
     /// Nota breve bajo la respuesta Peor/Igual (sin consejo médico, sin castigo).
     nonisolated static func postNote(_ post: PostResponse?) -> String? {
         switch post {
-        case .peor: "Quedó en su hoja del kine."
+        case .peor: "Quedó en su Reporte de Salud."
         case .igual: "Quedó registrado."
         case .mejor, nil: nil
         }
