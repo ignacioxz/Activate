@@ -2,7 +2,8 @@ import SwiftUI
 
 /// Check-in RDQ-6 (versión chilena del Roland-Morris, 6 ítems textuales). Una vez por día laboral;
 /// si ya existe, muestra el puntaje con "Volver a responder". Sin caritas, sin premio por responder.
-/// "¿Dónde le duele?" es de selección múltiple, con la opción "No me duele" (sin zonas), prellenada con las zonas habituales.
+/// "¿Dónde le duele?" es de selección múltiple, con la opción "No me duele" (sin zonas). No se prellena:
+/// una zona supuesta contamina el registro y al coach (caso real: todo "No" + "Espalda baja" prellenada).
 struct CheckInView: View {
     let name: String
     let existing: DailyCheckIn?
@@ -20,13 +21,15 @@ struct CheckInView: View {
     @State private var zones: [PainZone]? = nil
     @State private var moment: Moment? = nil
 
-    private var chosenZones: [PainZone] { zones ?? PainZone.ordered(initialZones) }
+    /// `nil` = aún no elige; `[]` = "No me duele".
+    private var chosenZones: [PainZone] { zones ?? [] }
+    private var zoneChosen: Bool { zones != nil }
     private var chosenMoment: Moment { moment ?? initialMoment }
     private var allAnswered: Bool { answers.allSatisfy { $0 != nil } }
     private var answeredCount: Int { answers.compactMap { $0 }.count }
 
     private var zonesBinding: Binding<[PainZone]> {
-        Binding(get: { chosenZones }, set: { zones = PainZone.ordered($0) })
+        Binding(get: { chosenZones }, set: { zones = $0.isEmpty ? nil : PainZone.ordered($0) })
     }
 
     var body: some View {
@@ -106,11 +109,11 @@ struct CheckInView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 SectionTitle(title: "¿Dónde le duele?", subtitle: "Marque una o más zonas, o «No me duele».")
-                SelectionChip(title: PainZone.noPainOption, isSelected: chosenZones.isEmpty, systemImage: "checkmark.seal") {
+                SelectionChip(title: PainZone.noPainOption, isSelected: zones == [], systemImage: "checkmark.seal") {
                     zones = []
                 }
                 .accessibilityHint("Desmarca todas las zonas.")
-                MultiSelectChips(items: PainZone.allCases, selection: zonesBinding, title: { $0.title })
+                MultiSelectChips(items: PainZone.allCases, selection: zonesBinding, title: { $0.title }, minimum: 0)
             }
             .padding(.top, 8)
             .id(Self.zonesAnchor)
@@ -142,8 +145,12 @@ struct CheckInView: View {
                     Text("Faltan \(RDQ6.items.count - answeredCount) de \(RDQ6.items.count)")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                } else if !zoneChosen {
+                    Text("Falta: ¿dónde le duele?")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                PrimaryButton(title: "Seguir", systemImage: "arrow.right", isEnabled: allAnswered) {
+                PrimaryButton(title: "Seguir", systemImage: "arrow.right", isEnabled: allAnswered && zoneChosen) {
                     onSubmit(answers.compactMap { $0 }, chosenZones, chosenMoment)
                 }
             }
