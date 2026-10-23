@@ -66,11 +66,11 @@ nonisolated extension ActivityKind {
         case .sentadilla:
             "Pies al ancho de los hombros y pecho un poco adelante. Baje hasta la mitad, como si fuera a sentarse, y suba sin apuro."
         case .cuello:
-            "Siga la consigna en pantalla: sí es asentir, no es girar, quizás es inclinar. Muévase lento, hasta donde no duela, y vuelva al centro."
+            "Siga la flecha en pantalla: sí es asentir, no es girar, quizás es inclinar. Muévase lento hasta llenar la barra y vuelva al centro."
         case .respiracion:
             "Siéntese derecho, con una mano sobre la guata. Tome aire por la nariz en cuatro segundos y suéltelo en seis, con el dedo en la pantalla al exhalar."
         case .ojos:
-            "Mire algo lejano, fuera del teléfono, durante veinte segundos. Después parpadee completo, cerrando bien los ojos, quince veces."
+            "Mire el teléfono y parpadee completo: cierre bien los dos ojos y ábralos. Los parpadeos a medias no cuentan, vaya sin apuro."
         case .stroop:
             "Toque el color de la tinta, no la palabra escrita. Responda rápido pero sin adivinar, durante un minuto."
         }
@@ -84,7 +84,8 @@ nonisolated extension ActivityKind {
         switch self {
         case .stroop: ["Pantalla en la mano.", "Toque el color, no la palabra.", "3 · 2 · 1"]
         case .respiracion: ["Pantalla en la mano.", "Dedo en el botón al exhalar."]
-        case .extensionLumbar, .pasos, .sentadilla, .cuello, .ojos: sensorBlock.gatingCopy
+        case .ojos: ["Sáquese los lentes.", "Mire al teléfono.", "Cierre bien los ojos."]
+        case .extensionLumbar, .pasos, .sentadilla, .cuello: sensorBlock.gatingCopy
         }
     }
 
@@ -102,7 +103,7 @@ nonisolated extension ActivityKind {
         case .respiracion:
             "Respirar lento baja la tensión muscular y cierra la pausa sin esfuerzo; cuenta como actividad suave."
         case .ojos:
-            "Frente a una pantalla se parpadea menos y el ojo se seca (Patel 1991)."
+            "Frente a una pantalla se parpadea hasta cinco veces menos y el ojo se seca (Patel 1991)."
         case .stroop:
             "La falta de sueño golpea primero la atención sostenida (Lim & Dinges 2010)."
         }

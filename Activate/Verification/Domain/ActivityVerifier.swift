@@ -28,6 +28,10 @@ nonisolated struct VerifierProgress: Sendable, Equatable, Codable {
     var gate: GateState = .calibrating
     var hint: String = ""
     var elapsed: Double = 0
+    /// Avance 0…1 hacia la meta de la consigna actual (p. ej. cuánto lleva girado el cuello); nil si no aplica.
+    var live: Double? = nil
+    /// Texto de depuración en vivo (ángulos, velocidad); la UI lo muestra solo en modo demo.
+    var debug: String? = nil
     var fraction: Double { target > 0 ? min(1, Double(count) / Double(target)) : 0 }
 }
 

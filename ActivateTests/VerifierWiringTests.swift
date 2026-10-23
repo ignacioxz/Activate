@@ -59,13 +59,15 @@ struct VerifierWiringTests {
             #expect(ev.contains(.completed), "semilla \(seed) demo=\(demo)")
             let outcome = v.finish(at: samples.last?.t ?? 0, reason: .completed)
             #expect(outcome.completed && outcome.achieved == spec.target)
-            #expect(!outcome.anomalies.contains { $0.kind == NeckVerifier.anomalyCueMismatch })
+            // Movimientos limpios: sin desajustes, saltos ni ejes invertidos.
+            #expect(outcome.anomalies.isEmpty, "semilla \(seed) demo=\(demo): \(outcome.anomalies)")
             #expect(samples.last.map { $0.t < spec.maxDurationSeconds } == true)
+            #expect(VerificationPolicy.level(for: outcome, source: .live, kind: .cuello) == .full)
         }
     }
 
     @Test(arguments: [false, true])
-    func ojosSinteticosParpadeanYMiranLejos(demo: Bool) {
+    func ojosSinteticosParpadeanHastaLaMeta(demo: Bool) {
         let spec = VerificationSpec.standard(for: .ojos, demo: demo)
         var v = EyeRestVerifier(spec: spec)
         let samples = ReplayFixtures.eyes(verifier: v)
@@ -73,6 +75,7 @@ struct VerifierWiringTests {
         #expect(ev.contains(.completed))
         let outcome = v.finish(at: samples.last?.t ?? 0, reason: .completed)
         #expect(outcome.completed && outcome.achieved >= spec.target)
+        if case .eyes(_, _, _, let far) = outcome.metrics { #expect(far == 0) }
         #expect(samples.last.map { $0.t < spec.maxDurationSeconds } == true)
     }
 
