@@ -3,6 +3,7 @@ import AVFoundation
 import Vision
 import CoreMedia
 import ImageIO
+import UIKit
 
 // Dueño: agente "pose". Fuente de `PoseSample` sobre la cámara frontal: AVCaptureVideoDataOutput a 30 fps
 // → Vision (VNDetectHumanBodyPoseRequest) síncrono en la cola "activate.pose" → PoseSample por AsyncStream.
@@ -243,5 +244,72 @@ nonisolated final class PoseCaptureDelegate: NSObject, AVCaptureVideoDataOutputS
     static func seconds(_ d: Duration) -> Double {
         let c = d.components
         return Double(c.seconds) + Double(c.attoseconds) / 1e18
+    }
+}
+
+// MARK: - Sentadilla "Apoyado": cámara + deviceMotion
+
+/// Fuente del modo apoyado de la sentadilla (agente "squats"): las poses de `CameraPoseSource` más el
+/// deviceMotion del `SensorHub` (único dueño de CMMotionManager) para probar que el teléfono está quieto.
+/// Sin deviceMotion no se puede descartar el teléfono en la mano: la fuente se declara `.fallback`.
+final class SupportedSquatSource: SampleSource {
+    typealias Sample = SupportedSquatSample
+
+    static let bufferedSamples = 256
+
+    let camera: CameraPoseSource
+    private let hub: SensorHub?
+    private let consumer = UUID()
+    private var forwarders: [Task<Void, Never>] = []
+    private var continuation: AsyncStream<SupportedSquatSample>.Continuation?
+    private var previousIdleTimerDisabled = false
+    private(set) var level: SourceLevel = .live
+    private(set) var isRunning = false
+
+    /// Sesión para `CameraPreviewView`.
+    var captureSession: AVCaptureSession { camera.captureSession }
+
+    init(camera: CameraPoseSource, hub: SensorHub?) {
+        self.camera = camera
+        self.hub = hub
+    }
+
+    func start() throws -> AsyncStream<SupportedSquatSample> {
+        stop()
+        let poses = try camera.start()
+        hub?.refreshAvailability()
+        let motionAvailable = hub?.isDeviceMotionAvailable == true
+        level = motionAvailable ? .live : .fallback
+
+        let (stream, continuation) = AsyncStream.makeStream(of: SupportedSquatSample.self,
+                                                            bufferingPolicy: .bufferingNewest(Self.bufferedSamples))
+        self.continuation = continuation
+        forwarders.append(Task.detached {
+            for await p in poses { continuation.yield(.pose(p)) }
+            continuation.finish()
+        })
+        if let hub, motionAvailable {
+            let motion = hub.startMotion(for: consumer, origin: .now)
+            forwarders.append(Task.detached {
+                for await m in motion { continuation.yield(.motion(m)) }
+            })
+        }
+        // La persona está a 2 m y no toca la pantalla: sin esto el bloqueo automático corta la cámara.
+        previousIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        isRunning = true
+        return stream
+    }
+
+    func stop() {
+        guard isRunning || continuation != nil else { return }
+        forwarders.forEach { $0.cancel() }
+        forwarders = []
+        hub?.stopMotion(for: consumer)
+        camera.stop()
+        continuation?.finish()
+        continuation = nil
+        UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled
+        isRunning = false
     }
 }

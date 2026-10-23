@@ -12,6 +12,10 @@ nonisolated enum Recipes {
     /// incluye A1 (extensión lumbar con el teléfono apoyado en la mesa).
     static let cameraPoseReady = false
 
+    /// A3 sentadilla en Colación: va con el teléfono en las manos (ARKit cara + mundo, no necesita
+    /// apoyarlo), así que no depende de `cameraPoseReady`. Relevo (60 s) no la lleva.
+    static let colacionSquat: [ActivityKind] = [.sentadilla]
+
     /// Factor de la meta de pasos en el plan suave (RDQ-6 ≥ umbral).
     static let gentleStepFactor: Double = 0.5
 
@@ -30,7 +34,7 @@ nonisolated enum Recipes {
         case .relevo60:
             kinds = [.cuello, .ojos]
         case .colacion3:
-            kinds = [.pasos, .cuello, .ojos] + (cameraPoseReady ? [.extensionLumbar] : [])
+            kinds = [.pasos] + colacionSquat + [.cuello, .ojos] + (cameraPoseReady ? [.extensionLumbar] : [])
         case .campamento5:
             kinds = [.pasos, .sentadilla, .extensionLumbar, .cuello, .ojos, .stroop, .respiracion]
         }

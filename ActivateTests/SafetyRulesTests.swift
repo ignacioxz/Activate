@@ -100,7 +100,7 @@ struct SafetyRulesTests {
         #expect(d.reason == SafetyRules.Copy.shortWalkWhy)
         let real = SafetyRules.apply(d, to: Recipes.base(.colacion3, demo: false))
         #expect(target(real, .pasos) == 125)
-        #expect(kinds(real) == [.pasos, .cuello, .ojos])
+        #expect(kinds(real) == [.pasos, .sentadilla, .cuello, .ojos])
         let demo = SafetyRules.apply(d, to: Recipes.base(.colacion3, demo: true))
         #expect(target(demo, .pasos) == 15)
         #expect(target(demo, .cuello) == ActivityKind.cuello.demoTarget)
@@ -146,8 +146,8 @@ struct SafetyRulesTests {
 
     @Test func recetasBase() {
         #expect(kinds(Recipes.base(.relevo60, demo: false)) == [.cuello, .ojos])
-        #expect(kinds(Recipes.base(.colacion3, demo: false, cameraPoseReady: false)) == [.pasos, .cuello, .ojos])
-        #expect(kinds(Recipes.base(.colacion3, demo: false, cameraPoseReady: true)) == [.pasos, .cuello, .ojos, .extensionLumbar])
+        #expect(kinds(Recipes.base(.colacion3, demo: false, cameraPoseReady: false)) == [.pasos, .sentadilla, .cuello, .ojos])
+        #expect(kinds(Recipes.base(.colacion3, demo: false, cameraPoseReady: true)) == [.pasos, .sentadilla, .cuello, .ojos, .extensionLumbar])
         #expect(kinds(Recipes.base(.campamento5, demo: false)) == [.pasos, .sentadilla, .extensionLumbar, .cuello, .ojos, .stroop, .respiracion])
         #expect(Recipes.base(.relevo60, demo: false).minutes == 1 && Recipes.base(.campamento5, demo: false).title == RecipeKind.campamento5.title)
     }
@@ -233,7 +233,7 @@ struct SensorBlockPlannerTests {
         let ordered = Recipes.base(.campamento5, demo: true).activities
         #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(ordered)) == ordered)
         let colacion = Recipes.base(.colacion3, demo: false, cameraPoseReady: true).activities
-        #expect(SensorBlockPlanner.ordered(colacion).map(\.kind) == [.pasos, .extensionLumbar, .cuello, .ojos])
+        #expect(SensorBlockPlanner.ordered(colacion).map(\.kind) == [.pasos, .sentadilla, .extensionLumbar, .cuello, .ojos])
     }
 
     @Test func conservaMetasYDuplicados() {
