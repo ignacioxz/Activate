@@ -38,21 +38,25 @@ private struct Synth {
     var ankleConfidence: Float = 0.9
     var rng = SplitMix(state: 7)
     var samples: [PoseSample] = []
+    /// Tramos [inicio, fin] de cada sentadilla generada (para sincronizar el deviceMotion sintético).
+    var repRanges: [ClosedRange<Double>] = []
 
     /// `descent` en fracción de h0 (sentadilla); `shift` en fracción del frame (extensión, hombros atrás); `rise` en fracción de h0 (cuello sube).
-    mutating func frame(descent: Double = 0, shift: Double = 0, rise: Double = 0) {
+    /// `kneeFactor`: cuánto baja la rodilla respecto de la cadera (0,5 = sentadilla; 1 = todo el cuerpo igual).
+    /// `fold`: cuánto más bajan cuello/hombros/nariz que la cadera (fracción de h0; bisagra de cintura).
+    mutating func frame(descent: Double = 0, shift: Double = 0, rise: Double = 0, kneeFactor: Double = 0.5, fold: Double = 0) {
         let d = descent * Synth.h0
         var joints: [JointKey: JointPoint] = [:]
         for (k, p) in Synth.base {
             var x = p.x, y = p.y
             switch k {
             case .leftKnee, .rightKnee:
-                y -= d / 2
+                y -= d * kneeFactor
                 x += (k == .leftKnee ? -1 : 1) * 0.2 * d
             case .leftAnkle, .rightAnkle:
                 break
             case .nose, .neck, .leftShoulder, .rightShoulder:
-                y -= d
+                y -= d + fold * Synth.h0
                 x += shift
                 y += rise * Synth.h0
             default:
@@ -73,11 +77,31 @@ private struct Synth {
 
     /// Sentadilla suave (bajar y subir) de `seconds` con descenso máximo `amplitude`·h0.
     mutating func squat(amplitude: Double, seconds: Double) {
+        let start = t
         let n = Int((seconds * Synth.fps).rounded())
         for i in 0..<n {
             let p = Double(i) / Double(n)
             frame(descent: amplitude * (1 - cos(2 * .pi * p)) / 2)
         }
+        repRanges.append(start...t)
+    }
+
+    /// Bajada de `seconds / 2`, pausa abajo de `hold` y subida; con rodillas y torso configurables.
+    mutating func squat(amplitude: Double, seconds: Double, hold: Double, kneeFactor: Double = 0.5, fold: Double = 0) {
+        let start = t
+        let half = Int((seconds / 2 * Synth.fps).rounded())
+        for i in 0..<half {
+            let x = (1 - cos(.pi * Double(i) / Double(half))) / 2
+            frame(descent: amplitude * x, kneeFactor: kneeFactor, fold: fold * x)
+        }
+        for _ in 0..<Int((hold * Synth.fps).rounded()) {
+            frame(descent: amplitude, kneeFactor: kneeFactor, fold: fold)
+        }
+        for i in 0..<half {
+            let x = (1 + cos(.pi * Double(i) / Double(half))) / 2
+            frame(descent: amplitude * x, kneeFactor: kneeFactor, fold: fold * x)
+        }
+        repRanges.append(start...t)
     }
 
     /// Extensión lumbar: hombros se desplazan `shift` del frame y vuelven.
@@ -108,6 +132,34 @@ private func run<V: ActivityVerifier>(_ verifier: inout V, _ samples: [PoseSampl
 }
 
 private func hardKinds(_ outcome: ActivityOutcome) -> [String] { outcome.anomalies.filter { $0.severity == .hard }.map(\.kind) }
+
+/// deviceMotion sintético a 50 Hz: quieto sobre la mesa, o moviéndose en los tramos `moving`.
+private func motion(until end: Double, moving: [ClosedRange<Double>] = [], seed: UInt64 = 11) -> [MotionSample] {
+    var rng = SplitMix(state: seed)
+    let dt = 1.0 / 50
+    return (0...Int(end / dt)).map { i in
+        let t = Double(i) * dt
+        let inHand = moving.contains { $0.contains(t) }
+        let a = inHand ? 0.12 : 0.004
+        let r = inHand ? 0.8 : 0.01
+        return MotionSample(t: t,
+                            userAccel: SIMD3(a * rng.unit(), a * rng.unit(), a * rng.unit()),
+                            gravity: inHand ? SIMD3(0.15 * rng.unit(), -0.95, -0.25) : SIMD3(0, -0.98, -0.2),
+                            rotationRate: SIMD3(r * rng.unit(), r * rng.unit(), r * rng.unit()))
+    }
+}
+
+/// Mezcla pose + deviceMotion ordenados por tiempo (lo que entrega `SupportedSquatSource`).
+private func combined(_ poses: [PoseSample], _ motions: [MotionSample]) -> [SupportedSquatSample] {
+    (poses.map(SupportedSquatSample.pose) + motions.map(SupportedSquatSample.motion)).sorted { $0.t < $1.t }
+}
+
+private func run(_ verifier: inout SupportedSquatVerifier, _ samples: [SupportedSquatSample]) -> [VerifierEvent] {
+    verifier.start(at: 0)
+    var events: [VerifierEvent] = []
+    for s in samples { events += verifier.ingest(s, at: s.t) }
+    return events
+}
 
 struct PoseVerifierTests {
     @Test func diezSentadillasCuentanDiez() {
@@ -285,5 +337,134 @@ struct PoseVerifierTests {
         #expect(v.progress.gate == .calibrating)
         #expect(v.progress.hint == PoseCopy.placePhone)
         #expect(v.calibration == nil)
+    }
+
+    // MARK: Endurecimiento del modo apoyado
+
+    @Test func inclinarseDeCinturaSinDoblarRodillasNoCuenta() {
+        var synth = Synth()
+        synth.stand(seconds: 1.5)
+        // Bisagra con rodillas apenas blandas: la cadera baja algo, el torso se pliega mucho.
+        for i in 0..<5 {
+            synth.squat(amplitude: 0.14, seconds: variedDurations[i], hold: 0.2, kneeFactor: 0.3, fold: 0.25)
+            synth.stand(seconds: variedPauses[i])
+        }
+        // Bisagra pura: la cadera no baja (ni siquiera entra a la rep).
+        for i in 0..<3 {
+            synth.squat(amplitude: 0.03, seconds: variedDurations[i], hold: 0.2, kneeFactor: 0.0, fold: 0.30)
+            synth.stand(seconds: variedPauses[i])
+        }
+
+        var v = SquatVerifier(target: 10)
+        _ = run(&v, synth.samples)
+        let outcome = v.finish(at: synth.t, reason: .timeout)
+
+        #expect(outcome.achieved == 0)
+        #expect(v.rejections == Array(repeating: .torsoBend, count: 5))
+        #expect(outcome.anomalies.filter { $0.kind == PoseAnomaly.torsoBend }.count == 5)
+        #expect(hardKinds(outcome).isEmpty)
+    }
+
+    @Test func bajarSinDoblarRodillasNoCuenta() {
+        var synth = Synth()
+        synth.stand(seconds: 1.5)
+        for i in 0..<4 {
+            synth.squat(amplitude: 0.2, seconds: variedDurations[i], hold: 0.2, kneeFactor: 1.0)
+            synth.stand(seconds: variedPauses[i])
+        }
+
+        var v = SquatVerifier(target: 5)
+        _ = run(&v, synth.samples)
+        let outcome = v.finish(at: synth.t, reason: .timeout)
+
+        #expect(outcome.achieved == 0)
+        #expect(v.rejections == Array(repeating: .kneesStraight, count: 4))
+    }
+
+    @Test func telefonoApoyadoQuietoCuentaConFull() {
+        var synth = Synth()
+        synth.stand(seconds: 1.5)
+        synth.series(count: 6, amplitude: 0.22, durations: variedDurations, pauses: variedPauses)
+
+        var v = SupportedSquatVerifier(spec: .standard(for: .sentadilla, target: 6))
+        let events = run(&v, combined(synth.samples, motion(until: synth.t)))
+        let outcome = v.finish(at: synth.t, reason: .completed)
+
+        #expect(events.contains(.completed))
+        #expect(outcome.achieved == 6)
+        #expect(outcome.anomalies.isEmpty)
+        #expect(VerificationPolicy.level(for: outcome, source: .live, kind: .sentadilla) == .full)
+    }
+
+    @Test func telefonoEnLaManoEsPhoneHandheld() {
+        var synth = Synth()
+        synth.stand(seconds: 1.5)
+        synth.series(count: 4, amplitude: 0.22, durations: variedDurations, pauses: variedPauses)
+
+        var v = SupportedSquatVerifier(spec: .standard(for: .sentadilla, target: 5))
+        let events = run(&v, combined(synth.samples, motion(until: synth.t, moving: synth.repRanges)))
+        let outcome = v.finish(at: synth.t, reason: .timeout)
+
+        #expect(outcome.achieved == 0)
+        #expect(hardKinds(outcome) == [PoseAnomaly.phoneHandheld])
+        #expect(events.contains(.cue(Cue(text: PoseCopy.leavePhone, symbol: "iphone"))))
+        #expect(VerificationPolicy.level(for: outcome, source: .live, kind: .sentadilla) == .suspicious)
+    }
+
+    @Test func golpeCortoALaMesaNoEsPhoneHandheld() {
+        var synth = Synth()
+        synth.stand(seconds: 1.5)
+        synth.series(count: 3, amplitude: 0.22, durations: variedDurations, pauses: variedPauses)
+        // Un golpe de 0,1 s en medio de la segunda rep (más corto que el sostenido mínimo).
+        let mid = synth.repRanges[1].lowerBound + 0.6
+        var v = SupportedSquatVerifier(spec: .standard(for: .sentadilla, target: 3))
+        _ = run(&v, combined(synth.samples, motion(until: synth.t, moving: [mid...(mid + 0.1)])))
+        let outcome = v.finish(at: synth.t, reason: .completed)
+
+        #expect(outcome.achieved == 3)
+        #expect(hardKinds(outcome).isEmpty)
+    }
+
+    @Test func desafioDePausaEnModoApoyado() {
+        // Cumple: la 2ª rep se queda abajo 2 s.
+        var ok = Synth()
+        ok.stand(seconds: 1.5)
+        for i in 0..<4 {
+            ok.squat(amplitude: 0.22, seconds: variedDurations[i], hold: i == 1 ? 2.0 : 0.2)
+            ok.stand(seconds: variedPauses[i])
+        }
+        var passed = SquatVerifier(target: 4, challenge: SquatHoldChallenge(repNumber: 2))
+        let okEvents = run(&passed, ok.samples)
+        let okOutcome = passed.finish(at: ok.t, reason: .completed)
+        #expect(okEvents.contains(.cue(SquatHoldChallenge.cue)))
+        #expect(okOutcome.achieved == 4 && passed.challenge.passed)
+        #expect(hardKinds(okOutcome).isEmpty)
+
+        // Vídeo que no sigue la consigna: nunca se queda abajo.
+        var video = Synth()
+        video.stand(seconds: 1.5)
+        video.series(count: 6, amplitude: 0.22, durations: variedDurations, pauses: variedPauses)
+        var failed = SquatVerifier(target: 6, challenge: SquatHoldChallenge(repNumber: 2))
+        let videoEvents = run(&failed, video.samples)
+        let videoOutcome = failed.finish(at: video.t, reason: .timeout)
+        #expect(videoEvents.contains(.cue(SquatHoldChallenge.missedCue)))
+        #expect(hardKinds(videoOutcome) == [SquatHoldChallenge.anomalyKind])
+        #expect(videoOutcome.achieved == 4)
+    }
+
+    @Test func fixtureDeReplayApoyadoCompletaConDesafio() {
+        for demo in [false, true] {
+            let spec = VerificationSpec.standard(for: .sentadilla, demo: demo)
+            let challenge = SquatHoldChallenge(seed: 77, target: spec.target)
+            var v = SupportedSquatVerifier(spec: spec, challenge: challenge)
+            let samples = SupportedSquatFixtures.replay(target: spec.target, challengeRep: challenge.repNumber)
+            let events = run(&v, samples)
+            let outcome = v.finish(at: samples.last?.t ?? 0, reason: .completed)
+            #expect(events.contains(.completed), "demo=\(demo)")
+            #expect(outcome.achieved == spec.target)
+            #expect(v.challenge.passed)
+            #expect(hardKinds(outcome).isEmpty)
+            #expect((samples.last?.t ?? .infinity) < spec.maxDurationSeconds)
+        }
     }
 }

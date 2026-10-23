@@ -64,7 +64,7 @@ nonisolated extension ActivityKind {
         case .pasos:
             "Guarde el teléfono en el bolsillo del pecho y camine a paso firme, sin apuro. El teléfono vibra al llegar a la meta."
         case .sentadilla:
-            "Pies al ancho de los hombros y pecho un poco adelante. Baje hasta la mitad, como si fuera a sentarse, y suba sin apuro."
+            "Tome el teléfono con las dos manos frente al pecho y mírelo. Baje hasta la mitad, como si fuera a sentarse, y suba sin apuro."
         case .cuello:
             "Siga la flecha en pantalla: sí es asentir, no es girar, quizás es inclinar. Muévase lento hasta llenar la barra y vuelva al centro."
         case .respiracion:
@@ -77,15 +77,22 @@ nonisolated extension ActivityKind {
     }
 
     /// Dónde va el teléfono (texto del bloque de sensor).
-    var placement: String { sensorBlock.placement }
+    var placement: String {
+        switch self {
+        // Modo por defecto de la sentadilla: en las manos (cámaras + sensores, sin mostrar la cámara).
+        case .sentadilla: "Teléfono en las dos manos, frente al pecho"
+        default: sensorBlock.placement
+        }
+    }
 
     /// Pasos del gating en vivo; las actividades de pantalla afinan el del bloque.
     var gatingCopy: [String] {
         switch self {
         case .stroop: ["Pantalla en la mano.", "Toque el color, no la palabra.", "3 · 2 · 1"]
+        case .sentadilla: ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Baje como si se sentara."]
         case .respiracion: ["Pantalla en la mano.", "Dedo en el botón al exhalar."]
         case .ojos: ["Sáquese los lentes.", "Mire al teléfono.", "Cierre bien los ojos."]
-        case .extensionLumbar, .pasos, .sentadilla, .cuello: sensorBlock.gatingCopy
+        case .extensionLumbar, .pasos, .cuello: sensorBlock.gatingCopy
         }
     }
 

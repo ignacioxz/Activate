@@ -23,6 +23,8 @@ struct ActivateApp: App {
         _game = State(initialValue: GameStore(store: s))
         // Un builder por actividad (verificador + fuente); en simulador siempre replay.
         VerifierWiring.register(sensors: hub, store: s)
+        // Sentadilla: en las manos (ARKit cara + mundo, sin mostrar cámara) o apoyado; reemplaza el builder genérico.
+        SquatWiring.register(hub: hub, store: s)
     }
 
     var body: some Scene {

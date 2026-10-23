@@ -2,7 +2,8 @@ import Foundation
 import Observation
 import CoreMotion
 
-// Dueño: agente "steps". Único dueño de CMMotionManager / CMPedometer / CMMotionActivityManager.
+// Dueño: agente "steps". Único dueño de CMMotionManager / CMPedometer / CMMotionActivityManager / CMAltimeter
+// (el altímetro lo agregó el agente "squats": apoyo físico de la sentadilla en las manos).
 //
 // Reglas:
 // - Los handlers de CoreMotion corren en colas propias; nunca tocan estado MainActor. Convierten en el
@@ -57,6 +58,13 @@ nonisolated final class SampleFanout<S: Sendable>: @unchecked Sendable {
     }
 }
 
+/// Altura barométrica relativa desde que arrancó el altímetro (m) y presión (kPa).
+nonisolated struct AltitudeSample: Sendable, Codable, Hashable {
+    var t: Double
+    var relativeAltitude: Double
+    var pressureKPa: Double
+}
+
 /// Resultado de la reconciliación tras una suspensión de la app.
 nonisolated struct PedometerReconciliation: Sendable, Hashable, Codable {
     var steps: Int
@@ -73,6 +81,8 @@ final class SensorHub {
     private(set) var isDistanceAvailable = false
     private(set) var isActivityAvailable = false
     private(set) var isDeviceMotionAvailable = false
+    /// Altímetro barométrico (requiere el permiso "Movimiento y estado físico").
+    private(set) var isAltimeterAvailable = false
     private(set) var authorizationStatus: CMAuthorizationStatus = .notDetermined
 
     /// Permiso "Movimiento y estado físico" rechazado o restringido.
@@ -85,12 +95,14 @@ final class SensorHub {
     /// Búfer de muestras de movimiento por consumidor (≈ 5 s a 50 Hz); si el consumidor se atrasa se pierden las más viejas.
     static let motionBuffer = 256
     static let pedometerBuffer = 16
+    static let altitudeBuffer = 16
 
     // MARK: Sensores (un solo ejemplar de cada uno por app)
 
     @ObservationIgnored private let motionManager = CMMotionManager()
     @ObservationIgnored private let pedometer = CMPedometer()
     @ObservationIgnored private let activityManager = CMMotionActivityManager()
+    @ObservationIgnored private let altimeter = CMAltimeter()
 
     @ObservationIgnored private let motionQueue: OperationQueue = {
         let q = OperationQueue()
@@ -108,15 +120,26 @@ final class SensorHub {
         return q
     }()
 
+    @ObservationIgnored private let altitudeQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "cl.activate.sensorhub.altitude"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .utility
+        return q
+    }()
+
     @ObservationIgnored private let motionFanout = SampleFanout<MotionSample>()
     @ObservationIgnored private let activityFanout = SampleFanout<ActivitySample>()
     @ObservationIgnored private let pedometerFanout = SampleFanout<PedometerSample>()
+    @ObservationIgnored private let altitudeFanout = SampleFanout<AltitudeSample>()
 
     @ObservationIgnored private var motionConsumers: Set<UUID> = []
     @ObservationIgnored private var activityConsumers: Set<UUID> = []
     @ObservationIgnored private var pedometerConsumer: UUID?
     @ObservationIgnored private var motionRunning = false
     @ObservationIgnored private var activityRunning = false
+    @ObservationIgnored private var altitudeConsumers: Set<UUID> = []
+    @ObservationIgnored private var altitudeRunning = false
 
     init() {
         motionManager.deviceMotionUpdateInterval = 1.0 / Self.deviceMotionHz
@@ -131,6 +154,7 @@ final class SensorHub {
         isDistanceAvailable = CMPedometer.isDistanceAvailable()
         isActivityAvailable = CMMotionActivityManager.isActivityAvailable()
         isDeviceMotionAvailable = motionManager.isDeviceMotionAvailable
+        isAltimeterAvailable = CMAltimeter.isRelativeAltitudeAvailable()
         authorizationStatus = CMPedometer.authorizationStatus()
         isMotionAuthorized = authorizationStatus == .authorized
     }
@@ -236,11 +260,45 @@ final class SensorHub {
         }
     }
 
-    /// Cierra los tres streams de un consumidor.
+    // MARK: Altímetro (altura barométrica relativa)
+
+    /// Entrega `AltitudeSample` (altura relativa desde el arranque, ~1 Hz) hasta `stopRelativeAltitude(for:)`.
+    /// No pide permiso: si "Movimiento y estado físico" no está autorizado, el stream queda vacío
+    /// (el permiso se pide desde Perfil, nunca a mitad de la pausa).
+    func startRelativeAltitude(for consumer: UUID, origin: ContinuousClock.Instant) -> AsyncStream<AltitudeSample> {
+        let (stream, continuation) = AsyncStream.makeStream(of: AltitudeSample.self, bufferingPolicy: .bufferingNewest(Self.altitudeBuffer))
+        altitudeFanout.add(consumer, continuation)
+        altitudeConsumers.insert(consumer)
+        let authorized = CMAltimeter.authorizationStatus() == .authorized
+        if !altitudeRunning, authorized, CMAltimeter.isRelativeAltitudeAvailable() {
+            altitudeRunning = true
+            let fanout = altitudeFanout
+            altimeter.startRelativeAltitudeUpdates(to: altitudeQueue) { @Sendable data, _ in
+                guard let data else { return }
+                fanout.publish(AltitudeSample(
+                    t: SensorHub.seconds(since: origin),
+                    relativeAltitude: data.relativeAltitude.doubleValue,
+                    pressureKPa: data.pressure.doubleValue))
+            }
+        }
+        return stream
+    }
+
+    func stopRelativeAltitude(for consumer: UUID) {
+        altitudeFanout.remove(consumer)
+        altitudeConsumers.remove(consumer)
+        if altitudeConsumers.isEmpty, altitudeRunning {
+            altitudeRunning = false
+            altimeter.stopRelativeAltitudeUpdates()
+        }
+    }
+
+    /// Cierra todos los streams de un consumidor.
     func stopAll(for consumer: UUID) {
         stopMotion(for: consumer)
         stopPedometer(for: consumer)
         stopActivity(for: consumer)
+        stopRelativeAltitude(for: consumer)
     }
 
     // MARK: Reconciliación (app suspendida a mitad de la caminata)

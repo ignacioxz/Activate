@@ -36,7 +36,7 @@ nonisolated enum ActivityKind: String, Codable, CaseIterable, Sendable, Identifi
 
     var name: String {
         switch self {
-        case .extensionLumbar: "Párese y estírese hacia atrás"
+        case .extensionLumbar: "Extensión lumbar"
         case .pasos: "Camine"
         case .sentadilla: "Sentadilla minera"
         case .cuello: "Movilidad cervical"

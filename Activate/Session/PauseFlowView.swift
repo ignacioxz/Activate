@@ -160,6 +160,15 @@ private struct PauseFlowContent: View {
                                        onSkip: { coordinator.skipCurrent() })
                         .id(coordinator.runnerGeneration)
                         .transition(stageTransition)
+                } else if assignment.kind == .sentadilla, let squat = runner.squatRunner {
+                    SquatActivityView(runner: squat,
+                                      assignment: assignment,
+                                      position: index + 1,
+                                      total: coordinator.plan.count,
+                                      onFinish: { coordinator.activityFinished($0, at: index) },
+                                      onSkip: { coordinator.skipCurrent() })
+                        .id(coordinator.runnerGeneration)
+                        .transition(stageTransition)
                 } else {
                     ActivityRunView(runner: runner,
                                     assignment: assignment,
