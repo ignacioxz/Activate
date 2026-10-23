@@ -24,7 +24,7 @@ private struct ConsentPoint: Identifiable {
         ConsentPoint(
             id: 3, symbol: "paperplane",
             title: "Nada se comparte sin usted",
-            text: "Si usted quiere, puede generar una hoja para el kinesiólogo y enviarla usted mismo. Nadie más la ve. Sus reflejos (Stroop) nunca van en la hoja salvo que usted lo pida."),
+            text: "Si usted quiere, puede generar su Reporte de Salud para el kinesiólogo o la mutual y enviarlo usted mismo. Nadie más lo ve. Sus reflejos (Stroop) nunca van en el reporte salvo que usted lo pida."),
         ConsentPoint(
             id: 4, symbol: "arrow.uturn.backward",
             title: "Puede cambiar de idea",
