@@ -66,14 +66,17 @@ nonisolated struct HandheldSquatSample: Sendable, Codable, Hashable, TimedSample
 
 // MARK: - Umbrales (constantes nombradas; se calibran en el iPhone con el texto de depuración de la demo)
 
+/// Valores más tolerantes (pedido del usuario tras probar en el iPhone: exigía la espalda muy derecha y no
+/// mover el teléfono). El anti-fraude principal sigue siendo que la CARA baje con el cuerpo, la cara viva
+/// (micro-expresiones y relieve TrueDepth) y el desafío "Quédese abajo 2 segundos".
 nonisolated enum HandheldSquatTuning {
     // Calibración de pie
     /// Segundos de pie, quieto y con la cara visible para fijar la referencia.
     static let calibrationSeconds = 1.0
     /// Quieto = el teléfono no varía más que esto en altura / en horizontal (m) ni en cabeceo (°).
-    static let calibrationMaxPhoneRangeY = 0.03
-    static let calibrationMaxPhoneDriftXZ = 0.05
-    static let calibrationMaxPitchRange = 6.0
+    static let calibrationMaxPhoneRangeY = 0.05
+    static let calibrationMaxPhoneDriftXZ = 0.08
+    static let calibrationMaxPitchRange = 10.0
     /// Quieto en respaldo: |aceleración vertical| máxima (m/s²) y RMS de userAccel (g).
     static let calibrationMaxVerticalAccel = 0.45
     static let calibrationMaxAccelRMS = 0.08
@@ -81,15 +84,15 @@ nonisolated enum HandheldSquatTuning {
     static let initialWorldGraceSeconds = 3.0
     /// Cabeza razonablemente derecha para calibrar: |cabeceo de la cabeza| ≤ esto (°). Mirar el teléfono
     /// frente al pecho da ≈ 20-40°; sentado y doblado hacia adelante, bastante más.
-    static let calibrationMaxHeadPitch = 55.0
+    static let calibrationMaxHeadPitch = 70.0
 
     // Señal y repetición
     /// Suavizado exponencial por muestra (≈ 60 Hz).
     static let emaAlpha = 0.3
     /// Sentadilla parcial: el cuerpo (el menor entre teléfono y cara) baja ≥ 18 cm y vuelve (el mayor) a
     /// < 6 cm de la altura de pie.
-    static let enterDescent = 0.18
-    static let exitDescent = 0.06
+    static let enterDescent = 0.14
+    static let exitDescent = 0.07
     /// La ventana de la rep se abre cuando el teléfono o la cara bajan más de esto (m).
     static let windowStartDescent = 0.03
     /// La rep empieza en el último instante en que la señal estuvo a menos de esto de su mínimo (m): el
@@ -97,7 +100,7 @@ nonisolated enum HandheldSquatTuning {
     static let repStartBand = 0.01
     /// Duración de la rep completa (desde que empieza a bajar hasta que vuelve arriba).
     static let minRepSeconds = 0.8
-    static let maxRepSeconds = 6.0
+    static let maxRepSeconds = 8.0
     /// Margen extra antes de abortar una rep que no vuelve (s).
     static let abortGraceSeconds = 2.0
     /// La referencia de pie se adapta lento entre reps (deriva del mundo, cambio de postura).
@@ -118,35 +121,35 @@ nonisolated enum HandheldSquatTuning {
     /// "Abajo" para medir brazos / inclinación: fracción de `enterDescent`.
     static let bottomZoneFraction = 0.75
     /// Una bajada que no llega a la meta pero pasa de esto recibe "Baje un poco más".
-    static let shallowCueDescent = 0.10
+    static let shallowCueDescent = 0.08
 
     // Anti-brazos
     /// Un intento que no entró (el cuerpo no bajó) es `armsOnly` si el teléfono bajó la meta y la cara
     /// quedó más de esto arriba (m).
-    static let armsOnlyMaxGap = 0.08
+    static let armsOnlyMaxGap = 0.12
     /// En el mundo, la cara debe haber bajado al menos esta fracción de la meta (si no, fueron los brazos).
-    static let faceDescentMinFraction = 0.9
+    static let faceDescentMinFraction = 0.7
     /// Respaldo IMU (sin descenso de la cara en el mundo): cambio máximo de la distancia cara-teléfono (m).
     /// Solo la distancia: la dirección cambia con el cabeceo de la muñeca (brazos cansados).
-    static let faceDistanceMaxChange = 0.10
+    static let faceDistanceMaxChange = 0.15
     /// La 3ª vez que baja solo con los brazos la anomalía pasa a hard.
     static let armsOnlyHardAt = 3
 
     // Anti-inclinarse (bisagra de cintura)
     /// Cabeceo del teléfono (°): con los antebrazos pegados al pecho gira con el tronco, que en una
     /// sentadilla parcial se inclina hasta ≈ 25-30°.
-    static let torsoMaxPitchDelta = 32.0
+    static let torsoMaxPitchDelta = 50.0
     /// Cabeceo de la cabeza respecto de la gravedad (°) en el fondo.
-    static let headMaxPitchDelta = 33.0
+    static let headMaxPitchDelta = 50.0
     /// La cara puede avanzar a lo sumo esta fracción de lo que baja + el margen (m). En una sentadilla la
     /// cabeza baja mucho más de lo que avanza; en una bisagra recorre un arco hacia adelante.
-    static let torsoForwardRatio = 0.6
-    static let torsoForwardSlack = 0.03
+    static let torsoForwardRatio = 1.0
+    static let torsoForwardSlack = 0.06
     /// La cara no puede irse hacia atrás (alejarse del teléfono) ni de lado más que esto en el fondo (m):
     /// bajar de espaldas o de lado un escalón la desplaza 15-25 cm; en una sentadilla la cabeza queda sobre
     /// los pies (atrás a lo sumo unos centímetros si el tronco va muy derecho; de lado, el balanceo de ±5 cm).
-    static let maxFaceBackwardShift = 0.12
-    static let maxFaceLateralShift = 0.10
+    static let maxFaceBackwardShift = 0.18
+    static let maxFaceLateralShift = 0.15
     /// Distancia horizontal cara-teléfono mínima para saber hacia dónde mira (m).
     static let minFacingDistance = 0.05
     /// Máximo de anomalías `torsoBend` registradas (todas soft).
