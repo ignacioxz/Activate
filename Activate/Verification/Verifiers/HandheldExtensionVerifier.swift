@@ -28,7 +28,10 @@ import simd
 // - No es una sentadilla: si el teléfono baja > 10 cm durante la rep → `notExtension` (soft).
 // - Persona viva: micro-expresiones (`shapeEnergy`); una foto o máscara → `static` (hard). Cara perdida
 //   > 1,5 s → gate "Mantenga la cara en la pantalla".
-// - Desafío: en una rep al azar aparece "Quédese atrás 2 segundos"; fallarlo 2 veces → `holdChallengeFailed`.
+// - Desafío: en una rep al azar aparece "Quédese atrás 2 segundos"; no hacerlo no cuenta esa rep y deja
+//   `holdChallengeFailed` soft (nunca marca sospechosa una pausa honesta).
+// - La cara puede salir del encuadre en la zona atrás (la cabeza mira hacia arriba): cuenta solo con el mundo,
+//   la cara vista al empezar y al volver, y el teléfono yéndose atrás como un tronco (≥ 0,25 m/rad).
 // - Sacudidas, ritmo de metrónomo (σ < 0,12 s) y caminar → anomalías, como en la sentadilla.
 // - Sin seguimiento del mundo (cámara trasera tapada, poca luz, equipo sin soporte): respaldo con el
 //   cabeceo (deviceMotion) + la cara en el encuadre y su cabeceo (TrueDepth). Perder el mundo a mitad de la
@@ -146,6 +149,14 @@ nonisolated enum HandheldExtensionTuning {
     static let staticWindowSeconds = Squat.staticWindowSeconds
     static let staticMinSamples = Squat.staticMinSamples
     static let faceLostBlockSeconds = Squat.faceLostBlockSeconds
+    /// Durante una rep la cara puede salir del encuadre más tiempo: al echarse atrás la cabeza mira hacia arriba
+    /// y ARKit la pierde (datos reales: 1,5-3,4 s por rep, con la cara siempre volviendo al enderezarse).
+    static let faceLostDuringRepSeconds = 5.0
+    /// Rep con la cara perdida en la zona atrás: cuenta solo con el mundo, la cara vista al empezar y otra vez al
+    /// volver, al menos esta fracción de muestras con cara y el teléfono yéndose atrás como un tronco.
+    static let minTrackedFractionFaceless = 0.25
+    /// Teléfono atrás por radián que exige esa rep (reales 0,46-0,6 m/rad; muñecas, cabeza y mímicas ≤ 0,15).
+    static let phoneMinBackPerRadianFaceless = 0.25
     static let minTrackedFraction = Squat.minTrackedFraction
     static let faceDistanceMin = Squat.faceDistanceMin
     static let faceDistanceMax = Squat.faceDistanceMax
@@ -302,6 +313,8 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         /// Las posiciones del mundo valen para esta rep (mundo normal y referencia anclada al abrirla, sin
         /// perderlo después).
         var worldValid: Bool
+        /// La cara se veía al abrir la ventana.
+        var faceAtStart = false
         var entered = false
         var peakTilt = 0.0
         var maxGeometryChange = 0.0
@@ -331,6 +344,9 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         var shaking = false
         var backSamples = 0
         var backFaceSamples = 0
+        /// Última muestra con cara y última muestra en la zona atrás (para saber si la cara volvió al enderezarse).
+        var lastFaceT: Double?
+        var lastBackT: Double?
     }
 
     let kind: ActivityKind = .extensionLumbar
@@ -492,7 +508,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         if faceLostSince == nil { faceLostSince = t }
         let lost = t - (faceLostSince ?? t)
         switch progress.gate {
-        case .ready where lost >= K.faceLostBlockSeconds:
+        case .ready where lost >= (window != nil ? K.faceLostDuringRepSeconds : K.faceLostBlockSeconds):
             abortRep()
             setGate(.blocked(reason: Copy.keepFace), &events)
             progress.hint = Copy.keepFace
@@ -646,7 +662,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
             if tilt > K.windowStartTiltDegrees {
                 forwardOffsetSince = nil
                 window = RepWindow(start: t, challengeArmed: challenge.isArmed(nextRep: count + 1),
-                                   worldValid: mode == .world && !worldAnchorPending)
+                                   worldValid: mode == .world && !worldAnchorPending, faceAtStart: s.faceTracked)
             } else if tilt < -K.windowStartTiltDegrees {
                 // Hacia adelante (o el agarre cambió): no se adapta; si se sostiene, se vuelve a calibrar de pie.
                 if forwardOffsetSince == nil { forwardOffsetSince = t }
@@ -674,6 +690,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
 
         w.samples += 1
         if s.faceTracked {
+            w.lastFaceT = t
             w.trackedSamples += 1
             w.energySum += Double(s.shapeEnergy)
             w.energyCount += 1
@@ -697,6 +714,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         w.peakTilt = max(w.peakTilt, tilt)
         if tilt >= K.backZoneFraction * K.enterTiltDegrees {
             w.backSamples += 1
+            w.lastBackT = t
             if s.faceTracked { w.backFaceSamples += 1 }
             if worldSample {
                 w.worldPeakTilt = max(w.worldPeakTilt, tilt)
@@ -779,6 +797,8 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         var headRatio: Double?
         /// Firma clara de las muñecas (cuenta para la anomalía hard).
         var strongWrists = false
+        /// La cara faltó en la mayor parte de la zona atrás y el teléfono se fue atrás como un tronco.
+        var facelessTrunk = false
         var wristsOnly: Bool { !faceStayedInFrame || !faceWentBack || !phoneWentBack || !headFollowed }
     }
 
@@ -788,7 +808,10 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         let rad = w.worldPeakTilt * .pi / 180
         let direction = w.maxDirectionChange <= K.faceDirectionMaxChangeDegrees
         let faceBack = w.maxFaceBackward ?? 0
-        let trunkClearlyBack = world && faceBack >= max(K.faceMinBackward, K.trunkClearlyBackPerRadian * rad)
+        let faceMostlyMissingInBack = w.backSamples > 0 && Double(w.backFaceSamples) < 0.5 * Double(w.backSamples)
+        let phoneStronglyBack = world && rad > 0 && (w.maxPhoneBackward ?? 0) >= K.phoneMinBackPerRadianFaceless * rad
+        j.facelessTrunk = faceMostlyMissingInBack && phoneStronglyBack
+        let trunkClearlyBack = world && (faceBack >= max(K.faceMinBackward, K.trunkClearlyBackPerRadian * rad) || j.facelessTrunk)
         let retreatLimit = trunkClearlyBack ? max(K.faceRadialMaxRetreat, K.faceRadialRetreatPerRadian * rad) : K.faceRadialMaxRetreat
         let tangentialLimit = trunkClearlyBack ? max(K.faceGeometryMaxChange, K.faceTangentialPerRadian * rad) : K.faceGeometryMaxChange
         j.faceStayedInFrame = direction
@@ -796,7 +819,8 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
             && w.maxRadialApproach <= K.faceGeometryMaxChange
             && w.maxRadialRetreat <= retreatLimit
         if world {
-            j.faceWentBack = faceBack >= max(K.faceMinBackward, K.faceMinBackPerRadian * rad)
+            // Sin cara en la zona atrás no se puede medir cuánto se fue: lo prueba el teléfono (`facelessTrunk`).
+            j.faceWentBack = j.facelessTrunk || faceBack >= max(K.faceMinBackward, K.faceMinBackPerRadian * rad)
             j.phoneWentBack = (w.maxPhoneBackward ?? 0) >= K.phoneMinBackPerRadian * rad
         }
         if w.headSamples >= K.minHeadSamples, w.headTiltSum > 0 {
@@ -807,7 +831,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
             j.headStayed = turn <= (trunkClearlyBack ? K.headMaxExtraDegreesTrunkBack : K.headMaxExtraDegrees)
             if !world { j.headFollowed = ratio >= -K.headMinTurnRatio }
         }
-        j.strongWrists = !direction || (world && faceBack < K.faceMinBackward)
+        j.strongWrists = !direction || (world && !j.facelessTrunk && faceBack < K.faceMinBackward)
         return j
     }
 
@@ -830,7 +854,9 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         } else if world, let travel = w.maxHorizontalTravel,
                   travel > K.maxRepHorizontalTravel + K.horizontalTravelPerRadian * w.worldPeakTilt * .pi / 180 {
             rejection = .moved
-        } else if tracked < K.minTrackedFraction || (w.backSamples > 0 && w.backFaceSamples == 0) {
+        } else if (tracked < K.minTrackedFraction || (w.backSamples > 0 && w.backFaceSamples == 0))
+                    && !(j.facelessTrunk && w.faceAtStart && tracked >= K.minTrackedFractionFaceless
+                         && (w.lastFaceT ?? -1) >= (w.lastBackT ?? .infinity)) {
             rejection = .faceMissing
         } else if energy < K.liveFaceMinEnergy {
             rejection = .notLive
@@ -937,7 +963,12 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
             }
             events.append(.cue(Cue(text: Copy.noSquat, symbol: "figure.flexibility")))
         case .holdMissed:
-            if let a = challenge.fail(at: t) { record(a, &events) }
+            // No quedarse atrás no cuenta esa rep, pero nunca marca sospechosa una pausa honesta: el video y la
+            // mímica ya los frenan el mundo, la cara y el relieve.
+            if var a = challenge.fail(at: t) {
+                a.severity = .soft
+                record(a, &events)
+            }
             announceChallengeIfNeeded(&events)
         case .shaking:
             events.append(.cue(Cue(text: Copy.noShake, symbol: "iphone.radiowaves.left.and.right")))

@@ -276,12 +276,15 @@ struct HandheldExtensionTests {
 
         #expect(events.contains(.cue(HoldChallengeCopy.backExtension.cue)))
         #expect(events.contains(.cue(HoldChallengeCopy.backExtension.missedCue)))
-        #expect(hardKinds(outcome) == [HandheldExtensionAnomaly.holdChallengeFailed])
+        // No quedarse atrás no cuenta esas reps, pero nunca marca sospechosa una pausa honesta (dato real: el
+        // usuario aguantó 0,5-1,2 s y la pausa quedaba "suspicious").
+        #expect(hardKinds(outcome).isEmpty)
+        #expect(anomalies(outcome, HandheldExtensionAnomaly.holdChallengeFailed).first?.severity == .soft)
         #expect(anomalies(outcome, HandheldExtensionAnomaly.holdChallengeFailed).first?.detail == HoldChallengeCopy.backExtension.failureDetail)
         #expect(outcome.achieved == 8)
         #expect(v.challenge.failures == HoldChallenge.maxFailures)
         #expect(!v.challenge.passed)
-        #expect(VerificationPolicy.level(for: outcome, source: .live, kind: .extensionLumbar) == .suspicious)
+        #expect(VerificationPolicy.level(for: outcome, source: .live, kind: .extensionLumbar) == .full)
     }
 
     @Test func elDesafioDeLaExtensionDiceAtrasAunqueLlegueConTextoDeSentadilla() {
@@ -1458,5 +1461,56 @@ struct RedTeamExtensionTests {
         print("RT|camara|scanned=\(scanned) hits=\(hits)")
         #expect(scanned > 50)
         #expect(hits.isEmpty, "\(hits)")
+    }
+}
+
+// MARK: - La cara sale del encuadre en la zona atrás (dato real: la cabeza mira hacia arriba al inclinarse)
+
+extension RedTeamExtensionTests {
+    /// Encuadre que pierde la cara cuando el teléfono pasa de `limit`° de inclinación.
+    private static func faceLostBeyond(_ limit: Double, _ schedule: RTSchedule) -> RTOptions {
+        var options = RTOptions()
+        options.faceTracked = { t in (schedule.angle(at: t)?.degrees ?? 0) < limit }
+        return options
+    }
+
+    @Test(arguments: [20.0, 25.0, 35.0])
+    func legitimoMirandoArribaPierdeLaCaraAtras(tilt: Double) {
+        let schedule = RTSchedule(reps: RTSchedule.human(count: 8, tilt: tilt))
+        let samples = render(schedule, options: Self.faceLostBeyond(14, schedule)) { deg, x in
+            Body.trunk(deg, x: x, neckDeg: 20)
+        }
+        let run = play(samples, target: 8, name: "FN-cara-fuera-atras-\(tilt)")
+        #expect(run.achieved >= 7, "FALSO NEGATIVO: \(run.summary)")
+        #expect(run.hard.isEmpty, "\(run.hard)")
+    }
+
+    @Test(arguments: [20.0, 30.0, 40.0])
+    func ataqueMunecasConLaCaraFueraDelEncuadre(tilt: Double) {
+        let schedule = RTSchedule(reps: RTSchedule.human(count: 8, tilt: tilt))
+        let samples = render(schedule, options: Self.faceLostBeyond(14, schedule)) { deg, _ in Body.wrists(deg) }
+        let run = play(samples, target: 8, name: "RT-munecas-cara-fuera-\(tilt)")
+        #expect(run.achieved == 0, "\(run.summary)")
+    }
+
+    @Test(arguments: [(25.0, 30.0), (30.0, 40.0)])
+    func ataqueCabezaAtrasMasMunecasConLaCaraFuera(wrist: Double, neck: Double) {
+        let schedule = RTSchedule(reps: RTSchedule.human(count: 8, tilt: wrist))
+        let samples = render(schedule, options: Self.faceLostBeyond(14, schedule)) { deg, x in
+            var p = Body.wrists(deg)
+            p.face = Body.head(neck * x)
+            p.headPitch = neck * x
+            return p
+        }
+        let run = play(samples, target: 8, name: "RT-cabeza-munecas-cara-fuera-\(wrist)-\(neck)")
+        #expect(run.achieved == 0, "\(run.summary)")
+    }
+
+    @Test func ataqueCabezaYTelefonoJuntosConLaCaraFuera() {
+        // El conjunto cara-teléfono gira alrededor del cuello (sin tronco): el teléfono va adelante en el mundo.
+        let schedule = RTSchedule(reps: RTSchedule.human(count: 8, tilt: 25))
+        let samples = render(schedule, options: Self.faceLostBeyond(14, schedule)) { deg, x in Body.neckRig(deg, x: x) }
+        let run = play(samples, target: 8, name: "RT-cuello-telefono-cara-fuera")
+        #expect(run.achieved == 0, "\(run.summary)")
     }
 }

@@ -15,6 +15,8 @@ struct RealExtensionReplayTests {
 
     nonisolated static let secondSession = folder.appending(path: "20261023-160129-A1.jsonl")
     nonisolated static var hasSecondRecording: Bool { FileManager.default.fileExists(atPath: secondSession.path) }
+    nonisolated static let thirdSession = folder.appending(path: "20261023-161037-A1.jsonl")
+    nonisolated static var hasThirdRecording: Bool { FileManager.default.fileExists(atPath: thirdSession.path) }
 
     static func samples(_ url: URL) throws -> [HandheldSquatSample] {
         let text = try String(contentsOf: url, encoding: .utf8)
@@ -56,5 +58,26 @@ struct RealExtensionReplayTests {
         for s in samples { for event in verifier.ingest(s, at: s.t) { if case .rep = event { reps += 1 } } }
         let detail = verifier.diagnostics.map { "\(String(format: "%.0f", $0.peakTilt))° tang \(String(format: "%.3f", $0.tangentialChange)) \($0.rejection.map { "\($0)" } ?? "ok")" }
         #expect(reps >= 2, "intentos: \(detail)")
+    }
+
+    /// 16:10: la cara salió del encuadre 9 veces (1,5-3,4 s) al echarse atrás; antes cada salida bloqueaba,
+    /// recalibraba y perdía la rep. Se cuentan las reps y se listan los intentos.
+    @Test(.enabled(if: RealExtensionReplayTests.hasThirdRecording))
+    func terceraSerieConLaCaraFueraCuenta() throws {
+        let samples = try Self.samples(Self.thirdSession)
+        var verifier = HandheldExtensionVerifier(target: 20, demo: false)
+        verifier.start(at: 0)
+        var reps = 0
+        var blocks = 0
+        for s in samples {
+            for event in verifier.ingest(s, at: s.t) {
+                if case .rep = event { reps += 1 }
+                if case .gate(.blocked) = event { blocks += 1 }
+            }
+        }
+        let detail = verifier.diagnostics.map { "\(String(format: "%.0f", $0.peakTilt))° cara \(String(format: "%.0f", $0.trackedFraction * 100))% \($0.rejection.map { "\($0)" } ?? "ok")" }
+        for d in verifier.diagnostics { print("REAL3D \(String(format: "%.1f", d.at)) tilt=\(String(format: "%.0f", d.peakTilt)) s=\(String(format: "%.1f", d.seconds)) mode=\(d.mode) trk=\(String(format: "%.2f", d.trackedFraction)) tang=\(String(format: "%.3f", d.tangentialChange)) retr=\(String(format: "%.3f", d.radialRetreat)) appr=\(String(format: "%.3f", d.radialApproach)) dir=\(String(format: "%.1f", d.directionChange)) fBack=\(d.faceBackward.map { String(format: "%.3f", $0) } ?? "-") pBack=\(d.phoneBackward.map { String(format: "%.3f", $0) } ?? "-") head=\(d.headTurn.map { String(format: "%.0f", $0) } ?? "-") desc=\(d.phoneDescent.map { String(format: "%.3f", $0) } ?? "-") rej=\(d.rejection.map { "\($0)" } ?? "ok")") }
+        print("REAL3 reps=\(reps) bloqueos=\(blocks) intentos=\(detail)")
+        #expect(reps >= 10, "intentos: \(detail)")
     }
 }
