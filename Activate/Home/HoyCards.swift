@@ -16,32 +16,13 @@ struct HoyMomentsCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HoyCardTitle(title: "Momentos de hoy", trailing: moments.trailing)
             if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(moments.stops) { stop in
-                        HStack(spacing: 12) {
-                            icon(stop)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(stop.moment.shortTitle)
-                                    .font(.subheadline.weight(stop.phase == .now ? .bold : .medium))
-                                    .foregroundStyle(stop.phase == .now ? Theme.accent : .primary)
-                                Text(stop.phase == .now ? "Ahora · desde las \(stop.start)" : "Desde las \(stop.start)")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(Self.spoken(stop))
-                    }
-                }
+                list
             } else {
-                HStack(alignment: .top, spacing: 0) {
-                    ForEach(moments.stops) { stop in
-                        column(stop)
-                    }
-                }
-                .background(alignment: .top) {
-                    ColumnConnectors(colors: Array(repeating: Color.primary.opacity(0.12), count: max(0, moments.stops.count - 1)),
-                                     columns: moments.stops.count, nodeSize: Self.circle, gap: 8)
+                // Fila de 4 columnas iguales; si una etiqueta ("Campamento") no cabe en su columna ni
+                // encogida (letra xxxLarge o pantalla angosta), la lista vertical.
+                ViewThatFits(in: .horizontal) {
+                    row
+                    list
                 }
             }
             Text(moments.line)
@@ -53,6 +34,42 @@ struct HoyMomentsCard: View {
         .accessibilityElement(children: .contain)
     }
 
+    private var row: some View {
+        EqualColumns(minimumScale: Self.labelScale + 0.05) {
+            ForEach(moments.stops) { stop in
+                column(stop)
+            }
+        }
+        .background(alignment: .top) {
+            ColumnConnectors(colors: Array(repeating: Color.primary.opacity(0.12), count: max(0, moments.stops.count - 1)),
+                             columns: moments.stops.count, nodeSize: Self.circle, gap: 8)
+        }
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(moments.stops) { stop in
+                HStack(spacing: 12) {
+                    icon(stop)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(stop.moment.shortTitle)
+                            .font(.subheadline.weight(stop.phase == .now ? .bold : .medium))
+                            .foregroundStyle(stop.phase == .now ? Theme.accent : .primary)
+                        Text(stop.phase == .now ? "Ahora · desde las \(stop.start)" : "Desde las \(stop.start)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Self.spoken(stop))
+            }
+        }
+    }
+
+    /// Cuánto puede encogerse la etiqueta del momento en la fila antes de pasar a la lista.
+    private static let labelScale: CGFloat = 0.8
+
     private func column(_ stop: MomentStop) -> some View {
         let isNow = stop.phase == .now
         return VStack(spacing: 4) {
@@ -62,7 +79,7 @@ struct HoyMomentsCard: View {
                 .font(.caption.weight(isNow ? .bold : .medium))
                 .foregroundStyle(isNow ? Theme.accent : (stop.phase == .past ? Color.secondary : Color.primary))
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
+                .minimumScaleFactor(Self.labelScale)
             Text(isNow ? "Ahora" : stop.start)
                 .font(.caption2.weight(isNow ? .semibold : .regular))
                 .foregroundStyle(isNow ? Theme.accent : .secondary)
@@ -118,22 +135,30 @@ struct TurnoPathCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HoyCardTitle(title: path.title, trailing: path.trailing)
 
-            HStack(alignment: .top, spacing: 0) {
-                ForEach(Array(path.nodes.enumerated()), id: \.element.id) { index, node in
-                    column(node, index: index)
+            VStack(alignment: .leading, spacing: 4) {
+                EqualColumns {
+                    ForEach(path.nodes) { node in
+                        column(node)
+                    }
                 }
-            }
-            .background(alignment: .top) {
-                ColumnConnectors(colors: path.segments.map { $0 ? Theme.accent : Color.primary.opacity(0.12) },
-                                 columns: path.nodes.count, nodeSize: Self.node, thickness: outdoor ? 4 : 3)
-            }
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(path.spoken)
+                .background(alignment: .top) {
+                    ColumnConnectors(colors: path.segments.map { $0 ? Theme.accent : Color.primary.opacity(0.12) },
+                                     columns: path.nodes.count, nodeSize: Self.node, thickness: outdoor ? 4 : 3)
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(path.spoken)
 
-            if typeSize.isAccessibilitySize, let line = milestonesLine {
-                Text(line)
-                    .font(.footnote.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
+                if let line = milestonesLine {
+                    if typeSize.isAccessibilitySize {
+                        milestonesText(line)
+                    } else {
+                        // Cada hito bajo su día; si se pisan (letra grande o pantalla angosta), en una línea.
+                        ViewThatFits(in: .horizontal) {
+                            milestoneLabels
+                            milestonesText(line)
+                        }
+                    }
+                }
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -175,7 +200,7 @@ struct TurnoPathCard: View {
         .flatCard()
     }
 
-    /// "Hoy: Doblete · Día 7: Tiro limpio" (letra de accesibilidad, en vez de la fila de etiquetas).
+    /// "Hoy: Doblete · Día 7: Tiro limpio" (cuando las etiquetas no caben bajo su día).
     private var milestonesLine: String? {
         let parts = path.nodes.compactMap { node in
             node.milestone.map { node.isToday ? "Hoy: \($0)" : "Día \(node.day): \($0)" }
@@ -183,11 +208,31 @@ struct TurnoPathCard: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    private func column(_ node: TurnoPath.Node, index: Int) -> some View {
-        let isFirst = index == 0
-        let isLast = index == path.nodes.count - 1
-        let alignment: Alignment = isLast ? .trailing : (isFirst ? .leading : .center)
-        return VStack(spacing: 4) {
+    private func milestonesText(_ line: String) -> some View {
+        Text(line)
+            .font(.footnote.weight(.semibold))
+            .padding(.top, 4)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Hitos bajo su columna sin cambiar el ancho de las columnas (ya están en lo que lee VoiceOver de cada día).
+    private var milestoneLabels: some View {
+        let milestones = path.nodes.enumerated().compactMap { index, node in
+            node.milestone.map { (column: index, text: $0) }
+        }
+        return MilestoneLabels(columns: path.nodes.count) {
+            ForEach(milestones, id: \.column) { item in
+                Text(item.text)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .milestoneColumn(item.column)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func column(_ node: TurnoPath.Node) -> some View {
+        VStack(spacing: 4) {
             nodeView(node)
                 .frame(maxWidth: .infinity)
             if !typeSize.isAccessibilitySize {
@@ -195,12 +240,6 @@ struct TurnoPathCard: View {
                     .font(.caption2.weight(node.isToday ? .bold : .regular))
                     .foregroundStyle(node.isToday ? Theme.accent : .secondary)
                     .lineLimit(1)
-                Text(node.milestone ?? " ")
-                    .font(.caption2.weight(.semibold))
-                    .lineLimit(1)
-                    .fixedSize()
-                    .frame(maxWidth: .infinity, alignment: alignment)
-                    .accessibilityHidden(node.milestone == nil)
             }
         }
         .frame(maxWidth: .infinity)
@@ -451,7 +490,9 @@ private struct BadgeCell: View {
     }
 
     private var hexagon: some View {
-        BadgeView(badge: status.badge, style: .flat, size: 44, showsTitle: false, earned: status.earned)
+        // Paleta fría de Hoy: Doblete en azul y Tiro limpio en celeste (el cobre queda solo para la llama).
+        BadgeView(badge: status.badge, style: .flat, size: 44, showsTitle: false, earned: status.earned,
+                  fill: status.badge.hoyPalette.color)
             .accessibilityHidden(true)
     }
 
