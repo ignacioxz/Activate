@@ -71,6 +71,7 @@ struct HandheldActivityView: View {
         .sensoryFeedback(.success, trigger: showDone) { _, new in new }
         .sensoryFeedback(.warning, trigger: isBlocked) { _, new in new }
         .sensoryFeedback(.impact(weight: .medium), trigger: challengeText) { _, new in new != nil }
+        .sensoryFeedback(.success, trigger: holdDone) { _, new in new }
     }
 
     // MARK: Encabezado
@@ -126,24 +127,45 @@ struct HandheldActivityView: View {
 
     // MARK: Desafío y gate
 
-    /// Consigna del desafío vigente ("Quédese abajo / atrás 2 segundos").
+    /// Consigna del desafío vigente ("Quédese abajo / atrás 2 segundos"). La sentadilla la deja en `progress.hint`
+    /// con el avance de la pausa en `progress.live` mientras esté armada (no se pierde bajo otra consigna ni al
+    /// recalibrar); la extensión solo la anuncia como consigna.
     private var challengeText: String? {
-        guard progress.gate == .ready, let cue = runner.cue, HoldChallengeCopy.allCueTexts.contains(cue.text) else { return nil }
+        guard progress.gate == .ready else { return nil }
+        if progress.live != nil, HoldChallengeCopy.allCueTexts.contains(progress.hint) { return progress.hint }
+        guard let cue = runner.cue, HoldChallengeCopy.allCueTexts.contains(cue.text) else { return nil }
         return cue.text
     }
+
+    /// Avance 0…1 de la pausa pedida (solo la sentadilla lo publica).
+    private var holdFraction: Double? { challengeText == nil ? nil : progress.live }
+    private var holdDone: Bool { (holdFraction ?? 0) >= 1 }
 
     @ViewBuilder
     private var challengeBanner: some View {
         if let text = challengeText {
-            Label(text, systemImage: "pause.circle.fill")
-                .font(.largeTitle.weight(.heavy))
-                .foregroundStyle(Theme.accent)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 8)
-                .transition(.opacity)
-                .accessibilityAddTraits(.updatesFrequently)
+            VStack(spacing: 12) {
+                Label(text, systemImage: "pause.circle.fill")
+                    .font(.largeTitle.weight(.heavy))
+                    .foregroundStyle(Theme.accent)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let holdFraction {
+                    HoldMeter(fraction: holdFraction, animated: !reduceMotion)
+                }
+            }
+            .padding(.vertical, 8)
+            .transition(.opacity)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
         }
+    }
+
+    /// Bajo el desafío se sigue mostrando un rechazo ("Doble las rodillas…"), no el mismo desafío ni su "Ya. Suba.".
+    private func showsBelowChallenge(_ cue: Cue) -> Bool {
+        guard challengeText != nil else { return true }
+        return !HoldChallengeCopy.allCueTexts.contains(cue.text) && cue.text != SquatHoldChallenge.doneCue.text
+            && cue.text != HandheldSquatCopy.ready
     }
 
     private var isBlocked: Bool {
@@ -164,7 +186,7 @@ struct HandheldActivityView: View {
                     .font(.title2.weight(.bold))
                     .foregroundStyle(Theme.danger)
             case .ready:
-                if challengeText == nil, let cue = runner.cue {
+                if let cue = runner.cue, showsBelowChallenge(cue) {
                     Label(cue.text, systemImage: cue.symbol ?? assignment.kind.symbol)
                         .font(.title2.weight(.heavy))
                 } else if challengeText == nil, !progress.hint.isEmpty {
@@ -225,5 +247,43 @@ struct HandheldActivityView: View {
         } else {
             onFinish(outcome)
         }
+    }
+}
+
+/// Barra de la pausa del desafío: se llena mientras se queda abajo y entonces dice "Ya. Suba.". Sin ella, en el
+/// iPhone el operador se quedaba ≈ 1 s sin saber cuánto faltaba.
+private struct HoldMeter: View {
+    let fraction: Double
+    var animated = true
+
+    private var clamped: Double { min(1, max(0, fraction)) }
+    private var done: Bool { clamped >= 1 }
+    private var caption: String {
+        if done { return SquatHoldChallenge.doneCue.text }
+        return clamped > 0 ? HandheldSquatCopy.holdKeep : HandheldSquatCopy.holdBar
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(.tertiarySystemFill))
+                    Capsule()
+                        .fill(done ? Theme.successText : Theme.accent)
+                        .frame(width: geo.size.width * clamped)
+                }
+            }
+            .frame(height: 16)
+            .animation(animated ? .linear(duration: 0.15) : nil, value: clamped)
+            Text(caption)
+                .font(done ? .title2.weight(.heavy) : .title3.weight(.semibold))
+                .foregroundStyle(done ? Theme.successText : Color.primary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(caption)
+        .accessibilityValue("\(Int((clamped * 100).rounded())) por ciento")
     }
 }
