@@ -1,6 +1,6 @@
 import Foundation
 
-// Dueño: paquete "kine-ai". Hechos para la consulta con el kine, calculados en Swift (puro, testeable)
+// Dueño: paquete "kine-ai". Hechos del Reporte de Salud (consulta con el kine o la mutual), calculados en Swift (puro, testeable)
 // desde StatsSummary + check-ins + sesiones. Cada hecho trae su cifra (`value`) y una frase completa
 // (`detail`); Apple Intelligence solo elige cuáles importan y los explica. Solo salen los hechos que
 // tienen datos suficientes, en orden de prioridad (la plantilla toma los 3 primeros).
@@ -54,6 +54,7 @@ nonisolated enum KineFacts {
             ejercicioQueAyuda(closed),
             urgent ? nil : alarm,
             adherencia(summary),
+            nivel(LevelProgress.compute(sessions: sessions, calendar: work)),
         ]
         return ordered.compactMap { $0 }
     }
@@ -415,6 +416,38 @@ nonisolated enum KineFacts {
                         gist: gist,
                         question: "¿Qué hago los días que no alcanzo a hacer la pausa?",
                         focus: "Encontrar cómo hacer la pausa todos los días del turno.")
+    }
+
+    // MARK: - Nivel por pausas completas (LevelProgress)
+
+    /// Nivel y días con la pausa completa, calculados en Swift (`LevelProgress`): el modelo solo cita
+    /// este hecho por su id; la cifra la pone siempre la app.
+    static func nivel(_ p: LevelProgress) -> KineFact? {
+        guard p.daysWithPause > 0 else { return nil }
+        let full = p.fullDays, total = p.daysWithPause
+        let share = Double(full) / Double(total)
+        let gist: String
+        if full == total {
+            gist = "Completa la pausa entera todos los días que la hace."
+        } else if share >= 0.8 {
+            gist = "Completa la pausa entera casi todos los días que la hace."
+        } else if share > 0.5 {
+            gist = "Completa la pausa entera más de la mitad de los días que la hace."
+        } else if full > 0 {
+            gist = "Completa la pausa entera solo algunos días; los demás hace una parte."
+        } else {
+            gist = "Todavía no completa la pausa entera; hace una parte de los ejercicios."
+        }
+        let mostly = share > 0.5
+        return KineFact(id: KineFactID.nivel.rawValue,
+                        title: "Nivel por pausas completas",
+                        value: p.shortValue,
+                        detail: "\(p.levelLine): \(p.fullDaysLine). Cada día con la pausa completa sube un nivel; una pausa incompleta suma la parte que hizo.",
+                        gist: gist,
+                        question: mostly ? "Completo la pausa la mayoría de los días, ¿me conviene subir las metas?"
+                                         : "¿Qué ejercicio de la pausa me conviene priorizar si no alcanzo a hacerla entera?",
+                        focus: mostly ? "Mantener la pausa completa y ver si conviene subir las metas."
+                                      : "Ver qué ejercicios de la pausa le cuestan y cómo completarla más días.")
     }
 }
 

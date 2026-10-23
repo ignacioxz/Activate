@@ -21,10 +21,13 @@ struct KineFactsTests {
         facts.first { $0.id == id.rawValue }?.value
     }
 
-    @Test func demoDeMarcoTieneLosOchoHechosEnOrden() {
+    @Test func demoDeMarcoTieneLosNueveHechosEnOrden() {
         let f = facts(DemoSeed.data(now: now, calendar: santiago))
         #expect(f.map(\.id) == ["rdq_tendencia", "peor_fase_turno", "contexto_dominante", "item_frecuente",
-                                "mejora_post", "ejercicio_que_ayuda", "alertas", "adherencia"])
+                                "mejora_post", "ejercicio_que_ayuda", "alertas", "adherencia", "nivel"])
+        // Nivel por pausas completas (LevelProgress): 6 días completos y dos parciales que suman 43 %.
+        #expect(value(f, .nivel) == "Nivel 7 · 43\u{00A0}%")
+        #expect(f.first { $0.id == "nivel" }?.detail.contains("6 días con pausa completa de 8 días con pausa") == true)
         #expect(value(f, .rdqTendencia) == "4,0 → 3,6 → 3,0")
         #expect(value(f, .peorFaseTurno) == "Día 5: 6,0 de 6")
         #expect(value(f, .contextoDominante) == "Al bajar · 2 de 4")

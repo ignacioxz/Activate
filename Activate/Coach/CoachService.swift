@@ -138,13 +138,13 @@ final class CoachService {
     var kineUnavailableReason: String? {
         guard !kineModelReady else { return nil }
         if override == .rules && (availability == .available || availability == .localeUnsupported) {
-            return "El coach está en modo reglas. Cámbielo en Perfil para preparar el resumen."
+            return "El coach está en modo reglas. Cámbielo en Perfil para preparar el reporte."
         }
         switch availability {
-        case .deviceNotEligible: return "Este iPhone no tiene Apple Intelligence. Puede compartir la hoja igual."
+        case .deviceNotEligible: return "Este iPhone no tiene Apple Intelligence. Puede compartir el reporte igual."
         case .modelNotReady: return "Apple Intelligence se está preparando. Pruebe en unos minutos."
         case .localeUnsupported: return "Apple Intelligence no está disponible en este idioma."
-        case .notEnabled, .unknown, .available: return "Active Apple Intelligence en Ajustes para preparar el resumen."
+        case .notEnabled, .unknown, .available: return "Active Apple Intelligence en Ajustes para preparar el reporte."
         }
     }
 

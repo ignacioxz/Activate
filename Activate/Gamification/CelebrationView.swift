@@ -60,6 +60,10 @@ struct CelebrationView: View {
                         FactRow(systemImage: postSymbol, text: line, note: CelebrationCopy.postNote(post), tint: Theme.sky)
                     }
                     verificationRow
+                    if reward.counted, let level = levelProgress, let today = level.todayLine {
+                        // Aporte de hoy al nivel (la mejor pausa del día) y avance hacia el siguiente.
+                        FactRow(systemImage: "chart.bar.fill", text: today, note: level.levelLine, tint: Theme.accent)
+                    }
                     if comodinUsedYesterday {
                         FactRow(systemImage: StreakChips.comodinSymbol,
                                 text: CelebrationCopy.comodinUsedYesterdayLine,
@@ -211,6 +215,12 @@ struct CelebrationView: View {
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
+    }
+
+    /// Nivel por pausas completas desde el historial ya guardado (la sesión de esta pausa incluida).
+    private var levelProgress: LevelProgress? {
+        guard let store else { return nil }
+        return LevelProgress.compute(sessions: store.data.sessions, calendar: store.calendar)
     }
 
     /// Ayer (día de turno) la racha la cuidó el comodín.
