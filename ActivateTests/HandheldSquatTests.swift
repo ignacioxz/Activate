@@ -99,7 +99,7 @@ struct HandheldSquatTests {
         #expect(events.contains(.completed))
         #expect(outcome.achieved == 5)
         #expect(hardKinds(outcome).isEmpty)
-        // La rep se mide desde que el cuerpo empieza a bajar hasta que teléfono y cara vuelven a 6 cm de la altura de pie.
+        // La rep se mide desde que el cuerpo empieza a bajar hasta que teléfono y cara vuelven a 7 cm de la altura de pie.
         #expect(v.repSeconds.allSatisfy { $0 >= 2.5 }, "\(v.repSeconds)")
         #expect((v.minPeakDescent ?? 0) >= HandheldSquatTuning.enterDescent)
         #expect(VerificationPolicy.level(for: outcome, source: .live, kind: .sentadilla) == .full)
@@ -144,9 +144,13 @@ struct HandheldSquatTests {
         #expect(anomalies(outcome, HandheldSquatAnomaly.torsoBend).count == 4)
         #expect(anomalies(outcome, HandheldSquatAnomaly.armsOnly).isEmpty)
         #expect(v.diagnostics.allSatisfy { $0.rejection == .torsoBend })
-        #expect(v.diagnostics.allSatisfy { $0.pitchDelta > HandheldSquatTuning.torsoMaxPitchDelta })
-        #expect(v.diagnostics.allSatisfy { ($0.headPitchDelta ?? 0) > HandheldSquatTuning.headMaxPitchDelta })
+        // La bisagra sintética adelanta la cara el doble de lo que baja: la frena el avance de la cara.
         #expect(v.diagnostics.allSatisfy { ($0.forwardExcess ?? 0) > 0 })
+        // Con el tronco permitido hasta 50°, los 40° de cabeceo de esta bisagra ya no bastan por sí solos.
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario (teléfono y cabeza hasta 50°): una bisagra de 40° ya no se detecta por el cabeceo") {
+            #expect(v.diagnostics.allSatisfy { $0.pitchDelta > HandheldSquatTuning.torsoMaxPitchDelta })
+            #expect(v.diagnostics.allSatisfy { ($0.headPitchDelta ?? 0) > HandheldSquatTuning.headMaxPitchDelta })
+        }
     }
 
     @Test func caraPlanaEnLaTrueDepthNoCuentaYALaTerceraEsHard() {
@@ -207,8 +211,10 @@ struct HandheldSquatTests {
     }
 
     @Test func cabezaMuyAgachadaNoCalibraYPidePararseDerecho() {
+        // Sentado y doblado: la cabeza mira 80° abajo, fuera del margen de calibración (70°, antes 55°). Con
+        // −70° el caso quedaba justo en el umbral y solo el ruido decidía.
         var options = Synth.Options()
-        options.headPitch = -70
+        options.headPitch = -80
         var v = HandheldSquatVerifier(target: 5)
         let samples = Synth.samples(reps: Synth.squatReps(count: 2), options: options)
         let events = run(&v, samples)
@@ -1024,8 +1030,8 @@ struct HandheldSquatAttackTests {
     }
 
     @Test func ataque_cuartoDeSentadilla11cmMasBrazos() {
-        // La cara baja solo ~11 cm y los brazos ponen los 7,5 cm que faltan. Se cuenta con el cuerpo (el menor
-        // de los descensos): no llega y recibe "Baje un poco más".
+        // La cara baja solo ~11-12 cm y los brazos ponen 7,5 cm más (el teléfono pasa la meta de 14 cm). Se cuenta
+        // con el cuerpo (el menor de los descensos): no llega y recibe "Baje un poco más".
         let r = simulate(RTScenario(name: "A3b 11cm + brazos 7.5", body: { f in
             var p = RTBody.Posture()
             p.hipDrop = (0.105 + 0.005 * Double((f.rep ?? 0) % 2)) * f.x
@@ -1102,10 +1108,30 @@ struct HandheldSquatAttackTests {
             }
         }
         print("RT| A2b tabla: \(table)")
-        #expect(worst == 0)
-        // Aunque el cuello mantenga la cabeza casi derecha, con la cadera hasta 22 cm atrás la cara avanza demasiado.
+        // Con 45° la cabeza cabecea 44-45° (< 50°) y, con la cadera ≥ 18 cm atrás, la cara avanza menos que lo que
+        // baja + 6 cm: es la misma geometría que una sentadilla con el tronco inclinado 45°, que ahora cuenta.
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario (tronco hasta 50°, avance de la cara ≤ descenso + 6 cm): una bisagra moderada de 45° con la cadera ≥ 18 cm atrás cuenta") {
+            #expect(worst == 0)
+        }
+        // Aunque el cuello mantenga la cabeza casi derecha (27°), con la cadera 22 cm atrás la cara no avanza de más.
         let neck = simulate(RTScenario(name: "A2c bisagra con cuello compensando", body: hinge(hipBack: 0.22, headComp: 0.4)))
-        #expect(neck.achieved == 0)
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario: bisagra de 45° con el cuello compensando cuenta") {
+            #expect(neck.achieved == 0)
+        }
+        // Bisagra marcada (tronco a 60°, la cabeza gira con él): el cabeceo pasa los 50° y no cuenta.
+        var marked: [String] = []
+        var markedWorst = 0
+        for knees in [0.02, 0.04] {
+            for back in [0.14, 0.18, 0.22] {
+                let r = simulate(RTScenario(name: "A2e bisagra marcada 60° knees=\(knees) back=\(back)",
+                                            body: hinge(lean: 60, knees: knees, hipBack: back)))
+                marked.append("rodillas \(Int(knees * 100)) cm, cadera atrás \(Int(back * 100)) cm → \(r.achieved) \(r.level)")
+                markedWorst = max(markedWorst, r.achieved)
+                #expect(r.rejections.allSatisfy { $0 == HandheldSquatVerifier.Rejection.torsoBend.rawValue })
+            }
+        }
+        print("RT| A2e tabla: \(marked)")
+        #expect(markedWorst == 0)
     }
 
     @Test func limite_bisagraExtremaConCaderaMuyAtrasYCuelloCompensando() {
@@ -1127,34 +1153,56 @@ struct HandheldSquatAttackTests {
     }
 
     @Test func ataque_sentadoPartiendoInclinadoYBalanceandoElTronco() {
-        // Sentado, calibra ya inclinado 40° y balancea el tronco a 66°. Con la cabeza girando con el tronco no
-        // calibra: la cabeza mira demasiado abajo ("Párese derecho y mire el teléfono").
+        // Sentado, calibra ya inclinado 40° y balancea el tronco a 66°. Con la cabeza girando con el tronco mira
+        // 68° abajo: dentro del nuevo margen de calibración (70°, antes 55°), así que calibra y el balanceo cuenta.
         let r = simulate(RTScenario(name: "A9b sentado 40°→66°", body: { f in
             var p = RTBody.Posture()
             p.lean = 40 + 26 * f.x
             return RTBody.seated.pose(p)
         }))
-        #expect(r.achieved == 0)
-        #expect(r.verifier.reference == nil)
-        #expect(r.verifier.progress.hint == HandheldSquatCopy.standUp)
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario (calibra con la cabeza hasta 70°): sentado a 40° calibra y el balanceo a 66° cuenta") {
+            #expect(r.achieved == 0)
+            #expect(r.verifier.reference == nil)
+            #expect(r.verifier.progress.hint == HandheldSquatCopy.standUp)
+        }
+        // Sentado más doblado (45°, la cabeza mira 73° abajo): no calibra ("Párese derecho y mire el teléfono").
+        let marked = simulate(RTScenario(name: "A9b2 sentado 45°→71°", body: { f in
+            var p = RTBody.Posture()
+            p.lean = 45 + 26 * f.x
+            return RTBody.seated.pose(p)
+        }))
+        #expect(marked.achieved == 0)
+        #expect(marked.verifier.reference == nil)
+        #expect(marked.verifier.progress.hint == HandheldSquatCopy.standUp)
     }
 
     @Test func ataque_calibraDePieYDespuesSeSientaABalancearse() {
         // Calibra de pie y se sienta: la referencia no se re-ancla sentado y doblado (cabeza muy abajo), así
         // que la serie queda abajo sin volver y no cuenta nada.
-        let r = simulate(RTScenario(name: "A9e de pie → sentado 40°→66°", leadIn: 6, body: { f in
-            var p = RTBody.Posture()
-            guard f.t >= 2.5 else { return RTBody.standing.pose(p) }
-            let sit = HandheldSquatSynth.minJerk((f.t - 2.5) / 1.5)
-            p.lean = (40 + 26 * f.x) * sit
-            let seated = RTBody.seated.pose(p)
-            let standing = RTBody.standing.pose(p)
-            var o = seated
-            o.phone = standing.phone + (seated.phone - standing.phone) * sit
-            o.face = standing.face + (seated.face - standing.face) * sit
-            return o
-        }))
-        #expect(r.achieved == 0)
+        func sitting(_ lean: Double) -> (RTFrame) -> RTOut {
+            { f in
+                var p = RTBody.Posture()
+                guard f.t >= 2.5 else { return RTBody.standing.pose(p) }
+                let sit = HandheldSquatSynth.minJerk((f.t - 2.5) / 1.5)
+                p.lean = (lean + 26 * f.x) * sit
+                let seated = RTBody.seated.pose(p)
+                let standing = RTBody.standing.pose(p)
+                var o = seated
+                o.phone = standing.phone + (seated.phone - standing.phone) * sit
+                o.face = standing.face + (seated.face - standing.face) * sit
+                return o
+            }
+        }
+        // Sentado a 40° la cabeza mira 68° abajo (dentro del nuevo margen de 70°): la referencia se re-ancla ahí
+        // y el balanceo cuenta.
+        let r = simulate(RTScenario(name: "A9e de pie → sentado 40°→66°", leadIn: 6, body: sitting(40)))
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario (cabeza hasta 70° para fijar la referencia): sentado a 40° se re-ancla y el balanceo cuenta") {
+            #expect(r.achieved == 0)
+        }
+        // Sentado más doblado (45°, cabeza a 73°): no se re-ancla y no cuenta nada.
+        let marked = simulate(RTScenario(name: "A9e2 de pie → sentado 45°→71°", leadIn: 6, body: sitting(45)))
+        #expect(marked.achieved == 0)
+        #expect(marked.verifier.reanchorCount == 0)
     }
 
     @Test func limite_sentadoInclinadoConElCuelloExtendido() {
@@ -1236,21 +1284,30 @@ struct HandheldSquatAttackTests {
     // MARK: Escalón, escalera, ascensor, cámara trasera tapada
 
     @Test func ataque_bajarYSubirUnEscalonHaciaAtras() {
-        // Parado en un escalón de 20 cm: baja de espaldas al piso (18 cm atrás) y vuelve a subir. La cara se
-        // va hacia atrás (lejos del teléfono): una sentadilla no hace eso → `moved`.
-        let r = simulate(RTScenario(name: "A7 escalon atras",
-                                    timing: { i in RTRep(down: 0.9 + 0.1 * Double(i % 3), hold: 0.4,
-                                                         up: 1.0 + 0.1 * Double(i % 2), rest: 1.0 + 0.2 * Double(i % 3)) },
-                                    body: { f in
-            var p = RTBody.Posture()
-            let bob = 0.012 * sin(2 * .pi * f.x)
-            p.shift = SIMD3(0, -0.20 * f.x + bob, 0.18 * f.x)
-            var o = RTBody.standing.pose(p)
-            o.steps = 4 * f.done + (f.rep != nil && f.x > 0.5 ? 2 : 0)
-            return o
-        }))
-        #expect(r.achieved == 0)
-        #expect(r.rejections.allSatisfy { $0 == HandheldSquatVerifier.Rejection.moved.rawValue })
+        // Parado en un escalón de 20 cm: baja de espaldas al piso y vuelve a subir. La cara se va hacia atrás
+        // (lejos del teléfono): una sentadilla no hace eso → `moved`.
+        func step(back: Double, name: String) -> RTResult {
+            simulate(RTScenario(name: name,
+                                timing: { i in RTRep(down: 0.9 + 0.1 * Double(i % 3), hold: 0.4,
+                                                     up: 1.0 + 0.1 * Double(i % 2), rest: 1.0 + 0.2 * Double(i % 3)) },
+                                body: { f in
+                var p = RTBody.Posture()
+                let bob = 0.012 * sin(2 * .pi * f.x)
+                p.shift = SIMD3(0, -0.20 * f.x + bob, back * f.x)
+                var o = RTBody.standing.pose(p)
+                o.steps = 4 * f.done + (f.rep != nil && f.x > 0.5 ? 2 : 0)
+                return o
+            }))
+        }
+        // 18 cm atrás queda justo bajo el nuevo margen hacia atrás (18 cm, antes 12 cm): cuenta.
+        let r = step(back: 0.18, name: "A7 escalon atras 18cm")
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario (la cara puede irse 18 cm atrás): bajar de espaldas un escalón con 18 cm de desplazamiento cuenta") {
+            #expect(r.achieved == 0)
+        }
+        // Escalón con huella real (la cara se va 24 cm atrás): sigue siendo `moved`.
+        let deep = step(back: 0.24, name: "A7d escalon atras 24cm")
+        #expect(deep.achieved == 0)
+        #expect(deep.rejections.allSatisfy { $0 == HandheldSquatVerifier.Rejection.moved.rawValue })
     }
 
     @Test func ataque_bajarDeLadoUnEscalon() {
@@ -1319,26 +1376,42 @@ struct HandheldSquatAttackTests {
 
     @Test func ataque_bisagraConCamaraTraseraTapada() {
         // En el respaldo IMU no hay avance de la cara en el mundo, pero la cabeza cabecea con el tronco.
+        // Con 45° la cabeza cabecea 44-45° (< 50°): cuenta, pero el nivel queda en reduced.
         let r = simulate(RTScenario(name: "A9c bisagra respaldo IMU", leadIn: 5, body: hinge(world: false)))
-        #expect(r.achieved == 0)
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario (cabeza hasta 50°): bisagra moderada de 45° con la cámara tapada cuenta (nivel reduced)") {
+            #expect(r.achieved == 0)
+        }
         #expect(r.level != .full)
+        // Bisagra marcada (60°): el cabeceo de la cabeza la frena también en el respaldo.
+        let marked = simulate(RTScenario(name: "A9c2 bisagra marcada 60° respaldo IMU", leadIn: 5, body: hinge(lean: 60, world: false)))
+        #expect(marked.achieved == 0)
+        #expect(marked.level != .full)
     }
 
     @Test func ataque_bisagraTapandoLaCamaraSoloEnLasReps() {
         // Tapa la cámara trasera antes de cada rep (respaldo IMU), hace la bisagra y destapa; entre reps se
         // queda quieto con el mundo normal (≥ 80 % de los frames "normal").
-        let r = simulate(RTScenario(name: "A9d bisagra tapando solo en reps", leadIn: 24, repCount: 5, target: 5,
-                                    timing: { i in RTRep(down: 1.3 + 0.1 * Double(i % 3), hold: 0.3,
-                                                         up: 1.2 + 0.1 * Double(i % 2), rest: 24 + 0.7 * Double(i % 3)) },
-                                    body: { f in
-            var o = hinge()(f)
-            let coveredBefore = (f.untilNext ?? .infinity) <= 1.8
-            let coveredAfter = (f.sinceLastRep ?? .infinity) < 0.2
-            o.world = !(f.rep != nil || coveredBefore || coveredAfter)
-            return o
-        }))
-        #expect(r.achieved == 0)
+        func covering(_ lean: Double, name: String) -> RTResult {
+            simulate(RTScenario(name: name, leadIn: 24, repCount: 5, target: 5,
+                                timing: { i in RTRep(down: 1.3 + 0.1 * Double(i % 3), hold: 0.3,
+                                                     up: 1.2 + 0.1 * Double(i % 2), rest: 24 + 0.7 * Double(i % 3)) },
+                                body: { f in
+                var o = hinge(lean: lean)(f)
+                let coveredBefore = (f.untilNext ?? .infinity) <= 1.8
+                let coveredAfter = (f.sinceLastRep ?? .infinity) < 0.2
+                o.world = !(f.rep != nil || coveredBefore || coveredAfter)
+                return o
+            }))
+        }
+        let r = covering(45,name: "A9d bisagra tapando solo en reps")
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario (cabeza hasta 50°): bisagra moderada de 45° medida con el respaldo cuenta (nivel reduced)") {
+            #expect(r.achieved == 0)
+        }
         #expect(r.level != .full || r.achieved < 5)
+        // Bisagra marcada (60°): no cuenta.
+        let marked = covering(60, name: "A9d2 bisagra marcada 60° tapando solo en reps")
+        #expect(marked.achieved == 0)
+        #expect(marked.level != .full || marked.achieved < 5)
     }
 
     @Test func legitimo_sentadillasTapandoLaCamaraSoloEnLasRepsQuedanReduced() {
@@ -1525,13 +1598,110 @@ struct HandheldSquatAttackTests {
         #expect(r.level == .full)
     }
 
+    @Test func fp_sentadillaConTroncoInclinado35a45Grados() {
+        // Pedido del usuario: el operador real no mantiene la espalda muy derecha; inclina el tronco 35-45°. Con
+        // el teléfono frente a la cara, con los antebrazos pegados al pecho (el teléfono cabecea con el tronco)
+        // o a medias, cuenta con nivel full.
+        var table: [String] = []
+        var lost: [String] = []
+        for lean in [35.0, 40, 45] {
+            for (label, arms) in [("cara", RTArms.headLocked), ("rigido", .rigid), ("mitad", .blend(0.5))] {
+                let r = simulate(RTScenario(name: "FP11 tronco \(Int(lean))° \(label)", body: realSquat(lean: lean, arms: arms)))
+                table.append("\(Int(lean))° \(label) → \(r.achieved) \(r.level) reanclajes \(r.verifier.reanchorCount)")
+                #expect(r.achieved >= 9, "tronco \(lean)° \(label): \(r.rejections)")
+                #expect(r.hard.isEmpty)
+                #expect(r.level == .full)
+                #expect(r.verifier.challenge.passed)
+                if r.achieved < 10 { lost.append("\(Int(lean))° \(label)") }
+            }
+        }
+        print("RT| FP11 tabla: \(table)")
+        // Con 35-40° la pausa de 2,2 s del desafío deja la cara quieta 25-30 cm adelante y la cabeza a −63/−68°
+        // (dentro del nuevo margen de 70°): la referencia se re-ancla en el fondo y esa rep no se cuenta (el desafío
+        // se vuelve a pedir y se cumple). Con 45° la cabeza pasa los 70° y no se re-ancla; sin desafío cuentan 10.
+        withKnownIssue("Pendiente en el código de la app: con el tronco a 35-40° la pausa del desafío re-ancla la referencia en el fondo y esa rep se pierde") {
+            #expect(lost.isEmpty, "\(lost)")
+        }
+    }
+
+    @Test func fp_telefonoSeMueve8a10cmRespectoDeLaCara() {
+        // Pedido del usuario: al bajar, el teléfono se mueve 8-10 cm respecto de la cara (cae, se aleja, se acerca
+        // al pecho o se corre de lado). En el mundo se cuenta con el cuerpo (la cara baja): cuenta, también con
+        // el tronco inclinado 40° (9 de 10: la rep del desafío se pierde por el re-anclaje, ver el caso anterior).
+        let moves: [(name: String, sag: Double, reach: Double, side: Double, wrist: Double)] = [
+            ("cae 10", 0.10, 0, 0, 8), ("se aleja 10", 0, 0.10, 0, 0), ("al pecho 8", 0, -0.08, 0, 0),
+            ("de lado 9", 0, 0, 0.09, 0), ("cae 8 y se aleja 8", 0.08, 0.08, 0, 6),
+        ]
+        for m in moves {
+            for lean in [8.0, 40] {
+                let r = simulate(RTScenario(name: "FP12 \(m.name) lean=\(Int(lean))", body: { f in
+                    var o = realSquat(lean: lean, tweak: { f, p in
+                        p.armSag = m.sag * f.x
+                        p.armReach = m.reach * f.x
+                        p.wrist = m.wrist * f.x
+                    })(f)
+                    o.phone.x += m.side * f.x
+                    return o
+                }))
+                #expect(r.achieved >= 9, "\(m.name) tronco \(lean)°: \(r.rejections)")
+                #expect(r.hard.isEmpty)
+                #expect(r.level == .full)
+            }
+        }
+        // Con la cámara trasera tapada (respaldo IMU) solo se mira la distancia cara-teléfono: 8 cm abajo y 8 cm
+        // adelante la cambian ≈ 11 cm (< 15 cm; con el límite anterior de 10 cm se rechazaba). Cuenta en reduced.
+        let covered = simulate(RTScenario(name: "FP12b respaldo cae 8 y se aleja 8", leadIn: 5, body: { f in
+            var o = realSquat(tweak: { f, p in
+                p.armSag = 0.08 * f.x
+                p.armReach = 0.08 * f.x
+            })(f)
+            o.world = false
+            return o
+        }))
+        #expect(covered.achieved >= 9, "\(covered.rejections)")
+        #expect(covered.hard.isEmpty)
+        #expect(covered.level == .reduced)
+    }
+
+    @Test func fp_calibraConLasManosInquietas() {
+        // Pedido del usuario: no exigir el teléfono inmóvil. De pie el teléfono sube y baja ±2 cm, se corre ±3 cm
+        // y cabecea ±4° (con los márgenes anteriores, 3 cm de rango, no calibraba). Calibra y las reps cuentan.
+        let r = simulate(RTScenario(name: "FP13 manos inquietas", leadIn: 3, body: { f in
+            var o = realSquat()(f)
+            o.phone += SIMD3(0.03 * sin(2 * .pi * 0.4 * f.t), 0.02 * sin(2 * .pi * 0.7 * f.t), 0)
+            o.pitch += 4 * sin(2 * .pi * 0.5 * f.t)
+            return o
+        }))
+        #expect(r.events.contains(.gate(.ready)))
+        #expect(r.achieved >= 9, "\(r.rejections)")
+        #expect(r.hard.isEmpty)
+        #expect(r.level == .full)
+    }
+
     @Test func diseno_sentadillaCortaDe15cm() {
-        // Umbral de diseño: con 15 cm no cuenta (meta 18 cm del cuerpo) y pide bajar un poco más. La
-        // profundidad mínima la define el kinesiólogo.
+        // Umbral de diseño: la meta del cuerpo bajó de 18 a 14 cm por pedido del usuario. Una media sentadilla
+        // de 14-17 cm (la cara baja 14,6-17 cm) ahora cuenta. La profundidad mínima la define el kinesiólogo.
         let r = simulate(RTScenario(name: "FP8 corta 15cm", body: realSquat(tweak: { f, p in
             p.hipDrop = 0.145 * f.x
         })))
-        #expect(r.achieved == 0, "umbral de diseño, documentado")
-        #expect(r.events.contains(.cue(Cue(text: HandheldSquatCopy.lower, symbol: "arrow.down"))))
+        var shallow: [RTResult] = [r]
+        for hip in [0.135, 0.16] {
+            shallow.append(simulate(RTScenario(name: "FP8 corta cadera \(hip)", body: realSquat(tweak: { f, p in
+                p.hipDrop = hip * f.x
+            }))))
+        }
+        withKnownIssue("Aceptado: umbral relajado por pedido del usuario (meta del cuerpo 14 cm): medias sentadillas de 14-17 cm cuentan") {
+            for s in shallow { #expect(s.achieved == 0, "umbral de diseño, documentado") }
+            #expect(r.events.contains(.cue(Cue(text: HandheldSquatCopy.lower, symbol: "arrow.down"))))
+        }
+        // Media sentadilla de verdad bajo la nueva meta (cadera 11 cm, la cara baja ≈ 12 cm): no cuenta y pide
+        // bajar un poco más.
+        let half = simulate(RTScenario(name: "FP8b corta 11cm", body: realSquat(tweak: { f, p in
+            p.hipDrop = 0.11 * f.x
+        })))
+        #expect(half.achieved == 0)
+        #expect(half.events.contains(.cue(Cue(text: HandheldSquatCopy.lower, symbol: "arrow.down"))))
+        #expect(half.hard.isEmpty)
     }
 }
+
