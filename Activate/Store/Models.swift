@@ -77,7 +77,10 @@ nonisolated struct DailyCheckIn: Codable, Identifiable, Sendable, Hashable {
     var answers: [Bool]
     /// Respuestas a `RDQ6.alarmQuestions` cuando se preguntaron (vacío si no).
     var alarmAnswers: [Bool] = []
+    /// Zona principal (la primera marcada). Se mantiene por compatibilidad con datos antiguos.
     var zone: PainZone
+    /// Todas las zonas marcadas (selección múltiple). `nil` en registros antiguos: usar `allZones`.
+    var zones: [PainZone]? = nil
     var moment: Moment?
     var context: PainContext?
 
@@ -151,6 +154,8 @@ nonisolated struct PauseSession: Codable, Identifiable, Sendable, Hashable {
     var checkInScore: Int? = nil
     var checkInAnswers: [Bool] = []
     var zone: PainZone = .lumbar
+    /// Todas las zonas del check-in (selección múltiple). `nil` en sesiones antiguas: usar `allZones`.
+    var zones: [PainZone]? = nil
     var postResponse: PostResponse? = nil
     var activities: [ActivityResult] = []
     /// Vale para racha / Doblete / Tiro limpio.
@@ -218,6 +223,8 @@ nonisolated struct PlayerProfile: Codable, Sendable, Hashable {
     var rosterStart: Date
     var shiftType: ShiftType = .day
     var usualZone: PainZone = .lumbar
+    /// Zonas habituales (selección múltiple). `nil` en perfiles antiguos: usar `allUsualZones`.
+    var usualZones: [PainZone]? = nil
     var xp: Int = 0
     var cascos: Int = 1
     var badges: Set<Badge> = []
@@ -246,4 +253,51 @@ nonisolated struct SaveData: Codable, Sendable {
     /// Lectura del coach cacheada por día laboral (texto ya redactado).
     var statsReadingCache: [String: String] = [:]
     var lastKineSheetJSON: String? = nil
+}
+
+
+// MARK: - Zonas múltiples (compatibles con datos guardados antes de la selección múltiple)
+
+extension PainZone {
+    /// Normaliza una selección: sin duplicados y en el orden de `allCases`; nunca vacía.
+    nonisolated static func normalized(_ zones: [PainZone], fallback: PainZone = .lumbar) -> [PainZone] {
+        let set = Set(zones)
+        let ordered = PainZone.allCases.filter { set.contains($0) }
+        return ordered.isEmpty ? [fallback] : ordered
+    }
+
+    /// "Espalda baja y cuello", "Espalda baja, cuello y hombro".
+    nonisolated static func listTitle(_ zones: [PainZone]) -> String {
+        let titles = normalized(zones).map(\.title)
+        guard titles.count > 1 else { return titles.first ?? "" }
+        return titles.dropLast().joined(separator: ", ") + " y " + (titles.last ?? "")
+    }
+}
+
+extension DailyCheckIn {
+    var allZones: [PainZone] { PainZone.normalized(zones ?? [zone], fallback: zone) }
+    /// Asigna la selección completa y deja `zone` como la primera.
+    mutating func setZones(_ newValue: [PainZone]) {
+        let n = PainZone.normalized(newValue, fallback: zone)
+        zones = n
+        zone = n[0]
+    }
+}
+
+extension PauseSession {
+    var allZones: [PainZone] { PainZone.normalized(zones ?? [zone], fallback: zone) }
+    mutating func setZones(_ newValue: [PainZone]) {
+        let n = PainZone.normalized(newValue, fallback: zone)
+        zones = n
+        zone = n[0]
+    }
+}
+
+extension PlayerProfile {
+    var allUsualZones: [PainZone] { PainZone.normalized(usualZones ?? [usualZone], fallback: usualZone) }
+    mutating func setUsualZones(_ newValue: [PainZone]) {
+        let n = PainZone.normalized(newValue, fallback: usualZone)
+        usualZones = n
+        usualZone = n[0]
+    }
 }

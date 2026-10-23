@@ -4,6 +4,13 @@ import SwiftUI
 
 /// Tokens planos. Liquid Glass solo en la capa funcional (CTA, HUD, chip de racha, badge de celebración).
 enum Theme {
+    /// Acento de interacción (botones, selección, anillos de progreso). Azul del cielo del rajo:
+    /// reemplaza al cobre en todos los controles. El cobre queda solo para la llama de la racha.
+    static let accent = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.42, green: 0.62, blue: 1.00, alpha: 1)
+            : UIColor(red: 0.13, green: 0.38, blue: 0.84, alpha: 1)
+    })
     static let copper = Color(red: 0.95, green: 0.55, blue: 0.25)
     static let copperDeep = Color(red: 0.80, green: 0.40, blue: 0.16)
     static let mint = Color(red: 0.45, green: 0.88, blue: 0.60)
