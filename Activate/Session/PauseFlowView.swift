@@ -139,6 +139,7 @@ private struct PauseFlowContent: View {
                      startMessage: coordinator.coachStartMessage,
                      gentle: coordinator.isGentle,
                      cameraBlocked: coordinator.cameraBlocked,
+                     excluded: coordinator.excluded,
                      onStart: { coordinator.startActivities() },
                      onClose: onClose)
                 .transition(stageTransition)

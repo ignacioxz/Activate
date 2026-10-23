@@ -50,6 +50,8 @@ final class PauseCoordinator {
     private(set) var coachBackend: CoachBackend?
     /// Sin consentimiento no se usa la cámara: el plan queda solo con pasos y pantalla.
     private(set) var cameraBlocked = false
+    /// Ejercicios del orden fijo que no entran hoy, con su razón (pantalla de plan).
+    private(set) var excluded: [PlanExclusion] = []
     /// Momento elegido en el chip "Momento" del check-in de esta pausa (nil si se reutilizó uno anterior).
     private(set) var selectedMoment: Moment?
     private(set) var results: [ActivityResult] = []
@@ -207,6 +209,9 @@ final class PauseCoordinator {
         plan = SensorBlockPlanner.ordered(filtered.activities)
         // El "por qué" lo compone Swift con lo que la persona respondió (nunca la IA).
         coachWhy = PlanWhy.compose(decision: d, checkIn: checkIn, cameraBlocked: !consent)
+        excluded = PlanExclusions.explain(recipe: recipeKind, decision: d, checkIn: checkIn, consentGiven: consent,
+                                          baseKinds: Recipes.base(recipeKind, demo: demo).activities.map(\.kind),
+                                          planKinds: plan.map(\.kind))
         coachStartMessage = nil
         coachBackend = nil
         stage = .planning
@@ -251,7 +256,13 @@ final class PauseCoordinator {
             guard let adoption = Self.adopt(proposal, current: self.plan, input: input, base: base, minutes: minutes,
                                             demo: demo, reducedTargets: reducedTargets) else { return }
             let adjusted = adoption.plan != self.plan
+            let removed = Set(self.plan.map(\.kind)).subtracting(adoption.plan.map(\.kind))
             self.plan = adoption.plan
+            self.excluded = PlanExclusions.explain(
+                recipe: self.recipeKind, decision: self.decision ?? SafetyRules.evaluate(checkIn: self.checkIn),
+                checkIn: self.checkIn, consentGiven: !self.cameraBlocked,
+                baseKinds: Recipes.base(self.recipeKind, demo: demo).activities.map(\.kind),
+                planKinds: adoption.plan.map(\.kind), coachRemoved: removed)
             self.coachWhy = PlanWhy.compose(decision: self.decision ?? SafetyRules.evaluate(checkIn: self.checkIn),
                                             checkIn: self.checkIn, cameraBlocked: self.cameraBlocked,
                                             coachAdjustedTargets: adjusted && proposal.backend == .foundationModels)

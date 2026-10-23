@@ -10,6 +10,8 @@ struct PlanView: View {
     let gentle: Bool
     /// Sin consentimiento: se quitaron las actividades de cámara.
     var cameraBlocked: Bool = false
+    /// Ejercicios que no entran hoy y por qué (calculado en Swift).
+    var excluded: [PlanExclusion] = []
     let onStart: () -> Void
     let onClose: () -> Void
 
@@ -55,6 +57,26 @@ struct PlanView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .flatCard()
                         .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
+                }
+
+                if !excluded.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("No incluidas hoy")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ForEach(excluded) { item in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label(item.kind.name, systemImage: item.kind.symbol)
+                                    .font(.subheadline.weight(.semibold))
+                                Text(item.reason)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
+                    }
+                    .flatCard()
                 }
             }
             .padding()
