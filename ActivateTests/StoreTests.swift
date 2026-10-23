@@ -227,10 +227,16 @@ struct StoreTests {
         let store = seededStore(now: n)
         let wc = store.calendar
         #expect(!store.data.sessions.isEmpty)
+        #expect(Moment.allCases.map(DemoSeed.seededRecipe(for:)) == [.relevo60, .colacion3, .relevo60, .campamento5])
+        #expect(DemoSeed.baseActivities(for: .entrada) == Recipes.base(.relevo60, demo: false).kinds)
+        #expect(DemoSeed.baseActivities(for: .salida) == Recipes.base(.relevo60, demo: false).kinds)
+        #expect(DemoSeed.baseActivities(for: .colacion) == [.pasos, .cuello, .ojos])
+        #expect(DemoSeed.baseActivities(for: .campamento) == ActivityKind.sessionOrder)
         for s in store.data.sessions {
             #expect(s.workDayKey == wc.key(for: s.startedAt))
             #expect(s.turnoKey == wc.turnoKey(for: s.startedAt))
-            #expect(s.recipe == s.moment.recipe)
+            // Historia sembrada: pausa rápida en los relevos, parcial en la colación (no `Moment.recipe`).
+            #expect(s.recipe == DemoSeed.seededRecipe(for: s.moment))
             #expect(Moment.infer(date: s.startedAt, shift: .day, calendar: wc.calendar) == s.moment)
             #expect(s.endedAt != nil && s.monotonicSeconds > 0)
             #expect(s.counted == VerificationPolicy.counts(s.activities))
@@ -399,7 +405,7 @@ struct StoreTests {
         var s = store.makeSession(moment: .colacion, startedAt: n)
         #expect(s.workDayKey == store.calendar.key(for: n))
         #expect(s.turnoKey == store.calendar.turnoKey(for: n))
-        #expect(s.recipe == .colacion3)
+        #expect(s.recipe == .campamento5)                     // cualquier momento: ruta completa
         #expect(s.checkInScore == 2 && s.checkInAnswers == checkIn.answers)
         #expect(s.zone == store.profile.usualZone)
         store.addSession(s)

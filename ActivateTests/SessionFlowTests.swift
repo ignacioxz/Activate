@@ -90,15 +90,18 @@ struct SessionFlowTests {
 
     // MARK: PauseCoordinator
 
-    /// Coordinador sobre un store en memoria. Por defecto con consentimiento (como tras el alta).
+    /// Coordinador sobre un store en memoria. Por defecto con consentimiento (como tras el alta) y ruta completa;
+    /// `quick: true` es "Solo tengo 1 minuto".
     @MainActor
-    private func makeCoordinator(moment: Moment = .colacion, consent: Bool = true) -> (PauseCoordinator, AppStore) {
+    private func makeCoordinator(moment: Moment = .colacion, quick: Bool = false, consent: Bool = true) -> (PauseCoordinator, AppStore) {
         let store = AppStore(inMemory: true)
         store.mutate { $0.profile.consentGiven = consent }
         let game = GameStore(store: store)
         let coach = CoachService()
-        return (PauseCoordinator(moment: moment, store: store, game: game, coach: coach), store)
+        return (PauseCoordinator(moment: moment, quick: quick, store: store, game: game, coach: coach), store)
     }
+
+    private let noPain = [false, false, false, false, false, false]
 
     /// Espera el cierre asíncrono (firma + registro).
     @MainActor
@@ -208,18 +211,53 @@ struct SessionFlowTests {
     }
 
     @MainActor
-    @Test func elMomentoDelCheckInMandaEnPlanYSesion() async {
-        // Se abrió como colación, pero en el chip "Momento" marcó relevo de entrada.
+    @Test func elMomentoDelCheckInMandaEnLaSesionPeroNoEnLaReceta() async {
+        // Se abrió como colación, pero en el chip "Momento" marcó relevo de entrada: cambia el momento
+        // registrado, la receta sigue siendo la ruta completa (la pausa rápida solo se elige a propósito).
         let (c, _) = makeCoordinator(moment: .colacion)
-        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
+        c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
         #expect(c.effectiveMoment == .entrada)
-        #expect(c.recipeKind == .relevo60)
-        #expect(c.plan.map(\.kind) == SensorBlockPlanner.ordered(Recipes.base(.relevo60, demo: false).activities).map(\.kind))
+        #expect(c.recipeKind == .campamento5)
+        #expect(c.plan.map(\.kind) == ActivityKind.sessionOrder)
         c.startActivities()
         while case .activity = c.stage { c.skipCurrent() }
         c.submitPost(.mejor)
         await waitForReward(c)
         #expect(c.session?.moment == .entrada)
+        #expect(c.session?.recipe == .campamento5)
+    }
+
+    @MainActor
+    @Test func rutaCompletaSalvoPausaRapidaExplicita() {
+        for moment in Moment.allCases {
+            let (full, _) = makeCoordinator(moment: moment)
+            #expect(full.recipeKind == .campamento5, "\(moment)")
+            full.submitCheckIn(answers: noPain, zones: [.lumbar], moment: moment)
+            #expect(full.plan.map(\.kind) == ActivityKind.sessionOrder, "\(moment)")
+            #expect(full.excluded.isEmpty, "\(moment)")
+            let (quick, _) = makeCoordinator(moment: moment, quick: true)
+            #expect(quick.recipeKind == .relevo60, "\(moment)")
+            quick.submitCheckIn(answers: noPain, zones: [.lumbar], moment: moment)
+            #expect(quick.plan.map(\.kind) == [.cuello, .ojos], "\(moment)")
+        }
+    }
+
+    @MainActor
+    @Test func soloTengoUnMinutoEsLaPausaRapidaAunqueCambieElMomento() async {
+        // "Solo tengo 1 minuto" (quick: true): el chip de momento cambia el momento, no la receta.
+        let (c, _) = makeCoordinator(moment: .colacion, quick: true)
+        c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .campamento)
+        #expect(c.effectiveMoment == .campamento)
+        #expect(c.recipeKind == .relevo60)
+        #expect(c.plan.map(\.kind) == [.cuello, .ojos])
+        #expect(c.excluded.map(\.kind) == [.pasos, .sentadilla, .stroop, .extensionLumbar])
+        #expect(c.excluded.allSatisfy { $0.reason == PlanExclusions.relevo })
+        #expect(PlanExclusions.relevo == "Eligió la pausa rápida de 1 minuto.")
+        c.startActivities()
+        while case .activity = c.stage { c.skipCurrent() }
+        c.submitPost(.igual)
+        await waitForReward(c)
+        #expect(c.session?.moment == .campamento)
         #expect(c.session?.recipe == .relevo60)
     }
 
@@ -232,7 +270,8 @@ struct SessionFlowTests {
         let c = PauseCoordinator(moment: .colacion, store: store, game: GameStore(store: store), coach: CoachService())
         c.continueWithExistingCheckIn()
         #expect(c.effectiveMoment == .colacion)
-        #expect(c.recipeKind == .colacion3)
+        #expect(c.recipeKind == .campamento5)                         // ruta completa
+        #expect(c.plan.map(\.kind) == ActivityKind.sessionOrder)
     }
 
     // MARK: Consentimiento (segunda barrera)
@@ -249,10 +288,11 @@ struct SessionFlowTests {
     }
 
     @MainActor
-    @Test func sinConsentimientoElRelevoQuedaConStroop() {
-        // Relevo = cuello + ojos (ambos con cámara): queda el Stroop, que solo usa la pantalla.
-        let (c, _) = makeCoordinator(moment: .entrada, consent: false)
-        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
+    @Test func sinConsentimientoLaPausaRapidaQuedaConStroop() {
+        // Pausa rápida = cuello + ojos (ambos con cámara): queda el Stroop, que solo usa la pantalla.
+        let (c, _) = makeCoordinator(moment: .entrada, quick: true, consent: false)
+        c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
+        #expect(c.recipeKind == .relevo60)
         #expect(c.plan.map(\.kind) == [.stroop])
         #expect(c.plan.first?.target == ActivityKind.stroop.defaultTarget)
         #expect(c.cameraBlocked)
@@ -272,9 +312,13 @@ struct SessionFlowTests {
     @MainActor
     @Test func conConsentimientoNoSeBloqueaLaCamara() {
         let (c, _) = makeCoordinator(moment: .entrada, consent: true)
-        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
+        c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
         #expect(!c.cameraBlocked)
-        #expect(c.plan.map(\.kind) == [.cuello, .ojos])
+        #expect(c.plan.map(\.kind) == ActivityKind.sessionOrder)
+        let (quick, _) = makeCoordinator(moment: .entrada, quick: true, consent: true)
+        quick.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
+        #expect(!quick.cameraBlocked)
+        #expect(quick.plan.map(\.kind) == [.cuello, .ojos])
     }
 
     @Test func consentimientoFiltraTiposPermitidos() {
@@ -309,18 +353,41 @@ struct SessionFlowTests {
     }
 
     @Test func iaAdoptaMetasSoloSiValida() {
-        let base = Recipes.base(.colacion3, demo: false)
+        let base = Recipes.base(.campamento5, demo: false)
         let current = SensorBlockPlanner.ordered(base.activities)
         let i = input(base: base, moment: .colacion, gentle: false)
+        let minutes = RecipeKind.campamento5.minutes
         let good = PausePlan(activities: [a(.cuello, 12), a(.pasos, 200)], reasoning: "", why: "Hoy más cuello.",
                              startMessage: "Vamos, Marco.", backend: .foundationModels)
-        let adopted = PauseCoordinator.adopt(good, current: current, input: i, base: base, minutes: 3, demo: false, reducedTargets: false)
-        #expect(adopted?.plan.map(\.kind) == [.pasos, .cuello])   // reordenado al orden fijo de la sesión
+        let adopted = PauseCoordinator.adopt(good, current: current, input: i, base: base, minutes: minutes, demo: false, reducedTargets: false)
+        // El coach ajusta metas, no quita ejercicios: siguen los seis en el orden fijo de la sesión.
+        #expect(adopted?.plan.map(\.kind) == current.map(\.kind))
+        #expect(adopted?.plan.map(\.kind) == ActivityKind.sessionOrder)
         #expect(adopted?.plan.first?.target == 200)
+        #expect(adopted?.plan.first { $0.kind == .cuello }?.target == 12)
+        // Lo que el coach no nombró conserva la meta de la receta.
+        for kind in [ActivityKind.sentadilla, .stroop, .ojos, .extensionLumbar] {
+            #expect(adopted?.plan.first { $0.kind == kind }?.target == kind.defaultTarget, "\(kind)")
+        }
         #expect(adopted?.why == "Hoy más cuello.")
         let duplicated = PausePlan(activities: [a(.cuello, 12), a(.cuello, 12)], reasoning: "", why: "x",
                                    startMessage: "y", backend: .foundationModels)
-        #expect(PauseCoordinator.adopt(duplicated, current: current, input: i, base: base, minutes: 3, demo: false, reducedTargets: false) == nil)
+        #expect(PauseCoordinator.adopt(duplicated, current: current, input: i, base: base, minutes: minutes, demo: false, reducedTargets: false) == nil)
+    }
+
+    @Test func iaNoAgregaEjerciciosFueraDelPlan() {
+        // Aunque el Stroop está permitido y su meta es válida, si no está en el plan vigente no entra.
+        let base = Recipes.base(.campamento5, demo: false)
+        let current = SensorBlockPlanner.ordered(base.activities).filter { $0.kind != .stroop }
+        let i = input(base: base, moment: .campamento, gentle: false)
+        let proposal = PausePlan(activities: [a(.stroop, 20), a(.cuello, 10)], reasoning: "", why: "Hoy más cuello.",
+                                 startMessage: "Vamos, Marco.", backend: .foundationModels)
+        #expect(PauseCoordinator.validated(proposal, input: i, base: base, minutes: RecipeKind.campamento5.minutes, demo: false) != nil)
+        let adopted = PauseCoordinator.adopt(proposal, current: current, input: i, base: base,
+                                             minutes: RecipeKind.campamento5.minutes, demo: false, reducedTargets: false)
+        #expect(adopted?.plan.map(\.kind) == current.map(\.kind))
+        #expect(adopted?.plan.contains { $0.kind == .stroop } == false)
+        #expect(adopted?.plan.first { $0.kind == .cuello }?.target == 10)
     }
 
     @Test func metasReducidasTienenTechoUnoPorUno() {
@@ -361,13 +428,16 @@ struct SessionFlowTests {
     @MainActor
     @Test func saltarTodoLlevaAlCierreYLaSesionNoCuenta() async {
         let (c, _) = makeCoordinator(moment: .entrada)
-        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
+        c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
         c.startActivities()
         let total = c.plan.count
-        #expect(total == 2)
+        #expect(total == ActivityKind.sessionOrder.count)           // ruta completa
         for i in 0..<total {
             #expect(c.stage == .activity(i))
-            #expect(c.runner != nil)
+            // Durante el relevo de cámara (cuerpo ↔ cara) todavía no hay runner; saltar igual funciona.
+            let handoff = i > 0 && SensorBlockPlanner.needsCameraHandoff(from: c.plan[i - 1].kind.sensorBlock,
+                                                                          to: c.plan[i].kind.sensorBlock)
+            #expect((c.runner == nil) == handoff, "actividad \(i)")
             c.skipCurrent()
         }
         #expect(c.stage == .postCheck)

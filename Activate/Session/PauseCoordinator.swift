@@ -486,10 +486,11 @@ final class PauseCoordinator {
         var level = VerificationPolicy.sessionLevel(results)
         if hardIntegrity { level = min(level, .suspicious) }
         let counted = VerificationPolicy.counts(results) && !simulated && !hardIntegrity && checkIn != nil && post != nil
-        // El momento del chip del check-in manda (si se respondió en esta pausa).
+        // El momento del chip del check-in manda (si se respondió en esta pausa); la receta es la de la
+        // pausa hecha (rápida si eligió "Solo tengo 1 minuto", si no la ruta completa).
         let m = effectiveMoment
         var s = PauseSession(workDayKey: cal.key(for: startedAt), turnoKey: cal.turnoKey(for: startedAt),
-                             recipe: m.recipe, moment: m, startedAt: startedAt, endedAt: .now,
+                             recipe: recipeKind, moment: m, startedAt: startedAt, endedAt: .now,
                              monotonicSeconds: monotonic, checkInScore: checkIn?.score,
                              checkInAnswers: checkIn?.answers ?? [], zone: checkIn?.zone ?? store.profile.usualZone,
                              postResponse: post, activities: results, counted: counted,

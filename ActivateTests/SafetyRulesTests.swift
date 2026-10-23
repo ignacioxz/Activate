@@ -101,10 +101,11 @@ struct SafetyRulesTests {
         #expect(d.allowed.contains(.pasos))
         #expect(d.stepTargetFactor == 0.5 && !d.gentle)
         #expect(d.reason == SafetyRules.Copy.shortWalkWhy)
-        let real = SafetyRules.apply(d, to: Recipes.base(.colacion3, demo: false))
+        // Ruta completa: solo baja la meta de pasos, no saca ejercicios.
+        let real = SafetyRules.apply(d, to: Recipes.base(.campamento5, demo: false))
         #expect(target(real, .pasos) == 125)
-        #expect(kinds(real) == [.pasos, .cuello, .ojos])
-        let demo = SafetyRules.apply(d, to: Recipes.base(.colacion3, demo: true))
+        #expect(kinds(real) == ActivityKind.sessionOrder)
+        let demo = SafetyRules.apply(d, to: Recipes.base(.campamento5, demo: true))
         #expect(target(demo, .pasos) == 15)
         #expect(target(demo, .cuello) == ActivityKind.cuello.demoTarget)
     }
@@ -148,12 +149,28 @@ struct SafetyRulesTests {
     // MARK: Recetas
 
     @Test func recetasBase() {
+        // Pausa rápida (solo si la persona elige "Solo tengo 1 minuto"): lo que cabe con el teléfono en la mano.
         #expect(kinds(Recipes.base(.relevo60, demo: false)) == [.cuello, .ojos])
-        #expect(kinds(Recipes.base(.colacion3, demo: false, cameraPoseReady: false)) == [.pasos, .cuello, .ojos])
-        #expect(kinds(Recipes.base(.colacion3, demo: false, cameraPoseReady: true)) == [.pasos, .cuello, .ojos, .extensionLumbar])
+        // Ruta completa: colación y campamento hacen todo el orden fijo, esté o no lista la cámara de cuerpo.
+        for kind in [RecipeKind.colacion3, .campamento5] {
+            for ready in [false, true] {
+                #expect(kinds(Recipes.base(kind, demo: false, cameraPoseReady: ready)) == ActivityKind.sessionOrder, "\(kind) ready=\(ready)")
+            }
+        }
         #expect(kinds(Recipes.base(.campamento5, demo: false)) == [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
-        #expect(kinds(Recipes.base(.campamento5, demo: false)) == ActivityKind.sessionOrder)
+        #expect(RecipeKind.relevo60.title == "Pausa rápida · 1 min")
+        #expect(RecipeKind.colacion3.title == "Ruta completa" && RecipeKind.campamento5.title == "Ruta completa")
+        #expect(RecipeKind.allCases.map(\.minutes) == [1, 7, 7])
         #expect(Recipes.base(.relevo60, demo: false).minutes == 1 && Recipes.base(.campamento5, demo: false).title == RecipeKind.campamento5.title)
+    }
+
+    @Test func todoMomentoHaceLaRutaCompleta() {
+        // El momento ya no elige la receta: la pausa rápida es una elección explícita, no del relevo.
+        for moment in Moment.allCases {
+            #expect(moment.recipe == .campamento5, "\(moment)")
+            #expect(moment.minutes == 7, "\(moment)")
+            #expect(kinds(Recipes.base(moment.recipe, demo: false)) == ActivityKind.sessionOrder, "\(moment)")
+        }
     }
 
     @Test func recetasSalenEnElOrdenFijoYSinRetiradas() {
@@ -230,11 +247,14 @@ struct SafetyRulesTests {
         #expect(ActivityKind.cuello.placement == "Teléfono en la mano a distancia selfie")
         #expect(ActivityKind.ojos.placement == ActivityKind.cuello.placement)
         #expect(ActivityKind.pasos.placement == "Guarde el teléfono en el bolsillo del pecho y camine")
-        #expect(ActivityKind.sentadilla.placement == "Apoye el teléfono a 2 metros, cuerpo entero en pantalla")
-        #expect(ActivityKind.extensionLumbar.placement == ActivityKind.sentadilla.placement)
+        #expect(ActivityKind.extensionLumbar.placement == "Apoye el teléfono a 2 metros, cuerpo entero en pantalla")
+        #expect(ActivityKind.extensionLumbar.placement == SensorBlock.cameraPose.placement)
+        // Sentadilla minera: por defecto con el teléfono en las manos (no sigue al bloque de cámara de cuerpo).
+        #expect(ActivityKind.sentadilla.placement == "Teléfono en las dos manos, frente al pecho")
         #expect(ActivityKind.stroop.placement == "Pantalla en la mano" && ActivityKind.respiracion.placement == "Pantalla en la mano")
         #expect(ActivityKind.cuello.gatingCopy == ["Sáquese casco y lentes.", "Mire al teléfono.", "Quieto un segundo."])
-        #expect(ActivityKind.sentadilla.gatingCopy == ["Apoye el teléfono. Aléjese.", "Lo veo entero.", "3 · 2 · 1"])
+        #expect(ActivityKind.extensionLumbar.gatingCopy == ["Apoye el teléfono. Aléjese.", "Lo veo entero.", "3 · 2 · 1"])
+        #expect(ActivityKind.sentadilla.gatingCopy == ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Baje como si se sentara."])
         #expect(ActivityKind.pasos.gatingCopy == ["Guarde el teléfono. Camine.", "No lo bloquee."])
     }
 }
@@ -286,8 +306,12 @@ struct SensorBlockPlannerTests {
     @Test func flattenEsInversoDeOrderParaListasOrdenadas() {
         let ordered = Recipes.base(.campamento5, demo: true).activities
         #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(ordered)) == ordered)
-        let colacion = Recipes.base(.colacion3, demo: false, cameraPoseReady: true).activities
-        #expect(SensorBlockPlanner.ordered(colacion).map(\.kind) == [.pasos, .cuello, .ojos, .extensionLumbar])
+        let rapida = Recipes.base(.relevo60, demo: false).activities
+        #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(rapida)) == rapida)
+        // Lista parcial ya ordenada (sin sentadilla ni Stroop): queda igual.
+        let parcial = [a(.pasos), a(.cuello), a(.ojos), a(.extensionLumbar)]
+        #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(parcial)) == parcial)
+        #expect(SensorBlockPlanner.ordered(parcial).map(\.kind) == [.pasos, .cuello, .ojos, .extensionLumbar])
         let mixed = [a(.extensionLumbar), a(.ojos), a(.stroop), a(.pasos), a(.cuello)]
         #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(mixed)) == SensorBlockPlanner.ordered(mixed))
     }
@@ -304,13 +328,16 @@ struct SensorBlockPlannerTests {
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .pedometer, to: .face))
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .face, to: .screen))
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .face, to: .face))
-        // Campamento: sentadilla → cervical (cuerpo → cara) y pestañeo → extensión (cara → cuerpo).
-        let handoffs = SensorBlockPlanner.cameraHandoffs(Recipes.base(.campamento5, demo: false).activities)
-        #expect(handoffs.map { [$0.from, $0.to] } == [[.cameraPose, .face], [.face, .cameraPose]])
+        // Ruta completa: sentadilla → cervical (cuerpo → cara) y pestañeo → extensión (cara → cuerpo).
+        for kind in [RecipeKind.colacion3, .campamento5] {
+            let handoffs = SensorBlockPlanner.cameraHandoffs(Recipes.base(kind, demo: false).activities)
+            #expect(handoffs.map { [$0.from, $0.to] } == [[.cameraPose, .face], [.face, .cameraPose]], "\(kind)")
+        }
+        // Pausa rápida: cuello + pestañeo, un solo bloque de cara.
         #expect(SensorBlockPlanner.cameraHandoffs(Recipes.base(.relevo60, demo: false).activities).isEmpty)
-        // Colación con cámara de cuerpo: solo pestañeo → extensión lumbar.
-        let colacion = SensorBlockPlanner.cameraHandoffs(Recipes.base(.colacion3, demo: false, cameraPoseReady: true).activities)
-        #expect(colacion.map { [$0.from, $0.to] } == [[.face, .cameraPose]])
+        // Sin sentadilla: solo pestañeo → extensión lumbar.
+        let sinSentadilla = SensorBlockPlanner.cameraHandoffs([a(.pasos), a(.cuello), a(.ojos), a(.extensionLumbar)])
+        #expect(sinSentadilla.map { [$0.from, $0.to] } == [[.face, .cameraPose]])
         // Cara → pantalla → cara no suelta la cámara entre medio.
         #expect(SensorBlockPlanner.cameraHandoffs([a(.cuello), a(.stroop), a(.ojos)]).isEmpty)
     }
