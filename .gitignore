@@ -9,3 +9,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Worktrees temporales de los agentes
+.claude/
