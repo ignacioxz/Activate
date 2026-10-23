@@ -233,3 +233,129 @@ struct ComodinInfo: View {
         .accessibilityElement(children: .combine)
     }
 }
+
+// MARK: - Columnas
+
+/// Columnas de igual ancho (momentos de hoy, camino del turno): el ancho de cada columna nunca depende
+/// de su contenido, así los segmentos de `ColumnConnectors` quedan siempre entre los nodos.
+/// Su ancho ideal es el número de columnas por la columna más ancha, de modo que `ViewThatFits` pasa a
+/// la lista cuando una etiqueta ya no cabe en su columna (letra grande o pantalla angosta).
+struct EqualColumns: Layout {
+    /// Escala mínima del texto de las etiquetas (su `minimumScaleFactor`, con margen): la fila se acepta
+    /// si la etiqueta más ancha cabe encogida hasta este factor.
+    var minimumScale: CGFloat = 1
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let width: CGFloat
+        if let proposed = proposal.width, proposed.isFinite {
+            width = proposed
+        } else {
+            width = EqualColumnsMetrics.idealWidth(columnWidths: subviews.map { $0.sizeThatFits(.unspecified).width },
+                                                   minimumScale: minimumScale)
+        }
+        let column = width / CGFloat(subviews.count)
+        let height = subviews.map { $0.sizeThatFits(ProposedViewSize(width: column, height: nil)).height }.max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let column = bounds.width / CGFloat(subviews.count)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + column * CGFloat(index), y: bounds.minY),
+                          anchor: .topLeading,
+                          proposal: ProposedViewSize(width: column, height: bounds.height))
+        }
+    }
+}
+
+/// Cuentas de `EqualColumns` (puras; testeables).
+nonisolated enum EqualColumnsMetrics {
+    /// Ancho en que cabe cada columna: columnas × la más ancha × la escala mínima del texto.
+    static func idealWidth(columnWidths: [CGFloat], minimumScale: CGFloat = 1) -> CGFloat {
+        CGFloat(columnWidths.count) * (columnWidths.max() ?? 0) * min(1, max(0, minimumScale))
+    }
+}
+
+/// Etiquetas de hito ("Partió", "Doblete", "Tiro limpio") bajo su columna, sin cambiar el ancho de las
+/// columnas: la de la primera se alinea a la izquierda, la de la última a la derecha y el resto al centro.
+/// Su ancho ideal es el mínimo en que ninguna se pisa ni se sale, así `ViewThatFits` pasa a la línea de
+/// texto cuando no caben. Marque cada etiqueta con `.milestoneColumn(_:)`.
+struct MilestoneLabels: Layout {
+    let columns: Int
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let height = sizes.map(\.height).max() ?? 0
+        if let proposed = proposal.width, proposed.isFinite {
+            return CGSize(width: proposed, height: height)
+        }
+        let labels = zip(subviews, sizes).map { MilestoneRowMetrics.Item(column: $0[MilestoneColumnKey.self], width: $1.width) }
+        return CGSize(width: MilestoneRowMetrics.minimumWidth(labels, columns: columns, spacing: spacing), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let label = MilestoneRowMetrics.Item(column: subview[MilestoneColumnKey.self], width: size.width)
+            let x = MilestoneRowMetrics.leading(label, columns: columns, total: bounds.width)
+            subview.place(at: CGPoint(x: bounds.minX + x, y: bounds.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(size))
+        }
+    }
+}
+
+private nonisolated struct MilestoneColumnKey: LayoutValueKey {
+    static let defaultValue = 0
+}
+
+extension View {
+    /// Columna (0…) bajo la que va esta etiqueta de `MilestoneLabels`.
+    func milestoneColumn(_ column: Int) -> some View {
+        layoutValue(key: MilestoneColumnKey.self, value: column)
+    }
+}
+
+/// Posición de las etiquetas de hito bajo columnas iguales (puro; testeable).
+/// El borde izquierdo de cada etiqueta es lineal en el ancho total `W`: `a · W + b`.
+nonisolated enum MilestoneRowMetrics {
+    struct Item: Sendable, Equatable {
+        var column: Int
+        var width: CGFloat
+    }
+
+    /// Borde izquierdo de la etiqueta con ancho total `total`.
+    static func leading(_ label: Item, columns: Int, total: CGFloat) -> CGFloat {
+        let (a, b) = coefficients(label, columns: columns)
+        return a * total + b
+    }
+
+    /// Ancho total mínimo en que las etiquetas no se salen ni se pisan (con `spacing` entre vecinas).
+    static func minimumWidth(_ labels: [Item], columns: Int, spacing: CGFloat) -> CGFloat {
+        let sorted = labels.sorted { $0.column < $1.column }
+        var minimum: CGFloat = 0
+        for label in sorted {
+            let (a, b) = coefficients(label, columns: columns)
+            // Borde izquierdo ≥ 0.
+            if a > 0 { minimum = max(minimum, -b / a) }
+            // Borde derecho ≤ W: a · W + b + ancho ≤ W.
+            if a < 1 { minimum = max(minimum, (b + label.width) / (1 - a)) }
+        }
+        for (left, right) in zip(sorted, sorted.dropFirst()) {
+            let (a1, b1) = coefficients(left, columns: columns)
+            let (a2, b2) = coefficients(right, columns: columns)
+            // Borde derecho de la izquierda + aire ≤ borde izquierdo de la derecha. Columnas distintas: a2 > a1.
+            guard a2 > a1 else { continue }
+            minimum = max(minimum, (b1 + left.width + spacing - b2) / (a2 - a1))
+        }
+        return minimum
+    }
+
+    private static func coefficients(_ label: Item, columns: Int) -> (a: CGFloat, b: CGFloat) {
+        if label.column <= 0 { return (0, 0) }
+        if label.column >= columns - 1 { return (1, -label.width) }
+        return ((CGFloat(label.column) + 0.5) / CGFloat(columns), -label.width / 2)
+    }
+}

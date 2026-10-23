@@ -35,6 +35,16 @@ extension Badge {
         case .caminanteDelRajo: Theme.mint
         }
     }
+
+    /// Color en Hoy: solo la paleta fría (azul, celeste y menta). En Hoy nada es naranjo fuera de la llama
+    /// de la racha, así que Doblete (cobre en Perfil) va en azul y Tiro limpio (oro en Perfil) en celeste.
+    nonisolated var hoyPalette: ThemeDynamicRGB {
+        switch self {
+        case .primeraPausa, .doblete: ThemePalette.accent
+        case .relevoCumplido, .tiroLimpio: ThemePalette.sky
+        case .rajoCompleto, .caminanteDelRajo: ThemePalette.mint
+        }
+    }
 }
 
 /// Insignia de faena.
@@ -53,6 +63,8 @@ struct BadgeView: View {
     var showsTitle: Bool = true
     var earned: Bool = true
     var namespace: Namespace.ID? = nil
+    /// Relleno de la insignia ganada en lugar de `badge.color` (Hoy usa `Badge.hoyPalette`, sin cobre ni oro).
+    var fill: Color? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -61,7 +73,7 @@ struct BadgeView: View {
         case .glass:
             content
                 .padding(14)
-                .functionalGlass(tint: badge.color, cornerRadius: Theme.cardRadius)
+                .functionalGlass(tint: fill ?? badge.color, cornerRadius: Theme.cardRadius)
                 .modifier(OptionalGlassID(id: badge.id, namespace: namespace))
                 .glassEffectTransition(reduceMotion ? .materialize : .matchedGeometry)
                 .accessibilityElement(children: .combine)
@@ -91,7 +103,7 @@ struct BadgeView: View {
     private var hexagon: some View {
         ZStack {
             Hexagon()
-                .fill(earned ? badge.color : Color.gray.opacity(0.35))
+                .fill(earned ? (fill ?? badge.color) : Color.gray.opacity(0.35))
             Hexagon()
                 .scale(0.84)
                 .stroke(Color.white.opacity(earned ? 0.55 : 0.25), lineWidth: max(1.5, size * 0.03))
