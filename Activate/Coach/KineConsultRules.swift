@@ -101,6 +101,7 @@ nonisolated enum KineConsultRules {
         let byID = Dictionary(facts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let expected = min(findingsCount, facts.count)
         let corpus = groundingCorpus(facts, profile: profile)
+        let level = computedLevel(in: facts)
 
         // Lugares del modelo: (hecho, frase, pregunta del modelo en el mismo orden) o nil si repitió.
         var slots: [(fact: KineFact, sentence: String, question: String?)?] = []
@@ -115,7 +116,7 @@ nonisolated enum KineConsultRules {
                 continue
             }
             let question = proposal.questions.indices.contains(i)
-                ? cleanQuestion(proposal.questions[i], corpus: corpus, profile: profile) : nil
+                ? cleanQuestion(proposal.questions[i], corpus: corpus, profile: profile, level: level) : nil
             slots.append((fact, cleanFinding(f.sentence, fact: fact) ?? templateSentence(fact), question))
         }
         let picked = slots.compactMap { $0 }.count
@@ -156,7 +157,8 @@ nonisolated enum KineConsultRules {
         }
 
         let templateFocus = chosen.first.map(\.focus).flatMap(nonEmpty) ?? genericFocus
-        let focus = cleanProse(proposal.focus, maxWords: maxFocusWords, corpus: corpus, truncate: false) ?? templateFocus
+        let focus = cleanProse(proposal.focus, maxWords: maxFocusWords, corpus: corpus, truncate: false)
+            .flatMap { levelMentionsAreGrounded($0, level: level) ? $0 : nil } ?? templateFocus
 
         return .success(KineConsult(findings: findings, questions: questions, focus: focus, backend: .foundationModels))
     }
@@ -168,13 +170,25 @@ nonisolated enum KineConsultRules {
     ]
 
     /// Frase de un hallazgo: limpia, ≤ 20 palabras (sin recortar: una frase cortada no sirve), sin
-    /// diagnóstico ni juicios y con cifras (también escritas con letras) que estén en el hecho.
+    /// diagnóstico ni juicios y con cifras (también escritas con letras) que estén en el hecho. Ningún
+    /// hallazgo dice un número de nivel ("nivel 6", "nivel uno"): el nivel lo muestra la app.
     static func cleanFinding(_ text: String, fact: KineFact) -> String? {
-        let corpus = [fact.title, fact.value, fact.gist, fact.detail].joined(separator: " ")
+        let corpus = findingCorpus(fact)
         guard let clean = cleanProse(text, maxWords: maxFindingWords, corpus: corpus, truncate: false) else { return nil }
         let lower = clean.lowercased(), source = corpus.lowercased()
         guard !judgmentTerms.contains(where: { lower.contains($0) && !source.contains($0) }) else { return nil }
+        guard levelMentionsAreGrounded(clean, level: nil) else { return nil }
         return clean
+    }
+
+    /// Texto contra el que se anclan las cifras de un hallazgo: título, cifra, resumen y detalle del hecho.
+    /// El hecho "nivel" se ancla solo a su resumen, que no trae cifras: su detalle tiene otros números
+    /// (el nivel siguiente, los días con pausa, el porcentaje) con los que el modelo podría "dar" un
+    /// nivel equivocado ("Está en el nivel 6", "nivel ocho") que igual estaría en el corpus. La frase del
+    /// nivel va sin cifras; la cifra la pone el chip de la app ("Nivel 7 · 43 %").
+    static func findingCorpus(_ fact: KineFact) -> String {
+        if fact.id == KineFactID.nivel.rawValue { return fact.gist }
+        return [fact.title, fact.value, fact.gist, fact.detail].joined(separator: " ")
     }
 
     /// `truncate == false`: si pasa del máximo de palabras se descarta (en vez de cortarla).
@@ -193,9 +207,12 @@ nonisolated enum KineConsultRules {
     ]
 
     /// Pregunta en primera persona: entre "¿" y "?", ≤ 18 palabras sin recortar, sin el nombre ni
-    /// "el paciente" y con alguna marca de primera persona ("me", "mi", "puedo", "hago"…).
-    static func cleanQuestion(_ text: String, corpus: String, profile: PlayerProfile) -> String? {
+    /// "el paciente", con alguna marca de primera persona ("me", "mi", "puedo", "hago"…) y, si nombra un
+    /// nivel con cifra, el que calculó la app (`level`; ver `levelMentionsAreGrounded`).
+    static func cleanQuestion(_ text: String, corpus: String, profile: PlayerProfile,
+                              level: ComputedLevel? = nil) -> String? {
         guard var q = cleanProse(text, maxWords: maxQuestionWords, corpus: corpus, truncate: false) else { return nil }
+        guard levelMentionsAreGrounded(q, level: level) else { return nil }
         let lower = q.lowercased()
         let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if lower.contains("el paciente") || lower.contains("la paciente") || (!name.isEmpty && lower.contains(name)) {
@@ -261,6 +278,106 @@ nonisolated enum KineConsultRules {
         guard groups.count > 1, let first = groups.first, (1...3).contains(first.count) else { return false }
         return groups.dropFirst().allSatisfy { $0.count == 3 }
     }
+
+    // MARK: - Nivel (LevelProgress): el modelo nunca da la cifra
+
+    /// Nivel que calculó Swift (`LevelProgress`) y el siguiente, leídos de la cifra del hecho "nivel".
+    nonisolated struct ComputedLevel: Sendable, Hashable {
+        var level: Int
+        var next: Int { level + 1 }
+    }
+
+    /// El nivel de la cifra del hecho "nivel" ("Nivel 7 · 43 %" → 7; la arma `LevelProgress.shortValue`
+    /// con el nivel primero). `nil` si no hay hecho de nivel (sin pausas verificadas).
+    static func computedLevel(in facts: [KineFact]) -> ComputedLevel? {
+        guard let fact = facts.first(where: { $0.id == KineFactID.nivel.rawValue }),
+              let first = numbers(in: fact.value).first, let level = Int(first) else { return nil }
+        return ComputedLevel(level: level)
+    }
+
+    /// Una cifra pegada a "nivel"/"niveles" ("nivel 6", "nivel ocho", "séptimo nivel", "2 niveles").
+    /// `towardNext`: va como "al nivel N" o "hacia el nivel N" (así se nombra el nivel siguiente).
+    nonisolated struct LevelMention: Sendable, Hashable {
+        var value: Int
+        var towardNext: Bool
+    }
+
+    static func levelMentions(in text: String) -> [LevelMention] {
+        let tokens = text.lowercased()
+            .split(whereSeparator: { !($0.isLetter || $0.isNumber) })
+            .map(String.init)
+        func toward(before start: Int) -> Bool {
+            (start >= 1 && tokens[start - 1] == "al")
+                || (start >= 2 && tokens[start - 2] == "hacia" && tokens[start - 1] == "el")
+        }
+        var out: [LevelMention] = []
+        for (i, token) in tokens.enumerated() where token == "nivel" || token == "niveles" {
+            // Después: "nivel 6", "nivel seis", "nivel treinta y dos".
+            if let n = spelledNumber(tokens, at: i + 1) {
+                out.append(LevelMention(value: n, towardNext: toward(before: i)))
+            }
+            // Antes: "séptimo nivel", "2 niveles" ("un nivel" no es cifra: así se dice la regla).
+            if i >= 1, let n = leadingDigits(tokens[i - 1]) ?? levelNumberWords[tokens[i - 1]] {
+                out.append(LevelMention(value: n, towardNext: toward(before: i - 1)))
+            }
+        }
+        return out
+    }
+
+    /// Un nivel con cifra solo puede ser el que calculó la app, y el siguiente solo como "al nivel N" o
+    /// "hacia el nivel N". Sin nivel calculado (`nil`, o en un hallazgo), ninguna cifra junto a "nivel".
+    /// Así una pregunta como "¿Por qué sigo en el nivel 6?" no pasa con un 6 de otro hecho (los días).
+    static func levelMentionsAreGrounded(_ text: String, level: ComputedLevel?) -> Bool {
+        levelMentions(in: text).allSatisfy { m in
+            guard let level else { return false }
+            return m.value == level.level || (m.towardNext && m.value == level.next)
+        }
+    }
+
+    /// Número que empieza en `tokens[j]`: con dígitos ("7", "7º") o con letras ("siete", "veintiuno",
+    /// "treinta y dos", "ciento cinco"). `nil` si ahí no hay un número.
+    static func spelledNumber(_ tokens: [String], at j: Int) -> Int? {
+        guard tokens.indices.contains(j) else { return nil }
+        if let digits = leadingDigits(tokens[j]) { return digits }
+        guard var value = levelNumberWords[tokens[j]] else { return nil }
+        var k = j + 1
+        // "ciento cinco", "doscientos treinta y dos".
+        if value >= 100, value % 100 == 0, tokens.indices.contains(k), let rest = levelNumberWords[tokens[k]], rest < 100 {
+            value += rest
+            k += 1
+        }
+        // "treinta y dos".
+        if value % 10 == 0, value % 100 >= 30, tokens.indices.contains(k + 1), tokens[k] == "y",
+           let unit = levelNumberWords[tokens[k + 1]], unit < 10 {
+            value += unit
+        }
+        return value
+    }
+
+    /// "7" o "7º" → 7; `nil` si el token no empieza con dígitos.
+    static func leadingDigits(_ token: String) -> Int? {
+        let digits = token.prefix { $0.isASCII && $0.isNumber }
+        return digits.isEmpty ? nil : Int(digits)
+    }
+
+    /// Números con letras para nombrar un nivel: los de `numberWords` más "uno", "primer" y los mayores
+    /// (los niveles pasan de quince). Sin "un"/"una": "sube un nivel" es la regla, no una cifra.
+    static let levelNumberWords: [String: Int] = {
+        var out: [String: Int] = [:]
+        for (word, value) in numberWords { out[word] = Int(value) }
+        let more: [String: Int] = [
+            "uno": 1, "primer": 1, "primero": 1, "primera": 1, "trece": 13,
+            "dieciséis": 16, "dieciseis": 16, "diecisiete": 17, "dieciocho": 18, "diecinueve": 19, "veinte": 20,
+            "veintiuno": 21, "veintiún": 21, "veintidós": 22, "veintidos": 22, "veintitrés": 23, "veintitres": 23,
+            "veinticuatro": 24, "veinticinco": 25, "veintiséis": 26, "veintiseis": 26, "veintisiete": 27,
+            "veintiocho": 28, "veintinueve": 29, "treinta": 30, "cuarenta": 40, "cincuenta": 50, "sesenta": 60,
+            "setenta": 70, "ochenta": 80, "noventa": 90, "cien": 100, "ciento": 100, "doscientos": 200,
+            "trescientos": 300, "cuatrocientos": 400, "quinientos": 500,
+            "undécimo": 11, "undécima": 11, "duodécimo": 12, "duodécima": 12, "vigésimo": 20, "vigésima": 20,
+        ]
+        out.merge(more) { current, _ in current }
+        return out
+    }()
 
     /// Cifras que un texto general (preguntas, foco) puede usar: las de todos los hechos y el contexto
     /// que el prompt le da al modelo (turnos de 12 horas, sistema de turno).
