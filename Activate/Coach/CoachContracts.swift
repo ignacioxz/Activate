@@ -22,7 +22,7 @@ nonisolated struct PausePlan: Sendable, Codable, Hashable {
     var reasoning: String
     /// ≤ 8 palabras, p. ej. "Hoy sin sentadilla: espalda cargada."
     var why: String
-    /// ≤ 8 palabras, p. ej. "Vamos, Marco. Un minuto."
+    /// ≤ 8 palabras, p. ej. "Vamos, Marco. La ruta completa."
     var startMessage: String
     var backend: CoachBackend
 }

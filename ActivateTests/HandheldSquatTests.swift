@@ -545,12 +545,14 @@ struct HandheldSquatTests {
         #expect(runner.verifiedResult?.skipped == true)
     }
 
-    @Test func colacionLlevaSentadillaDespuesDeLosPasosYRelevoNo() {
+    @Test func todaRutaLlevaSentadillaDespuesDeLosPasos() {
         for demo in [false, true] {
-            // Pararse y sentarse va entre los pasos y la sentadilla (mismo bloque en las manos).
+            // Pararse y sentarse va entre los pasos y la sentadilla (mismo bloque en las manos), en todo momento.
             #expect(Recipes.base(.colacion3, demo: demo).kinds.prefix(3) == [.pasos, .pararseSentarse, .sentadilla])
-            #expect(!Recipes.base(.relevo60, demo: demo).kinds.contains(.sentadilla))
-            #expect(Recipes.base(.campamento5, demo: demo).kinds.contains(.sentadilla))
+            for moment in Moment.allCases {
+                #expect(Recipes.base(moment.recipe, demo: demo).kinds.prefix(3) == [.pasos, .pararseSentarse, .sentadilla],
+                        "\(moment)")
+            }
         }
     }
 }

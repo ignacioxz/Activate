@@ -14,11 +14,17 @@ struct PlanExclusionsTests {
                                       baseKinds: base.activities.map(\.kind), planKinds: plan)
     }
 
-    @Test func relevoExplicaQueNoCabe() {
-        let ex = explain(.relevo60, checkIn(Array(repeating: false, count: 6)))
-        #expect(!ex.isEmpty)
-        #expect(ex.allSatisfy { $0.reason == PlanExclusions.relevo })
-        #expect(ex.map(\.kind) == ActivityKind.inSessionOrder(ex.map(\.kind), kind: { $0 }))
+    @Test func ningunMomentoDescartaPorFaltaDeTiempo() {
+        // No hay pausa rápida: sin molestias, todo momento hace la ruta completa y no descarta nada.
+        for moment in Moment.allCases {
+            #expect(explain(moment.recipe, checkIn(Array(repeating: false, count: 6))).isEmpty, "\(moment)")
+        }
+        // La receta antigua (`relevo60`) tampoco recorta: pedirla arma la ruta completa.
+        #expect(explain(.relevo60, checkIn(Array(repeating: false, count: 6))).isEmpty)
+        // Ninguna razón habla de minutos.
+        for answers in [[false, false, false, true, false, false], [true, true, true, true, true, false]] {
+            #expect(explain(.campamento5, checkIn(answers)).allSatisfy { !$0.reason.lowercased().contains("minuto") })
+        }
     }
 
     @Test func evitaAgacharseExplicaLaSentadilla() {
@@ -39,9 +45,6 @@ struct PlanExclusionsTests {
         // Plan suave.
         let gentle = explain(.campamento5, checkIn([true, true, true, true, true, false]))
         #expect(gentle.first { $0.kind == .pararseSentarse }?.reason == PlanExclusions.gentle)
-        // Pausa rápida.
-        let quick = explain(.relevo60, checkIn(Array(repeating: false, count: 6)))
-        #expect(quick.first { $0.kind == .pararseSentarse }?.reason == PlanExclusions.relevo)
         // Sin consentimiento de cámara (la segunda barrera del coordinador la saca del plan).
         let c = checkIn(Array(repeating: false, count: 6))
         let d = SafetyRules.evaluate(checkIn: c)
@@ -52,7 +55,7 @@ struct PlanExclusionsTests {
                                                baseKinds: base.kinds, planKinds: filtered.kinds)
         #expect(noConsent.first { $0.kind == .pararseSentarse }?.reason == PlanExclusions.noConsent)
         // Toda exclusión trae su razón y va en el orden fijo.
-        for ex in [bending, gentle, quick, noConsent] {
+        for ex in [bending, gentle, noConsent] {
             #expect(ex.allSatisfy { !$0.reason.isEmpty })
             #expect(ex.map(\.kind) == ActivityKind.inSessionOrder(ex.map(\.kind), kind: { $0 }))
         }

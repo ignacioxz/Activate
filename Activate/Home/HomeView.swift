@@ -11,8 +11,6 @@ struct HomeView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var activeMoment: Moment?
-    /// La pausa abierta es la rápida de 1 minuto.
-    @State private var quickPause = false
     @State private var showPainSheet = false
     /// Pausa pedida sin consentimiento: se muestra `ConsentView` en una hoja.
     @State private var consentFor: Moment?
@@ -31,7 +29,7 @@ struct HomeView: View {
             Diagnostics.log("Hoy: la pausa se cerró")
             DailyNotice.refresh(store: store)
         }) { moment in
-            PauseFlowView(moment: moment, quick: quickPause)
+            PauseFlowView(moment: moment)
         }
         .sheet(isPresented: $showPainSheet) {
             PainNowSheet()
@@ -63,14 +61,7 @@ struct HomeView: View {
                             route: snapshot.route,
                             routeMinutes: snapshot.routeMinutes,
                             momentTitle: moment.title,
-                            onStart: {
-                                quickPause = false
-                                requestStart(moment)
-                            },
-                            onQuick: {
-                                quickPause = true
-                                requestStart(Moment.infer(date: .now, shift: store.profile.shiftType))
-                            })
+                            onStart: { requestStart(moment) })
 
                 if let moments = snapshot.moments {
                     HoyMomentsCard(moments: moments)

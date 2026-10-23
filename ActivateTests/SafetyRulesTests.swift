@@ -112,7 +112,9 @@ struct SafetyRulesTests {
         // Sin check-in o sin síntomas: va en la ruta completa, con su meta.
         #expect(target(Recipes.base(.campamento5, demo: false), .pararseSentarse) == 8)
         #expect(target(Recipes.base(.colacion3, demo: true), .pararseSentarse) == 4)
-        #expect(!kinds(Recipes.base(.relevo60, demo: false)).contains(.pararseSentarse))
+        for moment in Moment.allCases {
+            #expect(target(Recipes.base(moment.recipe, demo: false), .pararseSentarse) == 8, "\(moment)")
+        }
     }
 
     @Test func caminaDistanciasCortasReduceLaMetaDePasos() {
@@ -168,24 +170,32 @@ struct SafetyRulesTests {
     // MARK: Recetas
 
     @Test func recetasBase() {
-        // Pausa rápida (solo si la persona elige "Solo tengo 1 minuto"): lo que cabe con el teléfono en la mano.
-        #expect(kinds(Recipes.base(.relevo60, demo: false)) == [.cuello, .ojos])
-        // Ruta completa: colación y campamento hacen todo el orden fijo (el flag de cámara de cuerpo ya no
-        // cambia nada: pararse y sentarse, la sentadilla y la extensión van en las manos).
-        for kind in [RecipeKind.colacion3, .campamento5] {
+        // Toda receta es la ruta completa: todo el orden fijo (el flag de cámara de cuerpo ya no cambia nada:
+        // pararse y sentarse, la sentadilla y la extensión van en las manos).
+        for kind in RecipeKind.allCases {
             for ready in [false, true] {
                 #expect(kinds(Recipes.base(kind, demo: false, cameraPoseReady: ready)) == ActivityKind.sessionOrder, "\(kind) ready=\(ready)")
             }
         }
         #expect(kinds(Recipes.base(.campamento5, demo: false)) == [.pasos, .pararseSentarse, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
-        #expect(RecipeKind.relevo60.title == "Pausa rápida · 1 min")
         #expect(RecipeKind.colacion3.title == "Ruta completa" && RecipeKind.campamento5.title == "Ruta completa")
+        #expect(Recipes.base(.campamento5, demo: false).minutes == 7 && Recipes.base(.campamento5, demo: false).title == RecipeKind.campamento5.title)
+    }
+
+    @Test func laPausaRapidaAntiguaNuncaSeArma() {
+        // `relevo60` solo existe para leer sesiones guardadas: pedir su receta arma la ruta completa de 7 minutos.
+        let legacy = Recipes.base(.relevo60, demo: false)
+        #expect(legacy.kind == .campamento5)
+        #expect(kinds(legacy) == ActivityKind.sessionOrder)
+        #expect(legacy.minutes == 7)
+        #expect(!Moment.allCases.contains { $0.recipe == .relevo60 })
+        // Sus textos se conservan para el historial de pausas antiguas.
+        #expect(RecipeKind.relevo60.title == "Pausa rápida · 1 min")
         #expect(RecipeKind.allCases.map(\.minutes) == [1, 7, 7])
-        #expect(Recipes.base(.relevo60, demo: false).minutes == 1 && Recipes.base(.campamento5, demo: false).title == RecipeKind.campamento5.title)
     }
 
     @Test func todoMomentoHaceLaRutaCompleta() {
-        // El momento ya no elige la receta: la pausa rápida es una elección explícita, no del relevo.
+        // El momento no elige la receta y no hay pausa rápida: siempre la ruta completa.
         for moment in Moment.allCases {
             #expect(moment.recipe == .campamento5, "\(moment)")
             #expect(moment.minutes == 7, "\(moment)")
@@ -238,14 +248,14 @@ struct SafetyRulesTests {
         #expect(kinds(real) == [.pasos, .cuello, .ojos])
         #expect(target(real, .pasos) == 125 && target(real, .cuello) == 15 && target(real, .ojos) == 15)
         #expect(real.kind == .campamento5)
-        let demo = Recipes.gentle(.relevo60, demo: true)
+        let demo = Recipes.gentle(.campamento5, demo: true)
         #expect(kinds(demo) == [.pasos, .cuello, .ojos])
         #expect(target(demo, .pasos) == 15 && target(demo, .cuello) == 6 && target(demo, .ojos) == 8)
     }
 
-    @Test func relevoUsaUnSoloBloqueDeCara() {
-        let r = Recipes.base(.relevo60, demo: false)
-        #expect(SensorBlockPlanner.blocks(r.activities) == [.face])
+    @Test func cuelloYPestaneoUsanUnSoloBloqueDeCara() {
+        let r = [Recipes.assignment(.cuello, demo: false), Recipes.assignment(.ojos, demo: false)]
+        #expect(SensorBlockPlanner.blocks(r) == [.face])
     }
 
     // MARK: Copy
@@ -329,8 +339,8 @@ struct SensorBlockPlannerTests {
     @Test func flattenEsInversoDeOrderParaListasOrdenadas() {
         let ordered = Recipes.base(.campamento5, demo: true).activities
         #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(ordered)) == ordered)
-        let rapida = Recipes.base(.relevo60, demo: false).activities
-        #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(rapida)) == rapida)
+        let caraSola = [a(.cuello), a(.ojos)]
+        #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(caraSola)) == caraSola)
         // Lista parcial ya ordenada (sin sentadilla ni Stroop): queda igual.
         let parcial = [a(.pasos), a(.cuello), a(.ojos), a(.extensionLumbar)]
         #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(parcial)) == parcial)
@@ -358,7 +368,7 @@ struct SensorBlockPlannerTests {
         for kind in [RecipeKind.colacion3, .campamento5] {
             #expect(SensorBlockPlanner.cameraHandoffs(Recipes.base(kind, demo: false).activities).isEmpty, "\(kind)")
         }
-        #expect(SensorBlockPlanner.cameraHandoffs(Recipes.base(.relevo60, demo: false).activities).isEmpty)
+        #expect(SensorBlockPlanner.cameraHandoffs([a(.cuello), a(.ojos)]).isEmpty)
         #expect(SensorBlockPlanner.cameraHandoffs(Recipes.base(.colacion3, demo: false, cameraPoseReady: true).activities).isEmpty)
         // Sin sentadilla: pestañeo → extensión lumbar tampoco.
         #expect(SensorBlockPlanner.cameraHandoffs([a(.pasos), a(.cuello), a(.ojos), a(.extensionLumbar)]).isEmpty)

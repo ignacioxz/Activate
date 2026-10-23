@@ -52,7 +52,7 @@ struct ThemeGallery: View {
         }
         GallerySection("Botón secundario") {
             HStack(spacing: 12) {
-                SecondaryButton(title: "Solo 1 minuto", systemImage: "timer") {}
+                SecondaryButton(title: "Otra pausa", systemImage: "arrow.clockwise") {}
                 SecondaryButton(title: "Me duele ahora", systemImage: "bolt.heart.fill") {}
             }
             SecondaryButton(title: "Volver a responder", systemImage: "arrow.counterclockwise") {}

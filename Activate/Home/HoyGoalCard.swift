@@ -8,7 +8,6 @@ struct HoyGoalCard: View {
     let routeMinutes: Int
     let momentTitle: String
     let onStart: () -> Void
-    let onQuick: () -> Void
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showRoute = false
@@ -55,16 +54,13 @@ struct HoyGoalCard: View {
                 routeSection
             }
 
-            VStack(spacing: 2) {
-                switch goal.action {
-                case .primary(let title, let symbol):
-                    PrimaryButton(title: title, systemImage: symbol, tint: Theme.accent, action: onStart)
-                        .accessibilityHint("\(momentTitle), \(routeMinutes) minutos")
-                case .secondary(let title, let symbol):
-                    SecondaryButton(title: title, systemImage: symbol, action: onStart)
-                        .accessibilityHint("Ruta completa, \(routeMinutes) minutos")
-                }
-                QuickTextButton(title: goal.quickTitle, action: onQuick)
+            switch goal.action {
+            case .primary(let title, let symbol):
+                PrimaryButton(title: title, systemImage: symbol, tint: Theme.accent, action: onStart)
+                    .accessibilityHint("\(momentTitle), \(routeMinutes) minutos")
+            case .secondary(let title, let symbol):
+                SecondaryButton(title: title, systemImage: symbol, action: onStart)
+                    .accessibilityHint("Ruta completa, \(routeMinutes) minutos")
             }
         }
         .flatCard()

@@ -115,25 +115,6 @@ struct RewardTag: View {
     }
 }
 
-/// Botón de texto bajo la acción principal: "Solo tengo 1 minuto · hasta +68 XP" (44 pt, sin cápsula).
-struct QuickTextButton: View {
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: "timer")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Theme.accent)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, minHeight: Theme.rowHeight)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("Pausa rápida de un minuto: movilidad cervical y pestañeo")
-    }
-}
-
 /// Título de tarjeta (headline) con un dato a la derecha.
 struct HoyCardTitle: View {
     let title: String

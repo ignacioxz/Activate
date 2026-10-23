@@ -17,7 +17,7 @@ struct SessionFlowTests {
             for demo in [false, true] {
                 let base = Recipes.base(kind, demo: demo)
                 #expect(SessionPlanCheck.accepts(plan(base.activities), allowed: ActivityKind.sessionOrder, base: base,
-                                                 minutes: kind.minutes, demo: demo),
+                                                 minutes: base.minutes, demo: demo),
                         "receta \(kind) demo=\(demo) debe pasar")
             }
         }
@@ -31,11 +31,11 @@ struct SessionFlowTests {
     }
 
     @Test func rechazaRepsSobreElDoble() {
-        let base = Recipes.base(.relevo60, demo: false)
+        let base = Recipes.base(.campamento5, demo: false)
         let ok = plan([a(.cuello, 30)])
         let tooMany = plan([a(.cuello, 31)])
-        #expect(SessionPlanCheck.accepts(ok, allowed: ActivityKind.sessionOrder, base: base, minutes: 1, demo: false))
-        #expect(!SessionPlanCheck.accepts(tooMany, allowed: ActivityKind.sessionOrder, base: base, minutes: 1, demo: false))
+        #expect(SessionPlanCheck.accepts(ok, allowed: ActivityKind.sessionOrder, base: base, minutes: base.minutes, demo: false))
+        #expect(!SessionPlanCheck.accepts(tooMany, allowed: ActivityKind.sessionOrder, base: base, minutes: base.minutes, demo: false))
     }
 
     @Test func rechazaVacioDuplicadosYCero() {
@@ -46,10 +46,11 @@ struct SessionFlowTests {
     }
 
     @Test func rechazaDuracionExcedida() {
-        // Pasos (100 s mínimo) + Stroop (45 s) no caben en el relevo de 1 minuto.
-        let base = Recipes.base(.relevo60, demo: false)
+        // Pasos (100 s mínimo) + Stroop (45 s) + preparación (10 s) = 155 s: no caben en 2 minutos (150 s con tolerancia).
+        let base = Recipes.base(.campamento5, demo: false)
         let p = plan([a(.pasos, 250), a(.stroop, 40)])
-        #expect(!SessionPlanCheck.accepts(p, allowed: ActivityKind.sessionOrder, base: base, minutes: 1, demo: false))
+        #expect(!SessionPlanCheck.accepts(p, allowed: ActivityKind.sessionOrder, base: base, minutes: 2, demo: false))
+        #expect(SessionPlanCheck.accepts(p, allowed: ActivityKind.sessionOrder, base: base, minutes: base.minutes, demo: false))
     }
 
     // MARK: Orden fijo de la sesión (SensorBlockPlanner, paquete activities)
@@ -106,15 +107,14 @@ struct SessionFlowTests {
 
     // MARK: PauseCoordinator
 
-    /// Coordinador sobre un store en memoria. Por defecto con consentimiento (como tras el alta) y ruta completa;
-    /// `quick: true` es "Solo tengo 1 minuto".
+    /// Coordinador sobre un store en memoria. Por defecto con consentimiento (como tras el alta); siempre ruta completa.
     @MainActor
-    private func makeCoordinator(moment: Moment = .colacion, quick: Bool = false, consent: Bool = true) -> (PauseCoordinator, AppStore) {
+    private func makeCoordinator(moment: Moment = .colacion, consent: Bool = true) -> (PauseCoordinator, AppStore) {
         let store = AppStore(inMemory: true)
         store.mutate { $0.profile.consentGiven = consent }
         let game = GameStore(store: store)
         let coach = CoachService()
-        return (PauseCoordinator(moment: moment, quick: quick, store: store, game: game, coach: coach), store)
+        return (PauseCoordinator(moment: moment, store: store, game: game, coach: coach), store)
     }
 
     private let noPain = [false, false, false, false, false, false]
@@ -229,7 +229,7 @@ struct SessionFlowTests {
     @MainActor
     @Test func elMomentoDelCheckInMandaEnLaSesionPeroNoEnLaReceta() async {
         // Se abrió como colación, pero en el chip "Momento" marcó relevo de entrada: cambia el momento
-        // registrado, la receta sigue siendo la ruta completa (la pausa rápida solo se elige a propósito).
+        // registrado, la receta sigue siendo la ruta completa (no hay pausa rápida).
         let (c, _) = makeCoordinator(moment: .colacion)
         c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
         #expect(c.effectiveMoment == .entrada)
@@ -244,37 +244,22 @@ struct SessionFlowTests {
     }
 
     @MainActor
-    @Test func rutaCompletaSalvoPausaRapidaExplicita() {
+    @Test func todoMomentoEsLaRutaCompletaYNuncaLaPausaRapida() async {
+        // No hay pausa rápida: abra donde abra (y marque el momento que marque), la pausa es la ruta completa
+        // y la sesión guardada nunca es `relevo60`.
         for moment in Moment.allCases {
-            let (full, _) = makeCoordinator(moment: moment)
-            #expect(full.recipeKind == .campamento5, "\(moment)")
-            full.submitCheckIn(answers: noPain, zones: [.lumbar], moment: moment)
-            #expect(full.plan.map(\.kind) == ActivityKind.sessionOrder, "\(moment)")
-            #expect(full.excluded.isEmpty, "\(moment)")
-            let (quick, _) = makeCoordinator(moment: moment, quick: true)
-            #expect(quick.recipeKind == .relevo60, "\(moment)")
-            quick.submitCheckIn(answers: noPain, zones: [.lumbar], moment: moment)
-            #expect(quick.plan.map(\.kind) == [.cuello, .ojos], "\(moment)")
+            let (c, _) = makeCoordinator(moment: moment)
+            #expect(c.recipeKind == .campamento5, "\(moment)")
+            c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: moment)
+            #expect(c.plan.map(\.kind) == ActivityKind.sessionOrder, "\(moment)")
+            #expect(c.excluded.isEmpty, "\(moment)")
+            c.startActivities()
+            while case .activity = c.stage { c.skipCurrent() }
+            c.submitPost(.igual)
+            await waitForReward(c)
+            #expect(c.session?.moment == moment, "\(moment)")
+            #expect(c.session?.recipe == .campamento5, "\(moment)")
         }
-    }
-
-    @MainActor
-    @Test func soloTengoUnMinutoEsLaPausaRapidaAunqueCambieElMomento() async {
-        // "Solo tengo 1 minuto" (quick: true): el chip de momento cambia el momento, no la receta.
-        let (c, _) = makeCoordinator(moment: .colacion, quick: true)
-        c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .campamento)
-        #expect(c.effectiveMoment == .campamento)
-        #expect(c.recipeKind == .relevo60)
-        #expect(c.plan.map(\.kind) == [.cuello, .ojos])
-        #expect(c.excluded.map(\.kind) == [.pasos, .pararseSentarse, .sentadilla, .stroop, .extensionLumbar])
-        #expect(c.excluded.allSatisfy { $0.reason == PlanExclusions.relevo })
-        #expect(PlanExclusions.relevo == "Eligió la pausa rápida de 1 minuto.")
-        c.startActivities()
-        while case .activity = c.stage { c.skipCurrent() }
-        c.submitPost(.igual)
-        await waitForReward(c)
-        #expect(c.session?.moment == .campamento)
-        #expect(c.session?.recipe == .relevo60)
     }
 
     @MainActor
@@ -303,26 +288,21 @@ struct SessionFlowTests {
         #expect(c.plan.map(\.kind) == [.pasos, .stroop])
     }
 
-    @MainActor
-    @Test func sinConsentimientoLaPausaRapidaQuedaConStroop() {
-        // Pausa rápida = cuello + ojos (ambos con cámara): queda el Stroop, que solo usa la pantalla.
-        let (c, _) = makeCoordinator(moment: .entrada, quick: true, consent: false)
-        c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
-        #expect(c.recipeKind == .relevo60)
-        #expect(c.plan.map(\.kind) == [.stroop])
-        #expect(c.plan.first?.target == ActivityKind.stroop.defaultTarget)
-        #expect(c.cameraBlocked)
-    }
-
     @Test func sinConsentimientoElRespaldoEsStroopSoloSiLasReglasLoPermiten() {
-        let relevo = Recipes.base(.relevo60, demo: true)
-        let conStroop = PauseCoordinator.consentFiltered(relevo, consentGiven: false, allowed: ActivityKind.sessionOrder, demo: true)
+        // Un plan que solo trae ejercicios de cámara (cuello y pestañeo): queda el Stroop, que solo usa la pantalla.
+        let caraSola = Recipe(kind: .campamento5, activities: [Recipes.assignment(.cuello, demo: true),
+                                                               Recipes.assignment(.ojos, demo: true)])
+        let conStroop = PauseCoordinator.consentFiltered(caraSola, consentGiven: false, allowed: ActivityKind.sessionOrder, demo: true)
         #expect(conStroop.activities == [Recipes.assignment(.stroop, demo: true)])
         // Plan suave (sin Stroop permitido): la receta queda vacía, nunca vuelve la respiración.
-        let sinStroop = PauseCoordinator.consentFiltered(relevo, consentGiven: false, allowed: Recipes.gentleKinds, demo: true)
+        let sinStroop = PauseCoordinator.consentFiltered(caraSola, consentGiven: false, allowed: Recipes.gentleKinds, demo: true)
         #expect(sinStroop.activities.isEmpty)
         // Con consentimiento no se toca.
-        #expect(PauseCoordinator.consentFiltered(relevo, consentGiven: true, allowed: ActivityKind.sessionOrder, demo: true) == relevo)
+        #expect(PauseCoordinator.consentFiltered(caraSola, consentGiven: true, allowed: ActivityKind.sessionOrder, demo: true) == caraSola)
+        // Ruta completa sin consentimiento: quedan la caminata y el Stroop (sin cámara).
+        let ruta = Recipes.base(.campamento5, demo: true)
+        #expect(PauseCoordinator.consentFiltered(ruta, consentGiven: false, allowed: ActivityKind.sessionOrder, demo: true).kinds
+                == [.pasos, .stroop])
     }
 
     @MainActor
@@ -331,10 +311,6 @@ struct SessionFlowTests {
         c.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
         #expect(!c.cameraBlocked)
         #expect(c.plan.map(\.kind) == ActivityKind.sessionOrder)
-        let (quick, _) = makeCoordinator(moment: .entrada, quick: true, consent: true)
-        quick.submitCheckIn(answers: noPain, zones: [.lumbar], moment: .entrada)
-        #expect(!quick.cameraBlocked)
-        #expect(quick.plan.map(\.kind) == [.cuello, .ojos])
     }
 
     @Test func consentimientoFiltraTiposPermitidos() {

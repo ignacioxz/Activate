@@ -222,20 +222,63 @@ struct StoreTests {
         #expect(loaded.profile.allUsualZones == [.hombro])
     }
 
+    @Test func sesionesAntiguasDePausaRapidaSiguenCargando() throws {
+        // JSON guardado cuando existía la pausa rápida: la receta "relevo60" se sigue leyendo y sale en el historial.
+        let store = AppStore(inMemory: true)
+        let n = now()
+        var legacy = store.makeSession(moment: .entrada, startedAt: n)
+        legacy.recipe = .relevo60
+        legacy.endedAt = n.addingTimeInterval(60)
+        legacy.level = .full
+        legacy.counted = true
+        var save = SaveData(profile: PlayerProfile(rosterStart: n))
+        save.sessions = [legacy]
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let json = try encoder.encode(save)
+        #expect(String(decoding: json, as: UTF8.self).contains("\"relevo60\""))
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let loaded = try decoder.decode(SaveData.self, from: json)
+        let session = try #require(loaded.sessions.first)
+        #expect(session.recipe == .relevo60)
+        #expect(session.recipe.title == "Pausa rápida · 1 min" && session.recipe.minutes == 1)
+        let summary = StatsEngine.summary(data: loaded, calendar: WorkCalendar(profile: loaded.profile, calendar: cal), now: n)
+        #expect(summary.recentSessions.contains { $0.id == legacy.id && $0.recipe == .relevo60 })
+        #expect(summary.totalCountedPauses == 1)
+        // Sigue contando para la racha, pero no es una ruta completa: no suma para "Relevo cumplido".
+        #expect(GameStore.relevoPauses(in: loaded.sessions) == 0)
+    }
+
     @Test func semillaClavesCoherentesConWorkCalendar() throws {
         let n = now()
         let store = seededStore(now: n)
         let wc = store.calendar
         #expect(!store.data.sessions.isEmpty)
-        #expect(Moment.allCases.map(DemoSeed.seededRecipe(for:)) == [.relevo60, .colacion3, .relevo60, .campamento5])
-        #expect(DemoSeed.baseActivities(for: .entrada) == Recipes.base(.relevo60, demo: false).kinds)
-        #expect(DemoSeed.baseActivities(for: .salida) == Recipes.base(.relevo60, demo: false).kinds)
+        #expect(Moment.allCases.map(DemoSeed.seededRecipe(for:)) == [.campamento5, .colacion3, .campamento5, .campamento5])
+        #expect(DemoSeed.baseActivities(for: .entrada) == Recipes.base(Moment.entrada.recipe, demo: false).kinds)
+        #expect(DemoSeed.baseActivities(for: .salida) == Recipes.base(Moment.salida.recipe, demo: false).kinds)
         #expect(DemoSeed.baseActivities(for: .colacion) == [.pasos, .cuello, .ojos])
         #expect(DemoSeed.baseActivities(for: .campamento) == ActivityKind.sessionOrder)
+        #expect(DemoSeed.gentleRoute == Recipes.gentleKinds)
+        // Sin pausas rápidas: ninguna sesión sembrada es `relevo60`.
+        #expect(!store.data.sessions.contains { $0.recipe == .relevo60 })
+        // Relevo cumplido en camino (2 de 5), coherente con las sesiones y sin ganarse.
+        #expect(GameStore.relevoPauses(in: store.data.sessions) == 2)
+        #expect(!store.profile.badges.contains(.relevoCumplido))
+        // Los relevos sembrados: ruta completa (suave el día 5) con la caminata saltada, que no suma pasos ni XP.
+        let relevos = store.data.sessions.filter { $0.moment.isRelevo }
+        #expect(relevos.count == 2)
+        for s in relevos {
+            #expect(s.recipe == .campamento5 && s.counted)
+            #expect(s.activities.contains { $0.kind == .pasos && $0.skipped && !$0.completed })
+            #expect(s.activities.contains { $0.kind == .cuello && $0.completed && $0.level == .full })
+        }
         for s in store.data.sessions {
             #expect(s.workDayKey == wc.key(for: s.startedAt))
             #expect(s.turnoKey == wc.turnoKey(for: s.startedAt))
-            // Historia sembrada: pausa rápida en los relevos, parcial en la colación (no `Moment.recipe`).
+            // Historia sembrada: ruta completa en los relevos y el campamento, parcial en la colación (no `Moment.recipe`).
             #expect(s.recipe == DemoSeed.seededRecipe(for: s.moment))
             #expect(Moment.infer(date: s.startedAt, shift: .day, calendar: wc.calendar) == s.moment)
             #expect(s.endedAt != nil && s.monotonicSeconds > 0)

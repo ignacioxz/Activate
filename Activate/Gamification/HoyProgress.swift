@@ -135,8 +135,6 @@ nonisolated struct HoyGoal: Sendable, Equatable {
     var chips: [RewardChip]
     var showsRoute: Bool
     var action: HoyAction
-    /// "Solo tengo 1 minuto · hasta +68 XP"
-    var quickTitle: String
     /// "La pausa de las 14:02 no se pudo verificar. Repita cuando pueda."
     var unverifiedLine: String?
     /// VoiceOver del anillo y los textos.
@@ -153,8 +151,6 @@ nonisolated struct HoyGoal: Sendable, Equatable {
 nonisolated struct XPPreviews: Sendable, Equatable {
     /// Ruta completa del momento.
     var full: Int
-    /// "Solo tengo 1 minuto".
-    var quick: Int
 }
 
 // MARK: - Camino del turno
@@ -259,12 +255,9 @@ nonisolated enum HoyProgress {
         let facts = HoyFacts.make(data: data, calendar: calendar, now: now)
         let demo = data.demo.shortTargets
         let route = Recipes.base(facts.moment.recipe, demo: demo)
-        let quick = Recipes.base(.relevo60, demo: demo)
         let previews = XPPreviews(
             full: GameStore.previewXP(kinds: route.activities.map(\.kind), firstCountedToday: !facts.pausedToday,
-                                      doblete: facts.dobleteAvailable),
-            quick: GameStore.previewXP(kinds: quick.activities.map(\.kind), firstCountedToday: !facts.pausedToday,
-                                       doblete: facts.dobleteAvailable))
+                                      doblete: facts.dobleteAvailable))
         let badges = BadgeProgress.statuses(data: data, calendar: calendar, facts: facts)
         let earnedToday = badges.filter(\.earnedToday).map(\.badge)
         let unlockable = unlockableBadges(earned: data.profile.badges, facts: facts)
@@ -330,7 +323,6 @@ nonisolated enum HoyProgress {
 
     static func goal(facts: HoyFacts, previews: XPPreviews, unlockable: [Badge], earnedToday: [Badge],
                      sessions: [PauseSession], calendar: WorkCalendar) -> HoyGoal {
-        let quickTitle = "Solo tengo 1 minuto · hasta +\(previews.quick) XP"
         let unverified = facts.pausedToday ? nil : unverifiedLine(sessions: sessions, todayKey: facts.todayKey,
                                                                   calendar: calendar.calendar)
         let badgeChips = (facts.pausedToday ? earnedToday : unlockable).map { badge in
@@ -340,7 +332,7 @@ nonisolated enum HoyProgress {
         }
 
         if facts.kind == .descanso {
-            return restGoal(facts: facts, previews: previews, badgeChips: badgeChips, quickTitle: quickTitle,
+            return restGoal(facts: facts, previews: previews, badgeChips: badgeChips,
                             unverified: unverified, calendar: calendar)
         }
 
@@ -383,7 +375,7 @@ nonisolated enum HoyProgress {
                            ringProgress: 1, ringIsGoal: true, done: true, title: title, subtitle: subtitle,
                            chipsTitle: chips.isEmpty ? nil : doneTitle, chips: chips, showsRoute: false,
                            action: .secondary(title: "Hacer otra pausa · hasta +\(previews.full) XP", symbol: "arrow.clockwise"),
-                           quickTitle: quickTitle, unverifiedLine: nil,
+                           unverifiedLine: nil,
                            spoken: "Racha de \(days(facts.streak)). Meta de hoy: cumplida. \(title).")
         }
 
@@ -425,11 +417,11 @@ nonisolated enum HoyProgress {
                        ringProgress: 0, ringIsGoal: true, done: false, title: title, subtitle: subtitle,
                        chipsTitle: pendingTitle, chips: chips, showsRoute: true,
                        action: .primary(title: "Hacer la pausa", symbol: "play.fill"),
-                       quickTitle: quickTitle, unverifiedLine: unverified,
+                       unverifiedLine: unverified,
                        spoken: "Racha de \(days(facts.streak)). Meta de hoy: pausa pendiente. \(title).")
     }
 
-    private static func restGoal(facts: HoyFacts, previews: XPPreviews, badgeChips: [RewardChip], quickTitle: String,
+    private static func restGoal(facts: HoyFacts, previews: XPPreviews, badgeChips: [RewardChip],
                                  unverified: String?, calendar: WorkCalendar) -> HoyGoal {
         let back = nextTurnoStart(calendar: calendar, now: facts.now)
         let restDays = calendar.roster.restDays
@@ -447,7 +439,7 @@ nonisolated enum HoyProgress {
                            subtitle: "Pausa opcional hecha. \(returnLine)",
                            chipsTitle: chips.isEmpty ? nil : doneTitle, chips: chips, showsRoute: false,
                            action: .secondary(title: "Hacer otra pausa · hasta +\(previews.full) XP", symbol: "arrow.clockwise"),
-                           quickTitle: quickTitle, unverifiedLine: nil,
+                           unverifiedLine: nil,
                            spoken: "Bajada. Racha de \(days(facts.streak)), a salvo. Pausa opcional hecha.")
         }
         let chips = [RewardChip(symbol: "star.fill", text: "Pausa opcional: hasta +\(previews.full) XP", tone: .xp,
@@ -456,7 +448,7 @@ nonisolated enum HoyProgress {
                        ringIsGoal: false, done: false, title: "Racha a salvo", subtitle: returnLine,
                        chipsTitle: nil, chips: chips, showsRoute: false,
                        action: .secondary(title: "Hacer una pausa opcional", symbol: "play.fill"),
-                       quickTitle: quickTitle, unverifiedLine: unverified,
+                       unverifiedLine: unverified,
                        spoken: "Bajada. Racha de \(days(facts.streak)), a salvo. \(returnLine)")
     }
 

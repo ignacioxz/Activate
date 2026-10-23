@@ -93,7 +93,7 @@ struct NextPauseAccessory: View {
         }
     }
 
-    /// "Próxima: relevo de entrada · 1 min" (compacto: "Relevo de entrada · 1 min").
+    /// "Próxima: relevo de entrada · 7 min" (compacto: "Relevo de entrada · 7 min").
     nonisolated static func text(for moment: Moment, compact: Bool) -> String {
         let title = moment.title
         if compact { return "\(title) · \(moment.minutes) min" }

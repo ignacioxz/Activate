@@ -4,8 +4,6 @@ import SwiftUI
 /// Firma de entrada congelada: `PauseFlowView(moment:)`. Toma AppStore, GameStore y CoachService del entorno.
 struct PauseFlowView: View {
     let moment: Moment
-    /// "Solo tengo 1 minuto": pausa rápida en vez de la ruta completa.
-    var quick: Bool = false
 
     @Environment(AppStore.self) private var store
     @Environment(GameStore.self) private var game
@@ -27,8 +25,8 @@ struct PauseFlowView: View {
         .tint(Theme.accent)
         .onAppear {
             if coordinator == nil {
-                Diagnostics.log("pausa abierta momento=\(moment) rápida=\(quick)")
-                coordinator = PauseCoordinator(moment: moment, quick: quick, store: store, game: game, coach: coach)
+                Diagnostics.log("pausa abierta momento=\(moment)")
+                coordinator = PauseCoordinator(moment: moment, store: store, game: game, coach: coach)
             }
         }
         .onChange(of: scenePhase) { _, phase in
