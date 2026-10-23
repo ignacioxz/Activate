@@ -317,7 +317,7 @@ struct DemoPreflightView: View {
             moment: Moment.infer(date: .now, shift: profile.shiftType),
             minutesAvailable: RecipeKind.relevo60.minutes,
             baseRecipe: Recipes.base(.relevo60, demo: true),
-            allowedKinds: ActivityKind.allCases,
+            allowedKinds: ActivityKind.sessionOrder,
             historyLines: [],
             gentle: false)
         let clock = ContinuousClock()
