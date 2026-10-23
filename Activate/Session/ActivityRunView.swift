@@ -165,6 +165,8 @@ struct ActivityRunView: View {
         guard let outcome, !delivered else { return }
         delivered = true
         if outcome.completed {
+            // Caminata: vibración fuerte al cumplir los pasos (el teléfono suele ir guardado).
+            if assignment.kind == .pasos { Haptics.shared.goalReached() }
             withAnimation(.snappy) { showDone = true }
             Task {
                 try? await Task.sleep(for: .seconds(Self.handoffSeconds))

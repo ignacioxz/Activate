@@ -1,3 +1,4 @@
+import AudioToolbox
 import CoreHaptics
 import UIKit
 
@@ -9,7 +10,7 @@ final class Haptics {
     static let shared = Haptics()
 
     /// Intensidades y tiempos del patrón (valores iniciales; se ajustan en dispositivo).
-    enum Pattern {
+    nonisolated enum Pattern {
         static let tapIntensities: [Float] = [0.55, 0.75, 1.0]
         static let tapSharpness: [Float] = [0.35, 0.55, 0.8]
         static let tapSpacingSeconds: TimeInterval = 0.12
@@ -19,6 +20,12 @@ final class Haptics {
         static let swellSharpness: Float = 0.3
         /// Segundo "golpe" del Doblete / Tiro limpio.
         static let encoreDelaySeconds: TimeInterval = 1.0
+        /// Meta de pasos: 3 pulsos de 0,45 s a intensidad 1, separados 0,2 s, después del zumbido del sistema.
+        static let goalPulses = 3
+        static let goalPulseSeconds: TimeInterval = 0.45
+        static let goalGapSeconds: TimeInterval = 0.2
+        static let goalSharpness: Float = 0.5
+        static let goalStartDelaySeconds: TimeInterval = 0.5
     }
 
     let supportsHaptics: Bool
@@ -96,6 +103,37 @@ final class Haptics {
     func warning() {
         guard supportsHaptics else { return }
         notification.notificationOccurred(.warning)
+    }
+
+    // MARK: Meta de pasos (fuerte, para sentirla en el bolsillo)
+
+    /// Meta de pasos cumplida: tres pulsos largos e intensos (motor de háptica) y el zumbido clásico del
+    /// teléfono como refuerzo. Se siente con el teléfono en el bolsillo y la pantalla apagada por proximidad.
+    func goalReached() {
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        guard supportsHaptics else { return }
+        prepare()
+        guard let engine, engineRunning, let pattern = try? Self.goalPattern() else {
+            notification.notificationOccurred(.success)
+            return
+        }
+        do {
+            try engine.makePlayer(with: pattern).start(atTime: CHHapticTimeImmediate + Pattern.goalStartDelaySeconds)
+        } catch {
+            notification.notificationOccurred(.success)
+        }
+    }
+
+    /// Tres pulsos continuos a intensidad máxima, separados por pausas cortas.
+    nonisolated static func goalPattern() throws -> CHHapticPattern {
+        let events = (0..<Pattern.goalPulses).map { i in
+            CHHapticEvent(eventType: .hapticContinuous,
+                          parameters: [CHHapticEventParameter(parameterID: .hapticIntensity, value: 1.0),
+                                       CHHapticEventParameter(parameterID: .hapticSharpness, value: Pattern.goalSharpness)],
+                          relativeTime: Double(i) * (Pattern.goalPulseSeconds + Pattern.goalGapSeconds),
+                          duration: Pattern.goalPulseSeconds)
+        }
+        return try CHHapticPattern(events: events, parameters: [])
     }
 
     // MARK: Celebración (AHAP)
