@@ -216,8 +216,9 @@ nonisolated enum FixtureSynth {
             .root: joint(cx, Skeleton.hipY - descent),
             .leftHip: joint(cx - Skeleton.hipHalfWidth, Skeleton.hipY - descent),
             .rightHip: joint(cx + Skeleton.hipHalfWidth, Skeleton.hipY - descent),
-            .leftKnee: joint(cx - kneeSpread, Skeleton.kneeY - descent * 0.45),
-            .rightKnee: joint(cx + kneeSpread, Skeleton.kneeY - descent * 0.45),
+            // De frente la rodilla baja ≈ 0,3 de lo que baja la cadera: el muslo se acorta, la canilla casi no.
+            .leftKnee: joint(cx - kneeSpread, Skeleton.kneeY - descent * 0.3),
+            .rightKnee: joint(cx + kneeSpread, Skeleton.kneeY - descent * 0.3),
             .leftAnkle: joint(cx - Skeleton.ankleHalfWidth, Skeleton.ankleY),
             .rightAnkle: joint(cx + Skeleton.ankleHalfWidth, Skeleton.ankleY),
         ]
