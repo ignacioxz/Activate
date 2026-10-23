@@ -14,7 +14,7 @@ nonisolated enum PlanExclusions {
     static let gentle = "Plan suave: hoy su espalda está cargada."
     static let avoidsBending = "Usted marcó que evita agacharse o arrodillarse."
     static let notAdvisable = "No conviene con sus respuestas de hoy."
-    static let relevo = "No cabe en el relevo de 1 minuto."
+    static let relevo = "Eligió la pausa rápida de 1 minuto."
     static let needsPropping = "Necesita apoyar el teléfono a 2 metros: va en el campamento."
     static let campamento = "Va en el campamento, con más tiempo."
     static let coachRemoved = "El coach la dejó para otra pausa según su historial."

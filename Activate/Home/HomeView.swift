@@ -9,6 +9,8 @@ struct HomeView: View {
     @Environment(CoachService.self) private var coach
     @Environment(\.scenePhase) private var scenePhase
     @State private var activeMoment: Moment?
+    /// La pausa abierta es la rápida de 1 minuto.
+    @State private var quickPause = false
     @State private var showPainSheet = false
     /// Pausa pedida sin consentimiento: se muestra `ConsentView` en una hoja.
     @State private var consentFor: Moment?
@@ -21,7 +23,7 @@ struct HomeView: View {
         }
         .appScreen()
         .fullScreenCover(item: $activeMoment, onDismiss: { DailyNotice.refresh(store: store) }) { moment in
-            PauseFlowView(moment: moment)
+            PauseFlowView(moment: moment, quick: quickPause)
         }
         .sheet(isPresented: $showPainSheet) {
             PainNowSheet()
@@ -59,6 +61,7 @@ struct HomeView: View {
                            recipe: recipe,
                            pausedToday: game.pausedToday,
                            isRestDay: isRestDay) {
+                    quickPause = false
                     requestStart(moment)
                 }
 
@@ -103,7 +106,8 @@ struct HomeView: View {
 
     private func oneMinuteButton(fill: Bool) -> some View {
         QuickActionButton(title: "Solo tengo 1 minuto", systemImage: "timer", fill: fill) {
-            requestStart(.entrada)
+            quickPause = true
+            requestStart(Moment.infer(date: .now, shift: store.profile.shiftType))
         }
     }
 

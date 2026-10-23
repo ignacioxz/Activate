@@ -95,11 +95,22 @@ nonisolated enum DemoSeed {
     }
 
     /// Receta base por momento (misma composición que `Recipes.base`, sin depender de él).
+    /// Historia sembrada: en los relevos Marco hizo la pausa rápida y en la colación una parcial
+    /// (no depende de `Moment.recipe`, que hoy es siempre la ruta completa).
     static func baseActivities(for moment: Moment) -> [ActivityKind] {
-        switch moment.recipe {
-        case .relevo60: [.cuello, .ojos]
-        case .colacion3: [.pasos, .cuello, .ojos]
-        case .campamento5: [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
+        switch moment {
+        case .entrada, .salida: [.cuello, .ojos]
+        case .colacion: [.pasos, .cuello, .ojos]
+        case .campamento: [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
+        }
+    }
+
+    /// Receta registrada en la historia sembrada.
+    static func seededRecipe(for moment: Moment) -> RecipeKind {
+        switch moment {
+        case .entrada, .salida: .relevo60
+        case .colacion: .colacion3
+        case .campamento: .campamento5
         }
     }
 
@@ -290,7 +301,7 @@ nonisolated enum DemoSeed {
             }
             return PauseSession(workDayKey: wc.key(for: startedAt),
                                 turnoKey: wc.turnoKey(for: startedAt),
-                                recipe: moment.recipe,
+                                recipe: DemoSeed.seededRecipe(for: moment),
                                 moment: moment,
                                 startedAt: startedAt,
                                 endedAt: startedAt.addingTimeInterval(seconds),

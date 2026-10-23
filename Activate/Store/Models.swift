@@ -138,8 +138,8 @@ nonisolated enum KeyBacking: String, Codable, Sendable { case secureEnclave, sof
 nonisolated enum RecipeKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case relevo60, colacion3, campamento5
     var id: String { rawValue }
-    var title: String { switch self { case .relevo60: "Relevo · 1 min"; case .colacion3: "Colación · 3 min"; case .campamento5: "Campamento · 5 min" } }
-    var minutes: Int { switch self { case .relevo60: 1; case .colacion3: 3; case .campamento5: 5 } }
+    var title: String { switch self { case .relevo60: "Pausa rápida · 1 min"; case .colacion3, .campamento5: "Ruta completa" } }
+    var minutes: Int { switch self { case .relevo60: 1; case .colacion3, .campamento5: 7 } }
 }
 
 nonisolated struct PauseSession: Codable, Identifiable, Sendable, Hashable {

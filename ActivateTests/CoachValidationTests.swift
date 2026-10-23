@@ -86,8 +86,9 @@ struct CoachValidationTests {
     }
 
     @Test func durationExceededFails() {
-        // Relevo de 1 minuto: 15 cuello + 15 ojos + Stroop (60 s) = 90 s > 60 s.
-        let i = input(moment: .entrada)
+        // Pausa rápida de 1 minuto: 15 cuello + 15 ojos + Stroop (60 s) = 90 s > 60 s.
+        var i = input(moment: .entrada)
+        i.minutesAvailable = RecipeKind.relevo60.minutes
         let r = PlanValidator.validate([.init(id: "A5", reps: 15), .init(id: "A9", reps: 15), .init(id: "A10", reps: 40)], input: i)
         #expect(r == .failure(.durationExceeded(estimatedSeconds: 90, limitSeconds: 60)))
     }

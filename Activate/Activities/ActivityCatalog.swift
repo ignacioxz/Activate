@@ -28,11 +28,11 @@ nonisolated enum Recipes {
         let kinds: [ActivityKind]
         switch kind {
         case .relevo60:
+            // Pausa rápida (elegida por el usuario): solo lo que cabe en un minuto con el teléfono en la mano.
             kinds = [.cuello, .ojos]
-        case .colacion3:
-            kinds = [.pasos, .cuello, .ojos] + (cameraPoseReady ? [.extensionLumbar] : [])
-        case .campamento5:
-            kinds = [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
+        case .colacion3, .campamento5:
+            // Ruta completa: todo el orden fijo de la sesión.
+            kinds = ActivityKind.sessionOrder
         }
         return Recipe(kind: kind, activities: ActivityKind.inSessionOrder(kinds, kind: { $0 }).map { assignment($0, demo: demo) })
     }

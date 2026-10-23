@@ -75,8 +75,9 @@ final class PauseCoordinator {
     @ObservationIgnored private var finishedIndex = -1
     @ObservationIgnored private var restartAfterBackground = false
 
-    init(moment: Moment, store: AppStore, game: GameStore, coach: CoachService) {
+    init(moment: Moment, quick: Bool = false, store: AppStore, game: GameStore, coach: CoachService) {
         self.moment = moment
+        self.quick = quick
         self.store = store
         self.game = game
         self.coach = coach
@@ -95,7 +96,9 @@ final class PauseCoordinator {
     /// Momento vigente: el que se eligió en el check-in de esta pausa o, si no, el de apertura.
     /// Manda en la receta, en el `CoachInput` y en la sesión guardada.
     var effectiveMoment: Moment { selectedMoment ?? moment }
-    var recipeKind: RecipeKind { effectiveMoment.recipe }
+    /// "Solo tengo 1 minuto" → pausa rápida; si no, la ruta completa.
+    let quick: Bool
+    var recipeKind: RecipeKind { quick ? .relevo60 : effectiveMoment.recipe }
 
     var currentIndex: Int? {
         if case .activity(let i) = stage { return i }
@@ -246,9 +249,9 @@ final class PauseCoordinator {
         let history = StatsEngine.summary(data: store.data, calendar: store.calendar, now: .now).historyLines
         let m = effectiveMoment
         let input = CoachInput(profileName: store.profile.name, treatment: store.profile.treatment, checkIn: checkIn,
-                               moment: m, minutesAvailable: m.minutes, baseRecipe: base,
+                               moment: m, minutesAvailable: recipeKind.minutes, baseRecipe: base,
                                allowedKinds: allowed, historyLines: Array(history.prefix(10)), gentle: isGentle)
-        let minutes = m.minutes
+        let minutes = recipeKind.minutes
         planTask = Task { [weak self] in
             guard let self else { return }
             guard let proposal = await self.planWithTimeout(input) else { return }
@@ -294,7 +297,9 @@ final class PauseCoordinator {
         case .foundationModels:
             guard let accepted = validated(proposal, input: input, base: base, minutes: minutes, demo: demo,
                                            reducedTargets: reducedTargets) else { return nil }
-            return CoachAdoption(plan: SensorBlockPlanner.ordered(accepted), why: why, startMessage: start)
+            // El coach ajusta metas, no quita ni agrega ejercicios: la ruta la deciden las reglas.
+            let merged = current.map { a in accepted.first { $0.kind == a.kind }.map { ActivityAssignment(kind: a.kind, target: $0.target) } ?? a }
+            return CoachAdoption(plan: merged, why: why, startMessage: start)
         }
     }
 
