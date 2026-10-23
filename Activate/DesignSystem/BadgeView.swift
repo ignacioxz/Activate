@@ -24,10 +24,11 @@ nonisolated struct Hexagon: Shape {
 
 extension Badge {
     /// Color de marca de cada insignia (tokens de `Theme`, aislados al MainActor).
+    /// El cobre queda solo para Doblete (la llama de la racha); el resto usa la paleta fría.
     @MainActor var color: Color {
         switch self {
-        case .primeraPausa: Theme.copper
-        case .doblete: Theme.copperDeep
+        case .primeraPausa: Theme.accent
+        case .doblete: Theme.copper
         case .relevoCumplido: Theme.sky
         case .rajoCompleto: Theme.mint
         case .tiroLimpio: Theme.gold
@@ -100,6 +101,8 @@ struct BadgeView: View {
                 .opacity(earned ? 1 : 0.7)
         }
         .frame(width: size, height: size)
+        // Los tonos claros de la paleta (más saturados) dan contraste al símbolo blanco también en oscuro.
+        .environment(\.colorScheme, .light)
     }
 
     private var accessibilityText: String {

@@ -9,6 +9,10 @@ struct ActivateApp: App {
 
     init() {
         let s = AppStore()
+        #if DEBUG
+        // Argumentos de QA (-qa-seed, -qa-outdoor…): se aplican antes de crear los servicios.
+        QALaunch.current.prepare(s)
+        #endif
         let hub = SensorHub()
         let c = CoachService()
         c.override = s.data.demo.coachOverride
@@ -22,14 +26,36 @@ struct ActivateApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootGate { RootTabView() }
+            root
                 .environment(store)
                 .environment(sensors)
                 .environment(coach)
                 .environment(game)
-                .environment(\.outdoorMode, store.data.profile.outdoorMode)
-                .fontDesign(.rounded)
-                .tint(Theme.copper)
+                .environment(\.outdoorMode, outdoorMode)
+                // Modo exterior = apariencia clara siempre (sol directo); si no, sigue al sistema.
+                .preferredColorScheme(outdoorMode ? .light : nil)
+                .tint(Theme.accent)
         }
+    }
+
+    private var outdoorMode: Bool {
+        #if DEBUG
+        // La galería no depende del perfil guardado: Modo exterior solo con -qa-outdoor.
+        if QALaunch.current.gallery { return QALaunch.current.outdoor }
+        #endif
+        return store.data.profile.outdoorMode
+    }
+
+    @ViewBuilder
+    private var root: some View {
+        #if DEBUG
+        if QALaunch.current.gallery {
+            ThemeGallery(page: QALaunch.current.galleryPage)
+        } else {
+            RootGate { RootTabView(initialTab: QALaunch.current.tab ?? .home) }
+        }
+        #else
+        RootGate { RootTabView() }
+        #endif
     }
 }
