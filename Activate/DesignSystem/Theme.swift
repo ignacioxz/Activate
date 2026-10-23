@@ -178,3 +178,117 @@ struct SectionTitle: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+// MARK: - Ampliaciones del paquete "design-celebration" (solo se agrega; lo anterior no cambia).
+
+extension Theme {
+    /// Colores del confeti (cobre / menta / blanco). En apariencia clara el blanco se cambia por `night`.
+    static let confettiColors: [Color] = [copper, mint, .white]
+    static let confettiColorsLight: [Color] = [copper, mint, night]
+    /// Radio de los tiles de estadísticas (más chico que la tarjeta).
+    static let tileRadius: CGFloat = 16
+    /// Altura mínima del chip de racha (capa de vidrio).
+    static let chipHeight: CGFloat = 44
+}
+
+extension View {
+    /// Vidrio funcional con forma arbitraria (círculo del símbolo de celebración, cápsula del chip).
+    /// Degrada igual que `functionalGlass(tint:cornerRadius:)` en modo exterior / Reduce Transparency.
+    func functionalGlass<S: Shape>(tint: Color? = nil, in shape: S) -> some View {
+        modifier(FunctionalGlassShape(tint: tint, shape: shape))
+    }
+}
+
+private struct FunctionalGlassShape<S: Shape>: ViewModifier {
+    let tint: Color?
+    let shape: S
+    @Environment(\.outdoorMode) private var outdoor
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        if outdoor || reduceTransparency || contrast == .increased {
+            content
+                .background(Color(.secondarySystemBackground), in: shape)
+                .overlay(shape.stroke(Color.primary.opacity(0.25), lineWidth: 1.5))
+        } else {
+            content.glassEffect(tint.map { Glass.regular.tint($0.opacity(0.25)) } ?? .regular, in: shape)
+        }
+    }
+}
+
+/// Tile plano de estadística: título chico, valor grande (dígitos monoespaciados, transición numérica), nota opcional.
+struct StatTile: View {
+    let title: String
+    let value: String
+    var caption: String? = nil
+    var tint: Color = .primary
+    var systemImage: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                if let systemImage {
+                    Image(systemName: systemImage).foregroundStyle(tint == .primary ? Theme.copper : tint)
+                }
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Text(value)
+                .font(.title.weight(.heavy))
+                .monospacedDigit()
+                .foregroundStyle(tint)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            if let caption {
+                Text(caption)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: Theme.tileRadius))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title): \(value)\(caption.map { ". \($0)" } ?? "")")
+    }
+}
+
+/// Chip de racha (capa de vidrio). `safe == true` muestra "Racha a salvo" (bajada o casco), nunca "racha rota".
+struct StreakChip: View {
+    let streak: Int
+    var safe: Bool = false
+
+    private var text: String {
+        if safe { return "Racha a salvo" }
+        switch streak {
+        case ...0: return "Racha: parte hoy"
+        case 1: return "Racha: 1 día"
+        default: return "Racha: \(streak) días"
+        }
+    }
+
+    private var symbol: String { safe ? "shield.fill" : "flame.fill" }
+    private var color: Color { safe ? Theme.sky : (streak > 0 ? Theme.copper : .secondary) }
+
+    var body: some View {
+        Label {
+            Text(text)
+                .font(.headline)
+                .monospacedDigit()
+                .contentTransition(.numericText())
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(color)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: Theme.chipHeight)
+        .functionalGlass(tint: color, in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(safe ? "Racha a salvo" : "Racha de \(max(0, streak)) días")
+    }
+}
