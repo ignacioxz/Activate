@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-// Dueño: agente "kine-sheet".
+// Dueño: paquete "kine-ai" (antes agente "kine-sheet").
 // Exportación de la hoja: ImageRenderer (MainActor, no es Sendable) → PNG a escala 3 para WhatsApp
 // desde el campamento, y PDF de una página con render { size, draw in … } sobre un CGContext.
 // Todo ocurre en el teléfono; nada sale sin que la persona toque Compartir.
@@ -15,28 +15,22 @@ enum KineSheetExport {
     static let pngScale: CGFloat = 3
 
     /// La hoja con el entorno fijo que ImageRenderer no hereda de la jerarquía.
-    static func exportView(sheet: KineSheet, summary: StatsSummary, profile: PlayerProfile,
-                           extraAlerts: [String], now: Date) -> some View {
-        KineSheetView(sheet: sheet, summary: summary, profile: profile, extraAlerts: extraAlerts,
-                      width: exportWidth, now: now)
+    static func exportView(_ content: KineSheetContent) -> some View {
+        KineSheetView(content: content, width: exportWidth)
             .environment(\.colorScheme, .light)
             .environment(\.locale, KineSheetFormat.locale)
             .dynamicTypeSize(.large)
     }
 
-    static func pngData(sheet: KineSheet, summary: StatsSummary, profile: PlayerProfile,
-                        extraAlerts: [String], now: Date) -> Data? {
-        let renderer = ImageRenderer(content: exportView(sheet: sheet, summary: summary, profile: profile,
-                                                         extraAlerts: extraAlerts, now: now))
+    static func pngData(_ content: KineSheetContent) -> Data? {
+        let renderer = ImageRenderer(content: exportView(content))
         renderer.scale = pngScale
         renderer.isOpaque = true
         return renderer.uiImage?.pngData()
     }
 
-    static func pdfData(sheet: KineSheet, summary: StatsSummary, profile: PlayerProfile,
-                        extraAlerts: [String], now: Date) -> Data? {
-        let renderer = ImageRenderer(content: exportView(sheet: sheet, summary: summary, profile: profile,
-                                                         extraAlerts: extraAlerts, now: now))
+    static func pdfData(_ content: KineSheetContent) -> Data? {
+        let renderer = ImageRenderer(content: exportView(content))
         var result: Data?
         renderer.render { size, draw in
             var box = CGRect(origin: .zero, size: size)
@@ -64,25 +58,18 @@ nonisolated enum KineSheetExportError: Error {
 
 /// Hoja como PNG para `ShareLink`. Guarda solo valores Sendable; rasteriza en MainActor al compartir.
 nonisolated struct KineSheetPNG: Transferable, Sendable {
-    var sheet: KineSheet
-    var summary: StatsSummary
-    var profile: PlayerProfile
-    var extraAlerts: [String] = []
-    var generatedAt: Date = .now
+    var content: KineSheetContent
 
     nonisolated static var transferRepresentation: some TransferRepresentation {
         DataRepresentation(exportedContentType: .png) { item in
             try await item.render()
         }
-        .suggestedFileName { "\(KineSheetExport.fileStem(for: $0.profile)).png" }
+        .suggestedFileName { "\(KineSheetExport.fileStem(for: $0.content.profile)).png" }
     }
 
     func render() async throws -> Data {
-        let item = self
-        let data = await MainActor.run {
-            KineSheetExport.pngData(sheet: item.sheet, summary: item.summary, profile: item.profile,
-                                    extraAlerts: item.extraAlerts, now: item.generatedAt)
-        }
+        let content = self.content
+        let data = await MainActor.run { KineSheetExport.pngData(content) }
         guard let data else { throw KineSheetExportError.renderFailed }
         return data
     }
@@ -90,25 +77,18 @@ nonisolated struct KineSheetPNG: Transferable, Sendable {
 
 /// Hoja como PDF de una página (para imprimir o adjuntar a una ficha).
 nonisolated struct KineSheetPDF: Transferable, Sendable {
-    var sheet: KineSheet
-    var summary: StatsSummary
-    var profile: PlayerProfile
-    var extraAlerts: [String] = []
-    var generatedAt: Date = .now
+    var content: KineSheetContent
 
     nonisolated static var transferRepresentation: some TransferRepresentation {
         DataRepresentation(exportedContentType: .pdf) { item in
             try await item.render()
         }
-        .suggestedFileName { "\(KineSheetExport.fileStem(for: $0.profile)).pdf" }
+        .suggestedFileName { "\(KineSheetExport.fileStem(for: $0.content.profile)).pdf" }
     }
 
     func render() async throws -> Data {
-        let item = self
-        let data = await MainActor.run {
-            KineSheetExport.pdfData(sheet: item.sheet, summary: item.summary, profile: item.profile,
-                                    extraAlerts: item.extraAlerts, now: item.generatedAt)
-        }
+        let content = self.content
+        let data = await MainActor.run { KineSheetExport.pdfData(content) }
         guard let data else { throw KineSheetExportError.renderFailed }
         return data
     }

@@ -107,122 +107,13 @@ nonisolated struct RuleBasedCoach: Coach {
         return todayIndex + 1
     }
 
-    // MARK: - Hoja para el kine
+    // MARK: - Consulta con el kine (plantilla con la misma forma que el modelo)
 
-    func kineSheet(_ summary: StatsSummary, profile: PlayerProfile) async throws -> KineSheet {
-        Self.makeKineSheet(summary, profile: profile)
+    func kineConsult(_ facts: [KineFact], profile: PlayerProfile) async throws -> KineConsult {
+        KineConsultRules.template(facts, profile: profile)
     }
 
-    static func makeKineSheet(_ s: StatsSummary, profile: PlayerProfile) -> KineSheet {
-        KineSheet(
-            period: period(s),
-            whenItHurts: whenItHurts(s, profile: profile),
-            whatHeDid: whatHeDid(s),
-            whatWorsens: whatWorsens(s),
-            howItGoes: howItGoes(s),
-            alerts: alerts(s),
-            backend: .rules
-        )
-    }
-
-    static func period(_ s: StatsSummary) -> String {
-        let labels = s.turnos.map(\.label)
-        guard let first = labels.first, let last = labels.last else {
-            return s.currentTurno?.label ?? "Sin registros todavía"
-        }
-        return first == last ? first : "\(first) – \(last)"
-    }
-
-    static func whenItHurts(_ s: StatsSummary, profile: PlayerProfile) -> String {
-        var parts = ["Zona: \(profile.usualZone.title.lowercased())."]
-        let scored = s.currentTurnoDays.compactMap { d in d.rdq.map { (d.dayInBlock, $0) } }
-        if let worst = scored.max(by: { $0.1 < $1.1 }) {
-            parts.append("Peor día del turno: día \(worst.0) (RDQ \(worst.1) de 6).")
-        }
-        if let moment = worstMoment(s) {
-            parts.append("Momento con más dolor: \(moment.title.lowercased()).")
-        }
-        if let t = s.currentTurno, let mean = t.meanRDQ {
-            parts.append("RDQ promedio del turno: \(CoachFormat.decimal(mean)) de 6.")
-        }
-        if scored.isEmpty && s.currentTurno == nil { parts.append("Aún sin cuestionarios registrados.") }
-        return parts.joined(separator: " ")
-    }
-
-    static func worstMoment(_ s: StatsSummary) -> Moment? {
-        var sum: [Moment: (Int, Int)] = [:]
-        for d in s.recentSessions {
-            guard let score = d.checkInScore else { continue }
-            let cur = sum[d.moment] ?? (0, 0)
-            sum[d.moment] = (cur.0 + score, cur.1 + 1)
-        }
-        return sum.max { Double($0.value.0) / Double($0.value.1) < Double($1.value.0) / Double($1.value.1) }?.key
-    }
-
-    static func whatHeDid(_ s: StatsSummary) -> String {
-        let counted = s.recentSessions.filter { $0.counted && $0.level >= .reduced }
-        let steps = s.turnos.reduce(0) { $0 + $1.verifiedSteps }
-        let reps = s.turnos.reduce(0) { $0 + $1.verifiedReps }
-        var parts = ["Pausas verificadas: \(CoachFormat.integer(s.totalCountedPauses))."]
-        parts.append("Pasos verificados: \(CoachFormat.integer(steps)); repeticiones verificadas: \(CoachFormat.integer(reps)).")
-        var freq: [ActivityKind: Int] = [:]
-        for d in counted { for k in d.activityKinds { freq[k, default: 0] += 1 } }
-        let top = freq.sorted { $0.value == $1.value ? $0.key.rawValue < $1.key.rawValue : $0.value > $1.value }.prefix(3)
-        if !top.isEmpty {
-            parts.append("Ejercicios más frecuentes: " + top.map { $0.key.name }.joined(separator: ", ") + ".")
-        }
-        if let mx = s.turnos.map(\.maxStreak).max(), mx > 0 { parts.append("Mejor racha: \(mx) días.") }
-        return parts.joined(separator: " ")
-    }
-
-    static func whatWorsens(_ s: StatsSummary) -> String {
-        var parts: [String] = []
-        for h in s.worsensHints.prefix(4) {
-            parts.append(h.hasSuffix(".") ? h : h + ".")
-        }
-        if let t = s.currentTurno, t.itemFrequency.count == RDQ6.items.count,
-           let best = t.itemFrequency.enumerated().max(by: { $0.element < $1.element }), best.element > 0 {
-            let n = best.element
-            parts.append("Frase más marcada: \"\(RDQ6.items[best.offset])\" (\(n) \(n == 1 ? "día" : "días")).")
-        }
-        if parts.isEmpty { parts.append("Sin correlaciones claras todavía; faltan registros.") }
-        return parts.joined(separator: " ")
-    }
-
-    static func howItGoes(_ s: StatsSummary) -> String {
-        var parts: [String] = []
-        let means = s.turnos.compactMap(\.meanRDQ)
-        if means.count >= 2 {
-            parts.append("RDQ promedio por turno: " + means.map(CoachFormat.decimal).joined(separator: " → ") + ".")
-        } else if let m = means.first {
-            parts.append("RDQ promedio del turno: \(CoachFormat.decimal(m)) de 6.")
-        }
-        let better = s.turnos.reduce(0) { $0 + $1.betterCount }
-        let total = s.turnos.reduce(0) { $0 + $1.betterCount + $1.sameCount + $1.worseCount }
-        if total > 0 { parts.append("Dijo Mejor después de la pausa en \(CoachFormat.percent(better, of: total)) (\(better) de \(total)).") }
-        if let t = s.currentTurno {
-            parts.append("Adherencia este turno: \(t.daysWithPause) de \(t.workDays) días.")
-        }
-        switch trend(s) {
-        case .mejorando: parts.append("Tendencia: mejorando frente al turno anterior.")
-        case .empeorando: parts.append("Tendencia: empeorando frente al turno anterior.")
-        case .estable: parts.append("Tendencia: estable frente al turno anterior.")
-        case .sinDatos: parts.append("Tendencia: sin datos suficientes.")
-        }
-        return parts.joined(separator: " ")
-    }
-
-    static func alerts(_ s: StatsSummary) -> String {
-        var parts: [String] = []
-        let highDays = s.currentTurnoDays.filter { ($0.rdq ?? 0) >= RDQ6.gentlePlanThreshold }.count
-        if highDays > 0 {
-            parts.append("RDQ \(RDQ6.gentlePlanThreshold) o más en \(highDays) \(highDays == 1 ? "día" : "días") del turno; la app pasó a plan suave.")
-        } else if let mx = s.currentTurno?.maxRDQ, mx >= RDQ6.gentlePlanThreshold {
-            parts.append("RDQ máximo del turno: \(mx) de 6; la app pasó a plan suave.")
-        } else {
-            parts.append("Sin puntajes altos este turno.")
-        }
-        if trend(s) == .empeorando { parts.append("El RDQ sube frente al turno anterior: conviene revisar.") }
-        return parts.joined(separator: " ")
+    func patientNote(_ text: String, profile: PlayerProfile) async throws -> PatientNote {
+        KineConsultRules.noteTemplate(text)
     }
 }
