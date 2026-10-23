@@ -24,7 +24,8 @@ private func target(_ recipe: Recipe, _ kind: ActivityKind) -> Int? {
 struct SafetyRulesTests {
     @Test func sinCheckInTodoPermitido() {
         let d = SafetyRules.evaluate(checkIn: nil)
-        #expect(d.allowed == ActivityKind.allCases)
+        #expect(d.allowed == ActivityKind.sessionOrder)
+        #expect(!d.allowed.contains(.respiracion))
         #expect(!d.gentle && !d.stop && d.reason == nil)
         #expect(d.stepTargetFactor == 1 && !d.shorterActivities && !d.adjusted)
         let recipe = Recipes.base(.campamento5, demo: false)
@@ -33,12 +34,12 @@ struct SafetyRulesTests {
 
     @Test func checkInSinSintomasNoCambiaNada() {
         let d = SafetyRules.evaluate(checkIn: checkIn())
-        #expect(d.allowed == ActivityKind.allCases && !d.gentle && !d.stop && !d.adjusted)
+        #expect(d.allowed == ActivityKind.sessionOrder && !d.gentle && !d.stop && !d.adjusted)
     }
 
     @Test func meDueleAhoraSinRespuestasNoRestringe() {
         let d = SafetyRules.evaluate(checkIn: checkIn(answers: [], source: .meDueleAhora))
-        #expect(d.allowed == ActivityKind.allCases && !d.gentle && !d.stop)
+        #expect(d.allowed == ActivityKind.sessionOrder && !d.gentle && !d.stop)
     }
 
     @Test func alarmaDetieneTodo() {
@@ -63,10 +64,11 @@ struct SafetyRulesTests {
         #expect(d.stepTargetFactor == SafetyRules.reducedStepFactor)
         #expect(d.reason == SafetyRules.Copy.gentleWhy)
         let applied = SafetyRules.apply(d, to: Recipes.base(.campamento5, demo: false))
-        #expect(kinds(applied) == [.pasos, .cuello, .respiracion])
+        #expect(kinds(applied) == [.pasos, .cuello, .ojos])
         #expect(target(applied, .pasos) == 125)
         #expect(target(applied, .cuello) == ActivityKind.cuello.defaultTarget)
-        #expect(target(applied, .respiracion) == ActivityKind.respiracion.defaultTarget)
+        #expect(target(applied, .ojos) == ActivityKind.ojos.defaultTarget)
+        #expect(!d.allowed.contains(.respiracion))
     }
 
     @Test func puntajeBajoElUmbralNoEsSuave() {
@@ -89,8 +91,9 @@ struct SafetyRulesTests {
         #expect(d.allowed.contains(.pasos) && d.allowed.contains(.cuello))
         #expect(d.reason == SafetyRules.Copy.noBendingWhy)
         let applied = SafetyRules.apply(d, to: Recipes.base(.campamento5, demo: false))
-        #expect(kinds(applied) == [.pasos, .cuello, .ojos, .stroop, .respiracion])
+        #expect(kinds(applied) == [.pasos, .cuello, .stroop, .ojos])
         #expect(target(applied, .pasos) == ActivityKind.pasos.defaultTarget)
+        #expect(d.adjusted)
     }
 
     @Test func caminaDistanciasCortasReduceLaMetaDePasos() {
@@ -126,7 +129,7 @@ struct SafetyRulesTests {
         let d = SafetyRules.evaluate(checkIn: checkIn(answers: answers(yes: yes)))
         #expect(!d.gentle && d.shorterActivities && d.stepTargetFactor == 0.5)
         let applied = SafetyRules.apply(d, to: Recipes.base(.campamento5, demo: false))
-        #expect(kinds(applied) == [.pasos, .cuello, .ojos, .stroop, .respiracion])
+        #expect(kinds(applied) == [.pasos, .cuello, .stroop, .ojos])
         #expect(target(applied, .pasos) == 125)
     }
 
@@ -148,8 +151,39 @@ struct SafetyRulesTests {
         #expect(kinds(Recipes.base(.relevo60, demo: false)) == [.cuello, .ojos])
         #expect(kinds(Recipes.base(.colacion3, demo: false, cameraPoseReady: false)) == [.pasos, .cuello, .ojos])
         #expect(kinds(Recipes.base(.colacion3, demo: false, cameraPoseReady: true)) == [.pasos, .cuello, .ojos, .extensionLumbar])
-        #expect(kinds(Recipes.base(.campamento5, demo: false)) == [.pasos, .sentadilla, .extensionLumbar, .cuello, .ojos, .stroop, .respiracion])
+        #expect(kinds(Recipes.base(.campamento5, demo: false)) == [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
+        #expect(kinds(Recipes.base(.campamento5, demo: false)) == ActivityKind.sessionOrder)
         #expect(Recipes.base(.relevo60, demo: false).minutes == 1 && Recipes.base(.campamento5, demo: false).title == RecipeKind.campamento5.title)
+    }
+
+    @Test func recetasSalenEnElOrdenFijoYSinRetiradas() {
+        for kind in RecipeKind.allCases {
+            for ready in [false, true] {
+                for demo in [false, true] {
+                    let k = kinds(Recipes.base(kind, demo: demo, cameraPoseReady: ready))
+                    #expect(!k.contains { $0.isRetired }, "\(kind) no debe traer actividades retiradas")
+                    #expect(k == ActivityKind.inSessionOrder(k, kind: { $0 }), "\(kind) debe ir en el orden fijo")
+                }
+            }
+            #expect(!kinds(Recipes.gentle(kind, demo: false)).contains(.respiracion))
+        }
+        #expect(Recipes.gentleKinds == ActivityKind.inSessionOrder(Recipes.gentleKinds, kind: { $0 }))
+    }
+
+    @Test func respiracionRetiradaYOrdenFijoDeLaSesion() {
+        #expect(ActivityKind.sessionOrder == [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
+        #expect(ActivityKind.respiracion.isRetired)
+        #expect(ActivityKind.allCases.filter(\.isRetired) == [.respiracion])
+        #expect(Set(ActivityKind.sessionOrder + [.respiracion]) == Set(ActivityKind.allCases))
+        #expect(ActivityKind.respiracion.sessionRank == ActivityKind.sessionOrder.count)
+        #expect(ActivityKind.sessionOrder.map(\.sessionRank) == Array(0..<ActivityKind.sessionOrder.count))
+        // Los empates conservan el orden relativo de entrada.
+        let pares: [(ActivityKind, Int)] = [(.ojos, 1), (.cuello, 2), (.ojos, 3), (.pasos, 4)]
+        #expect(ActivityKind.inSessionOrder(pares, kind: { $0.0 }).map(\.1) == [4, 2, 1, 3])
+    }
+
+    @Test func cuelloSeLlamaMovilidadCervical() {
+        #expect(ActivityKind.cuello.name == "Movilidad cervical")
     }
 
     @Test func metasDemoVersusReales() {
@@ -164,11 +198,12 @@ struct SafetyRulesTests {
 
     @Test func recetaSuave() {
         let real = Recipes.gentle(.campamento5, demo: false)
-        #expect(kinds(real) == [.pasos, .cuello, .respiracion])
-        #expect(target(real, .pasos) == 125 && target(real, .cuello) == 15 && target(real, .respiracion) == 6)
+        #expect(kinds(real) == [.pasos, .cuello, .ojos])
+        #expect(target(real, .pasos) == 125 && target(real, .cuello) == 15 && target(real, .ojos) == 15)
         #expect(real.kind == .campamento5)
         let demo = Recipes.gentle(.relevo60, demo: true)
-        #expect(target(demo, .pasos) == 15 && target(demo, .cuello) == 6 && target(demo, .respiracion) == 3)
+        #expect(kinds(demo) == [.pasos, .cuello, .ojos])
+        #expect(target(demo, .pasos) == 15 && target(demo, .cuello) == 6 && target(demo, .ojos) == 8)
     }
 
     @Test func relevoUsaUnSoloBloqueDeCara() {
@@ -209,23 +244,42 @@ struct SafetyRulesTests {
 struct SensorBlockPlannerTests {
     private func a(_ k: ActivityKind) -> ActivityAssignment { ActivityAssignment(kind: k, target: k.defaultTarget) }
 
-    @Test func campamentoSeAgrupaEnCuatroBloquesEnOrden() {
+    @Test func campamentoSigueElOrdenFijoEnTramosDeSensor() {
         let groups = SensorBlockPlanner.order(Recipes.base(.campamento5, demo: false).activities)
-        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.sentadilla, .extensionLumbar], [.cuello, .ojos], [.stroop, .respiracion]])
-        #expect(groups.compactMap(SensorBlockPlanner.block(of:)) == [.pedometer, .cameraPose, .face, .screen])
+        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.sentadilla], [.cuello], [.stroop], [.ojos], [.extensionLumbar]])
+        #expect(groups.compactMap(SensorBlockPlanner.block(of:)) == [.pedometer, .cameraPose, .face, .screen, .face, .cameraPose])
+        #expect(SensorBlockPlanner.blocks(Recipes.base(.campamento5, demo: false).activities)
+                == [.pedometer, .cameraPose, .face, .screen, .face, .cameraPose])
     }
 
-    @Test func desordenadoConservaElOrdenInternoDeCadaBloque() {
+    @Test func desordenadoSeOrdenaPorLaSesionYDescartaRetiradas() {
         let input = [a(.ojos), a(.stroop), a(.pasos), a(.cuello), a(.sentadilla), a(.respiracion), a(.extensionLumbar)]
         let groups = SensorBlockPlanner.order(input)
-        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.sentadilla, .extensionLumbar], [.ojos, .cuello], [.stroop, .respiracion]])
-        #expect(SensorBlockPlanner.ordered(input).map(\.kind) == [.pasos, .sentadilla, .extensionLumbar, .ojos, .cuello, .stroop, .respiracion])
+        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.sentadilla], [.cuello], [.stroop], [.ojos], [.extensionLumbar]])
+        #expect(SensorBlockPlanner.ordered(input).map(\.kind) == ActivityKind.sessionOrder)
+        #expect(SensorBlockPlanner.ordered([a(.respiracion)]).isEmpty)
     }
 
-    @Test func bloquesVaciosNoAparecen() {
-        let input = [a(.ojos), a(.respiracion)]
-        #expect(SensorBlockPlanner.order(input).map { $0.map(\.kind) } == [[.ojos], [.respiracion]])
-        #expect(SensorBlockPlanner.blocks(input) == [.face, .screen])
+    @Test func tramosConsecutivosDelMismoSensorSeJuntan() {
+        // Sin Stroop entre medio, cuello y pestañeo quedan en un solo tramo de cara.
+        let input = [a(.ojos), a(.pasos), a(.cuello)]
+        #expect(SensorBlockPlanner.order(input).map { $0.map(\.kind) } == [[.pasos], [.cuello, .ojos]])
+        #expect(SensorBlockPlanner.blocks(input) == [.pedometer, .face])
+        // Sin agacharse: caminata → cervical → Stroop → pestañeo.
+        let noBending = [a(.pasos), a(.cuello), a(.stroop), a(.ojos)]
+        #expect(SensorBlockPlanner.blocks(noBending) == [.pedometer, .face, .screen, .face])
+    }
+
+    @Test func unBloquePuedeRepetirseYLasRetiradasNoAparecen() {
+        // Cara → pantalla → cara: el bloque de cara se repite en vez de juntarse.
+        let input = [a(.ojos), a(.stroop), a(.cuello)]
+        #expect(SensorBlockPlanner.order(input).map { $0.map(\.kind) } == [[.cuello], [.stroop], [.ojos]])
+        #expect(SensorBlockPlanner.blocks(input) == [.face, .screen, .face])
+        // La respiración (retirada) no aparece ni deja un bloque de pantalla vacío.
+        let withRetired = [a(.ojos), a(.respiracion)]
+        #expect(SensorBlockPlanner.order(withRetired).map { $0.map(\.kind) } == [[.ojos]])
+        #expect(SensorBlockPlanner.blocks(withRetired) == [.face])
+        #expect(SensorBlockPlanner.order([a(.respiracion)]).isEmpty)
         #expect(SensorBlockPlanner.order([]).isEmpty)
     }
 
@@ -233,7 +287,9 @@ struct SensorBlockPlannerTests {
         let ordered = Recipes.base(.campamento5, demo: true).activities
         #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(ordered)) == ordered)
         let colacion = Recipes.base(.colacion3, demo: false, cameraPoseReady: true).activities
-        #expect(SensorBlockPlanner.ordered(colacion).map(\.kind) == [.pasos, .extensionLumbar, .cuello, .ojos])
+        #expect(SensorBlockPlanner.ordered(colacion).map(\.kind) == [.pasos, .cuello, .ojos, .extensionLumbar])
+        let mixed = [a(.extensionLumbar), a(.ojos), a(.stroop), a(.pasos), a(.cuello)]
+        #expect(SensorBlockPlanner.flatten(SensorBlockPlanner.order(mixed)) == SensorBlockPlanner.ordered(mixed))
     }
 
     @Test func conservaMetasYDuplicados() {
@@ -248,8 +304,14 @@ struct SensorBlockPlannerTests {
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .pedometer, to: .face))
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .face, to: .screen))
         #expect(!SensorBlockPlanner.needsCameraHandoff(from: .face, to: .face))
+        // Campamento: sentadilla → cervical (cuerpo → cara) y pestañeo → extensión (cara → cuerpo).
         let handoffs = SensorBlockPlanner.cameraHandoffs(Recipes.base(.campamento5, demo: false).activities)
-        #expect(handoffs.count == 1 && handoffs.first?.from == .cameraPose && handoffs.first?.to == .face)
+        #expect(handoffs.map { [$0.from, $0.to] } == [[.cameraPose, .face], [.face, .cameraPose]])
         #expect(SensorBlockPlanner.cameraHandoffs(Recipes.base(.relevo60, demo: false).activities).isEmpty)
+        // Colación con cámara de cuerpo: solo pestañeo → extensión lumbar.
+        let colacion = SensorBlockPlanner.cameraHandoffs(Recipes.base(.colacion3, demo: false, cameraPoseReady: true).activities)
+        #expect(colacion.map { [$0.from, $0.to] } == [[.face, .cameraPose]])
+        // Cara → pantalla → cara no suelta la cámara entre medio.
+        #expect(SensorBlockPlanner.cameraHandoffs([a(.cuello), a(.stroop), a(.ojos)]).isEmpty)
     }
 }

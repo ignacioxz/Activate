@@ -16,7 +16,7 @@ struct SessionFlowTests {
         for kind in RecipeKind.allCases {
             for demo in [false, true] {
                 let base = Recipes.base(kind, demo: demo)
-                #expect(SessionPlanCheck.accepts(plan(base.activities), allowed: ActivityKind.allCases, base: base,
+                #expect(SessionPlanCheck.accepts(plan(base.activities), allowed: ActivityKind.sessionOrder, base: base,
                                                  minutes: kind.minutes, demo: demo),
                         "receta \(kind) demo=\(demo) debe pasar")
             }
@@ -25,7 +25,7 @@ struct SessionFlowTests {
 
     @Test func rechazaIdNoPermitido() {
         let base = Recipes.base(.campamento5, demo: false)
-        let allowed = ActivityKind.allCases.filter { $0 != .sentadilla }
+        let allowed = ActivityKind.sessionOrder.filter { $0 != .sentadilla }
         let p = plan([a(.pasos, 250), a(.sentadilla, 10)])
         #expect(!SessionPlanCheck.accepts(p, allowed: allowed, base: base, minutes: 5, demo: false))
     }
@@ -34,30 +34,31 @@ struct SessionFlowTests {
         let base = Recipes.base(.relevo60, demo: false)
         let ok = plan([a(.cuello, 30)])
         let tooMany = plan([a(.cuello, 31)])
-        #expect(SessionPlanCheck.accepts(ok, allowed: ActivityKind.allCases, base: base, minutes: 1, demo: false))
-        #expect(!SessionPlanCheck.accepts(tooMany, allowed: ActivityKind.allCases, base: base, minutes: 1, demo: false))
+        #expect(SessionPlanCheck.accepts(ok, allowed: ActivityKind.sessionOrder, base: base, minutes: 1, demo: false))
+        #expect(!SessionPlanCheck.accepts(tooMany, allowed: ActivityKind.sessionOrder, base: base, minutes: 1, demo: false))
     }
 
     @Test func rechazaVacioDuplicadosYCero() {
         let base = Recipes.base(.colacion3, demo: false)
-        #expect(!SessionPlanCheck.accepts(plan([]), allowed: ActivityKind.allCases, base: base, minutes: 3, demo: false))
-        #expect(!SessionPlanCheck.accepts(plan([a(.cuello, 5), a(.cuello, 5)]), allowed: ActivityKind.allCases, base: base, minutes: 3, demo: false))
-        #expect(!SessionPlanCheck.accepts(plan([a(.cuello, 0)]), allowed: ActivityKind.allCases, base: base, minutes: 3, demo: false))
+        #expect(!SessionPlanCheck.accepts(plan([]), allowed: ActivityKind.sessionOrder, base: base, minutes: 3, demo: false))
+        #expect(!SessionPlanCheck.accepts(plan([a(.cuello, 5), a(.cuello, 5)]), allowed: ActivityKind.sessionOrder, base: base, minutes: 3, demo: false))
+        #expect(!SessionPlanCheck.accepts(plan([a(.cuello, 0)]), allowed: ActivityKind.sessionOrder, base: base, minutes: 3, demo: false))
     }
 
     @Test func rechazaDuracionExcedida() {
         // Pasos (100 s mínimo) + Stroop (45 s) no caben en el relevo de 1 minuto.
         let base = Recipes.base(.relevo60, demo: false)
         let p = plan([a(.pasos, 250), a(.stroop, 40)])
-        #expect(!SessionPlanCheck.accepts(p, allowed: ActivityKind.allCases, base: base, minutes: 1, demo: false))
+        #expect(!SessionPlanCheck.accepts(p, allowed: ActivityKind.sessionOrder, base: base, minutes: 1, demo: false))
     }
 
-    // MARK: Orden por bloque de sensor (SensorBlockPlanner, paquete activities)
+    // MARK: Orden fijo de la sesión (SensorBlockPlanner, paquete activities)
 
-    @Test func ordenaPorBloqueDeSensorConservandoElOrdenInterno() {
+    @Test func ordenaSegunElOrdenFijoDeLaSesionSinRetiradas() {
         let mixed = [a(.cuello, 15), a(.pasos, 250), a(.stroop, 40), a(.sentadilla, 10), a(.respiracion, 6), a(.ojos, 15), a(.extensionLumbar, 10)]
         let ordered = SensorBlockPlanner.ordered(mixed).map(\.kind)
-        #expect(ordered == [.pasos, .sentadilla, .extensionLumbar, .cuello, .ojos, .stroop, .respiracion])
+        #expect(ordered == [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
+        #expect(ordered == ActivityKind.sessionOrder)
     }
 
     // MARK: Receta suave (Recipes.gentle vía SafetyRules.apply)
@@ -65,7 +66,7 @@ struct SessionFlowTests {
     @Test func recetaSuaveSinSentadillaYConPasosReducidos() {
         let gentle = Recipes.gentle(.campamento5, demo: false)
         let kinds = gentle.activities.map(\.kind)
-        #expect(kinds == [.pasos, .cuello, .respiracion])
+        #expect(kinds == [.pasos, .cuello, .ojos])
         #expect(gentle.activities[0].target == 125)
     }
 
@@ -74,11 +75,11 @@ struct SessionFlowTests {
     @Test func planDelLLMPasaPorPlanValidatorYLaPlantillaNo() {
         let base = Recipes.base(.campamento5, demo: false)
         let input = CoachInput(profileName: "Marco", treatment: .usted, checkIn: nil, moment: .campamento,
-                               minutesAvailable: 5, baseRecipe: base, allowedKinds: ActivityKind.allCases,
+                               minutesAvailable: 5, baseRecipe: base, allowedKinds: ActivityKind.sessionOrder,
                                historyLines: [], gentle: false)
-        // La plantilla por reglas devuelve las 7 actividades de campamento: la acepta SessionPlanCheck.
+        // La plantilla por reglas devuelve las 6 actividades de campamento: la acepta SessionPlanCheck.
         let rules = PausePlan(activities: base.activities, reasoning: "", why: "", startMessage: "", backend: .rules)
-        #expect(PauseCoordinator.validated(rules, input: input, base: base, minutes: 5, demo: false)?.count == 7)
+        #expect(PauseCoordinator.validated(rules, input: input, base: base, minutes: 5, demo: false)?.count == 6)
         // El mismo plan "del LLM" supera el máximo de 5 ejercicios del prompt: PlanValidator lo rechaza.
         let llm = PausePlan(activities: base.activities, reasoning: "", why: "", startMessage: "", backend: .foundationModels)
         #expect(PauseCoordinator.validated(llm, input: input, base: base, minutes: 5, demo: false) == nil)
@@ -140,7 +141,16 @@ struct SessionFlowTests {
         #expect(c.stage == .planning)
         #expect(c.isGentle)
         #expect(!c.plan.contains { $0.kind == .sentadilla })
-        #expect(c.plan.contains { $0.kind == .respiracion })
+        #expect(!c.plan.contains { $0.kind == .respiracion })
+        #expect(c.plan.map(\.kind) == [.pasos, .cuello, .ojos])
+    }
+
+    @MainActor
+    @Test func campamentoSigueElOrdenFijoDeLaSesion() {
+        let (c, _) = makeCoordinator(moment: .campamento)
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .campamento)
+        #expect(c.stage == .planning)
+        #expect(c.plan.map(\.kind) == [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
     }
 
     @MainActor
@@ -180,12 +190,21 @@ struct SessionFlowTests {
     }
 
     @MainActor
-    @Test func checkInSinZonasUsaLasHabituales() {
+    @Test func checkInConNoMeDueleGuardaSinZonas() async {
+        // El check-in se prellena con las zonas habituales, pero "No me duele" (selección vacía) manda.
         let (c, store) = makeCoordinator()
         store.mutate { $0.profile.setUsualZones([.hombro, .cuello]) }
         #expect(c.usualZones == [.cuello, .hombro])
         c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [], moment: .colacion)
-        #expect(store.data.checkIns[0].allZones == [.cuello, .hombro])
+        let saved = store.data.checkIns[0]
+        #expect(saved.zones == [])
+        #expect(saved.allZones.isEmpty && saved.noPain)
+        c.startActivities()
+        while case .activity = c.stage { c.skipCurrent() }
+        c.submitPost(.igual)
+        await waitForReward(c)
+        #expect(c.session?.allZones == [])
+        #expect(c.session?.noPain == true)
     }
 
     @MainActor
@@ -226,16 +245,28 @@ struct SessionFlowTests {
         #expect(c.cameraBlocked)
         #expect(!c.plan.isEmpty)
         #expect(c.plan.allSatisfy { !PauseCoordinator.usesCamera($0.kind) })
-        #expect(c.plan.map(\.kind) == [.pasos, .stroop, .respiracion])
+        #expect(c.plan.map(\.kind) == [.pasos, .stroop])
     }
 
     @MainActor
-    @Test func sinConsentimientoElRelevoQuedaConRespiracion() {
-        // Relevo = cuello + ojos (ambos con cámara): queda la respiración, que solo usa la pantalla.
+    @Test func sinConsentimientoElRelevoQuedaConStroop() {
+        // Relevo = cuello + ojos (ambos con cámara): queda el Stroop, que solo usa la pantalla.
         let (c, _) = makeCoordinator(moment: .entrada, consent: false)
         c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
-        #expect(c.plan.map(\.kind) == [.respiracion])
+        #expect(c.plan.map(\.kind) == [.stroop])
+        #expect(c.plan.first?.target == ActivityKind.stroop.defaultTarget)
         #expect(c.cameraBlocked)
+    }
+
+    @Test func sinConsentimientoElRespaldoEsStroopSoloSiLasReglasLoPermiten() {
+        let relevo = Recipes.base(.relevo60, demo: true)
+        let conStroop = PauseCoordinator.consentFiltered(relevo, consentGiven: false, allowed: ActivityKind.sessionOrder, demo: true)
+        #expect(conStroop.activities == [Recipes.assignment(.stroop, demo: true)])
+        // Plan suave (sin Stroop permitido): la receta queda vacía, nunca vuelve la respiración.
+        let sinStroop = PauseCoordinator.consentFiltered(relevo, consentGiven: false, allowed: Recipes.gentleKinds, demo: true)
+        #expect(sinStroop.activities.isEmpty)
+        // Con consentimiento no se toca.
+        #expect(PauseCoordinator.consentFiltered(relevo, consentGiven: true, allowed: ActivityKind.sessionOrder, demo: true) == relevo)
     }
 
     @MainActor
@@ -247,14 +278,14 @@ struct SessionFlowTests {
     }
 
     @Test func consentimientoFiltraTiposPermitidos() {
-        let allowed = PauseCoordinator.consentAllowed(ActivityKind.allCases, consentGiven: false)
-        #expect(Set(allowed) == [.pasos, .stroop, .respiracion])
-        #expect(PauseCoordinator.consentAllowed(ActivityKind.allCases, consentGiven: true) == ActivityKind.allCases)
+        let allowed = PauseCoordinator.consentAllowed(ActivityKind.sessionOrder, consentGiven: false)
+        #expect(allowed == [.pasos, .stroop])
+        #expect(PauseCoordinator.consentAllowed(ActivityKind.sessionOrder, consentGiven: true) == ActivityKind.sessionOrder)
     }
 
     // MARK: Adopción del plan del coach
 
-    private func input(base: Recipe, moment: Moment, gentle: Bool, allowed: [ActivityKind] = ActivityKind.allCases) -> CoachInput {
+    private func input(base: Recipe, moment: Moment, gentle: Bool, allowed: [ActivityKind] = ActivityKind.sessionOrder) -> CoachInput {
         CoachInput(profileName: "Marco", treatment: .usted, checkIn: nil, moment: moment, minutesAvailable: moment.minutes,
                    baseRecipe: base, allowedKinds: allowed, historyLines: [], gentle: gentle)
     }
@@ -284,7 +315,7 @@ struct SessionFlowTests {
         let good = PausePlan(activities: [a(.cuello, 12), a(.pasos, 200)], reasoning: "", why: "Hoy más cuello.",
                              startMessage: "Vamos, Marco.", backend: .foundationModels)
         let adopted = PauseCoordinator.adopt(good, current: current, input: i, base: base, minutes: 3, demo: false, reducedTargets: false)
-        #expect(adopted?.plan.map(\.kind) == [.pasos, .cuello])   // reordenado por bloque de sensor
+        #expect(adopted?.plan.map(\.kind) == [.pasos, .cuello])   // reordenado al orden fijo de la sesión
         #expect(adopted?.plan.first?.target == 200)
         #expect(adopted?.why == "Hoy más cuello.")
         let duplicated = PausePlan(activities: [a(.cuello, 12), a(.cuello, 12)], reasoning: "", why: "x",
@@ -308,8 +339,8 @@ struct SessionFlowTests {
         #expect(PauseCoordinator.validated(atCeiling, input: i, base: base, minutes: 3, demo: false, reducedTargets: true) != nil)
         #expect(PauseCoordinator.validated(above, input: i, base: base, minutes: 3, demo: false, reducedTargets: true) == nil)
         // Sin reducción de las reglas sigue valiendo el doble de la meta base.
-        #expect(SessionPlanCheck.accepts(above, allowed: ActivityKind.allCases, base: base, minutes: 3, demo: false))
-        #expect(!SessionPlanCheck.accepts(above, allowed: ActivityKind.allCases, base: base, minutes: 3, demo: false, reducedTargets: true))
+        #expect(SessionPlanCheck.accepts(above, allowed: ActivityKind.sessionOrder, base: base, minutes: 3, demo: false))
+        #expect(!SessionPlanCheck.accepts(above, allowed: ActivityKind.sessionOrder, base: base, minutes: 3, demo: false, reducedTargets: true))
     }
 
     // MARK: Chips de selección múltiple

@@ -175,6 +175,26 @@ struct StoreTests {
         #expect(explicit.allZones == [.cuello])
     }
 
+    @Test func seleccionVaciaEsNoMeDuele() {
+        // Selección explícita vacía = "No me duele": no se reemplaza por la zona única ni por las habituales.
+        #expect(AppStore.resolvedZones([], zone: .hombro, fallback: [.lumbar]) == [])
+        #expect(AppStore.resolvedZones([.otra, .lumbar, .otra], zone: .hombro, fallback: []) == [.lumbar, .otra])
+        #expect(AppStore.resolvedZones(nil, zone: .hombro, fallback: [.lumbar]) == [.hombro])
+        #expect(AppStore.resolvedZones(nil, zone: nil, fallback: [.cuello, .lumbar]) == [.lumbar, .cuello])
+
+        let store = AppStore(inMemory: true)
+        let n = now()
+        store.updateProfile { $0.setUsualZones([.cuello, .lumbar]) }
+        let none = store.makeCheckIn(date: n, answers: Array(repeating: false, count: 6), zones: [], moment: .colacion)
+        #expect(none.zones == [] && none.allZones.isEmpty && none.noPain)
+        store.addCheckIn(none)
+        // La sesión hereda el "No me duele" del RDQ de hoy; una selección vacía explícita también vale.
+        let s = store.makeSession(moment: .colacion, startedAt: n.addingTimeInterval(60))
+        #expect(s.allZones.isEmpty && s.noPain)
+        let explicit = store.makeSession(moment: .colacion, startedAt: n, zones: [])
+        #expect(explicit.allZones.isEmpty && explicit.noPain)
+    }
+
     @Test func datosAntiguosSinZonasSiguenCargando() throws {
         // JSON guardado antes de la selección múltiple: sin "zones" ni "usualZones".
         let store = AppStore(inMemory: true)

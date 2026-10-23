@@ -10,7 +10,7 @@ struct CoachValidationTests {
         switch kind {
         case .relevo60: return Recipe(kind: kind, activities: [a(.cuello), a(.ojos)])
         case .colacion3: return Recipe(kind: kind, activities: [a(.pasos), a(.cuello), a(.ojos)])
-        case .campamento5: return Recipe(kind: kind, activities: [a(.pasos), a(.sentadilla), a(.extensionLumbar), a(.cuello), a(.ojos), a(.stroop), a(.respiracion)])
+        case .campamento5: return Recipe(kind: kind, activities: [a(.pasos), a(.sentadilla), a(.cuello), a(.stroop), a(.ojos), a(.extensionLumbar)])
         }
     }
 
@@ -22,7 +22,7 @@ struct CoachValidationTests {
                             answers: answers, zone: .lumbar, moment: .campamento, context: nil)
     }
 
-    private func input(moment: Moment = .campamento, allowed: [ActivityKind] = ActivityKind.allCases,
+    private func input(moment: Moment = .campamento, allowed: [ActivityKind] = ActivityKind.sessionOrder,
                        gentle: Bool = false, score: Int = 2, treatment: Treatment = .usted) -> CoachInput {
         let r = recipe(moment.recipe)
         return CoachInput(profileName: "Marco", treatment: treatment, checkIn: checkIn(score: score), moment: moment,
@@ -68,7 +68,7 @@ struct CoachValidationTests {
     }
 
     @Test func notAllowedIdFails() {
-        let i = input(allowed: [.pasos, .cuello, .respiracion])
+        let i = input(allowed: Recipes.gentleKinds)
         let r = PlanValidator.validate([.init(id: "A3", reps: 5)], input: i)
         #expect(r == .failure(.notAllowed(.sentadilla)))
     }
@@ -94,7 +94,7 @@ struct CoachValidationTests {
 
     @Test func emptyAndTooManyFail() {
         #expect(PlanValidator.validate([], input: input()) == .failure(.empty))
-        let six = ["A1", "A2", "A3", "A5", "A8", "A9"].map { ProposedExercise(id: $0, reps: 1) }
+        let six = ["A1", "A2", "A3", "A5", "A9", "A10"].map { ProposedExercise(id: $0, reps: 1) }
         #expect(PlanValidator.validate(six, input: input()) == .failure(.tooMany(6)))
     }
 
@@ -106,8 +106,14 @@ struct CoachValidationTests {
     }
 
     @Test func fallbackFiltersByAllowed() {
-        let i = input(allowed: [.pasos, .cuello, .respiracion])
-        #expect(PlanValidator.fallback(i).map(\.kind) == [.pasos, .cuello, .respiracion])
+        let i = input(allowed: Recipes.gentleKinds)
+        #expect(PlanValidator.fallback(i).map(\.kind) == [.pasos, .cuello, .ojos])
+    }
+
+    @Test func retiredBreathingIsNeverAllowed() {
+        // Respiración (A8) sigue en el catálogo para leer sesiones antiguas, pero las reglas no la permiten.
+        let r = PlanValidator.validate([.init(id: "A8", reps: 3)], input: input())
+        #expect(r == .failure(.notAllowed(.respiracion)))
     }
 
     // MARK: - Texto
@@ -130,11 +136,12 @@ struct CoachValidationTests {
     }
 
     @Test func planPromptCarriesRdqAllowedIdsAndRecipe() {
-        let i = input(allowed: [.pasos, .cuello, .respiracion], gentle: true, score: 5)
+        let i = input(allowed: Recipes.gentleKinds, gentle: true, score: 5)
         let p = CoachPrompts.planPrompt(i)
         #expect(p.contains("5 de 6"))
         #expect(p.contains("\"\(RDQ6.items[0])\""))
-        #expect(p.contains("Ids permitidos hoy: A2, A5, A8."))
+        #expect(p.contains("Ids permitidos hoy: A2, A5, A9."))
+        #expect(p.contains("A5 · Movilidad cervical · 15 movimientos"))
         #expect(p.contains("A3 · Sentadilla minera · 10 reps"))
         #expect(p.contains("Campamento"))
         #expect(p.contains("pausa-del-dia-v1"))
@@ -158,9 +165,9 @@ struct CoachValidationTests {
     }
 
     @Test func rulePlanIsGentleAndDropsForbiddenKinds() async throws {
-        let i = input(allowed: [.pasos, .cuello, .respiracion], gentle: true, score: 5)
+        let i = input(allowed: Recipes.gentleKinds, gentle: true, score: 5)
         let plan = try await RuleBasedCoach().plan(i)
-        #expect(plan.activities.map(\.kind) == [.pasos, .cuello, .respiracion])
+        #expect(plan.activities.map(\.kind) == [.pasos, .cuello, .ojos])
         #expect(!plan.activities.contains { $0.kind == .sentadilla })
         let steps = plan.activities.first { $0.kind == .pasos }!.target
         #expect(steps == Int((Double(ActivityKind.pasos.defaultTarget) * RuleBasedCoach.gentleTargetFactor).rounded()))

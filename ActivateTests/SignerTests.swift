@@ -213,6 +213,14 @@ struct SignerTests {
         #expect(decoded.checkIn?.zones == [.lumbar, .cuello])
         #expect(decoded.checkIn?.zone == .lumbar)
         #expect(data != (try CanonicalPayload.data(for: legacy)))
+
+        // "No me duele": se firma la lista vacía tal cual, sin forzar una zona.
+        var noPain = Self.sampleSession()
+        noPain.setZones([])
+        let noPainData = try CanonicalPayload.data(for: noPain)
+        #expect(try CanonicalPayload.decode(noPainData).checkIn?.zones == [])
+        let legacyData = try CanonicalPayload.data(for: legacy)
+        #expect(noPainData != data && noPainData != legacyData)
     }
 
     @Test func sesionFirmadaSinZonasSigueVerificando() async throws {
