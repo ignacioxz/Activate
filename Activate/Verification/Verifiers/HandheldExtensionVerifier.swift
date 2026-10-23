@@ -46,13 +46,17 @@ nonisolated enum HandheldExtensionTuning {
 
     // Calibración de pie
     /// Segundos de pie, quieto y con la cara visible para fijar la referencia.
+    /// Datos reales (iPhone 17 Pro Max, 2026-10-23): 0,6 s y 6° calibraban mientras la persona todavía
+    /// acomodaba el teléfono y dejaban la referencia corrida; 1 s y 4° calibran en la postura real.
     static let calibrationSeconds = Squat.calibrationSeconds
-    /// Quieto = el cabeceo no varía más que esto (°) y el teléfono no se desplaza (mismos límites que la sentadilla).
+    /// Quieto = el cabeceo no varía más que esto (°) y el teléfono no se desplaza.
     static let calibrationMaxPitchRange = 4.0
     static let calibrationMaxPhoneRangeY = Squat.calibrationMaxPhoneRangeY
     static let calibrationMaxPhoneDriftXZ = Squat.calibrationMaxPhoneDriftXZ
-    static let calibrationMaxVerticalAccel = Squat.calibrationMaxVerticalAccel
-    static let calibrationMaxAccelRMS = Squat.calibrationMaxAccelRMS
+    /// Solo sin el mundo (respaldo): aceleración vertical máxima (m/s²) y RMS de la aceleración del usuario (g)
+    /// para dar por quieto. Con el teléfono quieto en las manos el pulso real da ≈ 0,12-0,15 g y picos de 1-1,5 m/s².
+    static let calibrationMaxVerticalAccel = 2.0
+    static let calibrationMaxAccelRMS = 0.25
     /// Si el seguimiento del mundo nunca llega a `.normal` en este tiempo, se usa el respaldo.
     static let initialWorldGraceSeconds = Squat.initialWorldGraceSeconds
 
@@ -67,7 +71,7 @@ nonisolated enum HandheldExtensionTuning {
     /// Duración de la rep completa (desde que empieza a inclinarse hasta que vuelve). El máximo deja ir lento
     /// y sostener atrás como enseña el kine (3 s de ida, 2-3 s atrás, 3 s de vuelta).
     static let minRepSeconds = 0.8
-    static let maxRepSeconds = 10.0
+    static let maxRepSeconds = 16.0
     /// Margen extra antes de abortar una rep que no vuelve (s).
     static let abortGraceSeconds = 2.0
     /// Una ventana que nunca llegó a la meta (otra postura de pie, agarre distinto) se descarta a los (s).
@@ -88,6 +92,10 @@ nonisolated enum HandheldExtensionTuning {
     static let faceGeometryMaxChange = 0.06
     /// Cuánto puede alejarse el teléfono de la cara durante la rep (m).
     static let faceRadialMaxRetreat = 0.12
+    /// Si la cara se fue atrás en el mundo como un tronco (≥ `faceMinBackPerRadian`), los brazos pueden quedar
+    /// adelante: el teléfono se aleja de la cara hasta esto por radián de inclinación (dato real: 28° con la cara
+    /// 44 cm atrás y el teléfono 26 cm → 15 cm de separación).
+    static let faceRadialRetreatPerRadian = 0.5
     /// Cambio máximo de la dirección de la cara vista desde el teléfono (°): con las muñecas gira lo mismo
     /// que el teléfono; con el tronco no cambia (cuerpo rígido).
     static let faceDirectionMaxChangeDegrees = 10.0
@@ -150,6 +158,9 @@ nonisolated enum HandheldExtensionTuning {
     static let walkingSteps = Squat.walkingSteps
     /// El teléfono no debe recorrer más que esto en horizontal durante una rep (m).
     static let maxRepHorizontalTravel = 0.35
+    /// Hacia atrás el teléfono viaja con el tronco: el límite crece esto por radián de inclinación (dato real:
+    /// 47° con el teléfono 37,6 cm atrás).
+    static let horizontalTravelPerRadian = 0.6
 
     // Seguimiento del mundo
     static let worldLossToFallbackSeconds = Squat.worldLossToFallbackSeconds
@@ -767,11 +778,13 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         var j = Judgement(mode: world ? .world : .inertial)
         let rad = w.worldPeakTilt * .pi / 180
         let direction = w.maxDirectionChange <= K.faceDirectionMaxChangeDegrees
+        let faceBack = w.maxFaceBackward ?? 0
+        let trunkWentBack = world && faceBack >= max(K.faceMinBackward, K.faceMinBackPerRadian * rad)
+        let retreatLimit = trunkWentBack ? max(K.faceRadialMaxRetreat, K.faceRadialRetreatPerRadian * rad) : K.faceRadialMaxRetreat
         j.faceStayedInFrame = direction
             && w.maxTangentialChange <= K.faceGeometryMaxChange
             && w.maxRadialApproach <= K.faceGeometryMaxChange
-            && w.maxRadialRetreat <= K.faceRadialMaxRetreat
-        let faceBack = w.maxFaceBackward ?? 0
+            && w.maxRadialRetreat <= retreatLimit
         if world {
             j.faceWentBack = faceBack >= max(K.faceMinBackward, K.faceMinBackPerRadian * rad)
             j.phoneWentBack = (w.maxPhoneBackward ?? 0) >= K.phoneMinBackPerRadian * rad
@@ -804,7 +817,8 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         var rejection: Rejection?
         if w.shaking {
             rejection = .shaking
-        } else if world, let travel = w.maxHorizontalTravel, travel > K.maxRepHorizontalTravel {
+        } else if world, let travel = w.maxHorizontalTravel,
+                  travel > K.maxRepHorizontalTravel + K.horizontalTravelPerRadian * w.worldPeakTilt * .pi / 180 {
             rejection = .moved
         } else if tracked < K.minTrackedFraction || (w.backSamples > 0 && w.backFaceSamples == 0) {
             rejection = .faceMissing
