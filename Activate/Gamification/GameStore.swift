@@ -20,7 +20,7 @@ nonisolated struct SessionReward: Sendable, Hashable, Codable {
     var newBadges: [Badge]
 }
 
-/// Racha por día laboral, casco automático, XP e insignias sobre `AppStore`.
+/// Racha por día laboral, comodín automático (internamente "casco"), XP e insignias sobre `AppStore`.
 /// La racha la calcula `StreakEngine` (puro) y se cachea aquí; la caché se invalida al mutar
 /// y se revalida contra el libro mayor, así también sirve cuando otro módulo muta el store.
 @Observable
@@ -71,7 +71,7 @@ final class GameStore {
     var dobleteAvailable: Bool {
         StreakEngine.dobleteAvailable(days: store.data.workDays, calendar: calendar, at: .now)
     }
-    /// Ayer se marcó el casco automático ("Ayer usó el casco. Racha a salvo.").
+    /// Ayer se usó el comodín automático ("Ayer se usó su comodín: racha a salvo.").
     var usedCascoYesterday: Bool {
         StreakEngine.usedCascoYesterday(days: store.data.workDays, calendar: calendar, at: .now)
     }
@@ -95,7 +95,7 @@ final class GameStore {
 
     // MARK: Cierre de día
 
-    /// Cierra días laborales pasados sin pausa (casco automático) y repone el casco del turno.
+    /// Cierra días laborales pasados sin pausa (comodín automático) y repone el comodín del turno.
     /// Llamar al arrancar y al volver a activo. No escribe si nada cambió.
     func applyDayRollover(now: Date = .now) {
         let result = StreakEngine.rollover(days: store.data.workDays, calendar: calendar, now: now)
@@ -126,15 +126,15 @@ final class GameStore {
         let firstCountedToday = !StreakEngine.isCounted(day)
         let isTurno = day.kind == .turno
 
-        // Una pausa cuenta solo si el flujo la marcó y la verificación lo respalda:
-        // `suspicious` no suma ni rompe; `simulated` queda fuera de todo.
-        let counted = session.counted && !session.simulated && session.level >= .reduced
-        session.counted = counted
+        // Si cuenta lo decide el coordinador (≥ 1 actividad `full`, sin integridad dura, con check-in)
+        // y queda bajo la firma: aquí no se recalcula ni se reescribe. `simulated` queda fuera de todo.
+        let counted = Self.counts(session)
 
         // XP por actividad: full = base, reduced = mitad, suspicious / simulated = 0.
+        // Una sesión `suspicious` no anula las actividades que sí se verificaron.
         var lines: [RewardLine] = []
         var total = 0
-        if !session.simulated && session.level > .suspicious {
+        if !session.simulated {
             for activity in session.activities where activity.completed && !activity.skipped {
                 let xp = Self.xp(for: activity)
                 lines.append(RewardLine(label: Self.label(for: activity), xp: xp))
@@ -181,7 +181,7 @@ final class GameStore {
         unlock(.primeraPausa, if: counted)
         unlock(.doblete, if: isDoblete)
         unlock(.relevoCumplido, if: counted
-               && sessions.filter { $0.counted && $0.recipe == .relevo60 }.count >= Self.relevoCumplidoPauses)
+               && sessions.filter { Self.counts($0) && $0.recipe == .relevo60 }.count >= Self.relevoCumplidoPauses)
         unlock(.rajoCompleto, if: counted && Self.isRajoCompleto(session))
         unlock(.tiroLimpio, if: isTiroLimpio)
         unlock(.caminanteDelRajo, if: Self.verifiedSteps(in: sessions) >= Self.caminanteDelRajoSteps)
@@ -201,6 +201,11 @@ final class GameStore {
 
     // MARK: Reglas de XP e insignias
 
+    /// La pausa vale para racha / Doblete / Tiro limpio: lo marcó el coordinador y no es simulada.
+    static func counts(_ session: PauseSession) -> Bool {
+        session.counted && !session.simulated
+    }
+
     static func xp(for activity: ActivityResult) -> Int {
         guard activity.completed, !activity.skipped else { return 0 }
         switch activity.level {
@@ -218,20 +223,31 @@ final class GameStore {
         }
     }
 
-    /// Campamento de 5 minutos completo: todas sus actividades hechas y verificadas
-    /// (la respiración, débil por naturaleza, basta con que esté contada).
-    static func isRajoCompleto(_ session: PauseSession) -> Bool {
-        guard session.recipe == .campamento5, !session.activities.isEmpty else { return false }
-        return session.activities.allSatisfy { activity in
-            guard activity.completed, !activity.skipped else { return false }
-            return activity.level == .full || (activity.kind.weakByNature && activity.level == .reduced)
-        }
+    /// Actividades que exige "Rajo completo": la receta Campamento completa (las 7).
+    static var rajoCompletoKinds: Set<ActivityKind> {
+        Set(Recipes.base(.campamento5, demo: false).activities.map(\.kind))
     }
 
-    /// Pasos verificados (`full`) acumulados en todas las pausas no simuladas.
+    /// Una actividad hecha y verificada (la respiración, débil por naturaleza, basta con que esté contada).
+    static func isVerifiedDone(_ activity: ActivityResult) -> Bool {
+        guard activity.completed, !activity.skipped else { return false }
+        return activity.level == .full || (activity.kind.weakByNature && activity.level == .reduced)
+    }
+
+    /// Campamento de 5 minutos completo: cubre la receta Campamento entera y todas sus
+    /// actividades quedaron hechas y verificadas. Un plan recortado (suave, o con saltos) no basta.
+    static func isRajoCompleto(_ session: PauseSession) -> Bool {
+        guard session.recipe == .campamento5, !session.simulated, !session.activities.isEmpty,
+              session.activities.allSatisfy(isVerifiedDone) else { return false }
+        let done = Set(session.activities.map(\.kind))
+        return rajoCompletoKinds.isSubset(of: done)
+    }
+
+    /// Pasos verificados (actividad `full`) acumulados en todas las pausas no simuladas.
+    /// Se mira el nivel de cada actividad, no el de la sesión.
     static func verifiedSteps(in sessions: [PauseSession]) -> Int {
         sessions.lazy
-            .filter { !$0.simulated && $0.level > .suspicious }
+            .filter { !$0.simulated }
             .flatMap(\.activities)
             .filter { $0.kind == .pasos && $0.level == .full && !$0.skipped }
             .reduce(0) { sum, activity in

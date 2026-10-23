@@ -1,6 +1,8 @@
 import Foundation
 
-/// Lógica pura de racha y casco automático sobre el libro mayor `[String: WorkDay]`.
+/// Lógica pura de racha y comodín automático sobre el libro mayor `[String: WorkDay]`.
+/// En la interfaz se llama "comodín"; en el código y en los datos guardados sigue siendo "casco"
+/// (`cascoUsed`, `cascos`) para no romper la compatibilidad.
 /// No guarda estado ni mira el reloj: siempre recibe el `WorkCalendar` y una fecha de referencia,
 /// así se prueba con turnos de día y de noche sin tocar `.now`.
 ///
@@ -126,7 +128,7 @@ nonisolated enum StreakEngine {
         return previousWorkDayCounted(days: days, calendar: calendar, at: date)
     }
 
-    /// Ayer se marcó el casco automático ("Ayer usó el casco. Racha a salvo.").
+    /// Ayer se marcó el comodín automático ("Ayer se usó su comodín: racha a salvo.").
     static func usedCascoYesterday(days: [String: WorkDay], calendar: WorkCalendar, at date: Date) -> Bool {
         let yesterday = previous(calendar.workDate(for: date), calendar: calendar)
         return days[key(ofWorkDate: yesterday, calendar: calendar)]?.cascoUsed == true

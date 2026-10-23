@@ -34,7 +34,30 @@ struct CelebrationCopyTests {
         #expect(CelebrationCopy.title(for: .tiroLimpio) == "Tiro limpio")
         #expect(CelebrationCopy.title(for: .pauseDone) == "Pausa cumplida")
         #expect(CelebrationCopy.notVerifiedLine(treatment: .usted) == "No pude verificarla. Repita cuando pueda.")
-        #expect(CelebrationCopy.closeAction == "LISTO")
+        #expect(CelebrationCopy.closeAction == "Listo")
+    }
+
+    @Test func etiquetasSinMayusculasSostenidas() {
+        // Botones con mayúscula inicial y el resto en minúscula ("Listo", no "LISTO").
+        for label in [CelebrationCopy.closeAction, CelebrationCopy.familyCardAction] {
+            #expect(label != label.uppercased(), "Etiqueta en mayúsculas: \(label)")
+        }
+    }
+
+    @Test func comodinEnLaCelebracion() {
+        #expect(CelebrationCopy.comodinUsedYesterdayLine == "Ayer se usó su comodín: racha a salvo.")
+        #expect(!CelebrationCopy.containsBannedFragment(CelebrationCopy.comodinUsedYesterdayLine))
+        #expect(!CelebrationCopy.allFixedPhrases.contains { $0.lowercased().contains("casco") })
+    }
+
+    @Test @MainActor func hapticaFuerteSoloEnLosHitos() {
+        #expect(CelebrationHaptic.isStrong(.doblete))
+        #expect(CelebrationHaptic.isStrong(.tiroLimpio))
+        for milestone in [CelebrationMilestone.activityDone, .notVerified, .day1, .pauseDone] {
+            #expect(!CelebrationHaptic.isStrong(milestone))
+        }
+        // El patrón fuerte existe y se puede construir (el segundo bloque es el "golpe" del hito).
+        #expect((try? Haptics.celebrationPattern(strong: true)) != nil)
     }
 
     @Test func laEleccionDelPoolEsDeterminista() {
