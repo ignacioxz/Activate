@@ -267,7 +267,7 @@ struct DemoPreflightView: View {
             status: demo.enabled ? .ok : .warning))
         list.append(PreflightCheck(
             id: "shortTargets", group: .demo, title: "Metas cortas",
-            detail: demo.shortTargets ? "30 pasos · 5 sentadillas · 8 parpadeos · Stroop 20" : "Metas reales (la pausa dura más)",
+            detail: demo.shortTargets ? "30 pasos · pararse 4 veces · 5 sentadillas · 8 parpadeos · Stroop 20" : "Metas reales (la pausa dura más)",
             status: demo.shortTargets ? .ok : .warning))
         let silenced = demo.notificationsMuted || !store.profile.notificationsOptIn
         list.append(PreflightCheck(

@@ -6,10 +6,11 @@ import FoundationModels
 // (nombres cortos: presupuesto de tokens).
 
 /// Ejercicio propuesto por el modelo. `.anyOf` exige un literal: va la lista fija de los 7 ids
-/// del catálogo (`CatalogIDs.all`) y `PlanValidator` filtra después contra los permitidos del día.
+/// vigentes del catálogo (`CatalogIDs.all`, sin la respiración retirada) y `PlanValidator` filtra
+/// después contra los permitidos del día.
 @Generable(description: "Un ejercicio del catálogo con su meta")
 nonisolated struct EjercicioAsignado {
-    @Guide(description: "Id del ejercicio del catálogo", .anyOf(["A1", "A2", "A3", "A5", "A8", "A9", "A10"]))
+    @Guide(description: "Id del ejercicio del catálogo", .anyOf(["A1", "A2", "A3", "A4", "A5", "A9", "A10"]))
     var id: String
     @Guide(description: "Meta: repeticiones, pasos, movimientos, parpadeos, ciclos o ensayos", .range(1...300))
     var reps: Int

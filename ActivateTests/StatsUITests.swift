@@ -76,6 +76,13 @@ struct StatsUITests {
         let anomaly = Anomaly(kind: "shake", severity: .hard, at: 12.4)
         #expect(StatsAnomalyCopy.text(for: anomaly) == "El teléfono se sacudió sin caminar")
         #expect(StatsAnomalyCopy.severityText(.hard) == "Afectó la verificación")
+        // Pararse y sentarse / sentadilla en las manos: claves propias antes de las genéricas.
+        #expect(StatsAnomalyCopy.text(forKind: SitStandAnomaly.altitudeDrift, detail: nil) == "Cambió de altura: escalera o ascensor")
+        #expect(StatsAnomalyCopy.text(forKind: SitStandAnomaly.flatFace, detail: nil) == "La cara se veía plana, como una foto")
+        #expect(StatsAnomalyCopy.text(forKind: SitStandAnomaly.armsOnly, detail: nil) == "Subió el teléfono con los brazos")
+        #expect(StatsAnomalyCopy.text(forKind: SitStandAnomaly.torsoOnly, detail: nil) == "Se inclinó sin pararse del todo")
+        #expect(StatsAnomalyCopy.text(forKind: SitStandAnomaly.holdChallengeFailed, detail: nil) == "No aguantó los 2 segundos que pedía la pantalla")
+        #expect(StatsAnomalyCopy.text(forKind: SitStandAnomaly.staticFace, detail: nil) == "La imagen no se movía")
     }
 
     @Test func metricasDensasPorActividad() {
@@ -93,6 +100,16 @@ struct StatsUITests {
         #expect(StatsMetricCopy.lines(for: neck).contains { $0.label == "Giro máximo" && $0.value == "48°" })
         #expect(StatsMetricCopy.lines(for: neck).contains { $0.label == "Señales acertadas" && $0.value == "12 de 15" })
         #expect(StatsMetricCopy.lines(for: .none).isEmpty)
+        // Pararse y sentarse: `.reps` lleva la mayor subida del teléfono en metros.
+        let sitStand = ActivityMetrics.reps(count: 8, minDescentRatio: 0.42, meanRepSeconds: 3.6)
+        let sitLines = StatsMetricCopy.lines(for: sitStand, kind: .pararseSentarse)
+        #expect(sitLines.first == StatsMetricLine(label: "Veces de pie", value: "8"))
+        #expect(sitLines.contains { $0.label == "Subida máxima" && $0.value == "42 cm" })
+        #expect(sitLines.contains { $0.label == "Tiempo por vez" })
+        #expect(!sitLines.contains { $0.label == "Descenso mínimo" })
+        // La sentadilla sigue leyendo el descenso relativo.
+        #expect(StatsMetricCopy.lines(for: sitStand, kind: .sentadilla).contains { $0.label == "Descenso mínimo" && $0.value == "42 %" })
+        #expect(StatsFormatting.activityName(.pararseSentarse) == "pararse y sentarse")
     }
 
     @Test func porcentajesYEtiquetas() {

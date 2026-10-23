@@ -55,10 +55,24 @@ struct SessionFlowTests {
     // MARK: Orden fijo de la sesión (SensorBlockPlanner, paquete activities)
 
     @Test func ordenaSegunElOrdenFijoDeLaSesionSinRetiradas() {
-        let mixed = [a(.cuello, 15), a(.pasos, 250), a(.stroop, 40), a(.sentadilla, 10), a(.respiracion, 6), a(.ojos, 15), a(.extensionLumbar, 10)]
+        let mixed = [a(.cuello, 15), a(.pasos, 250), a(.stroop, 40), a(.sentadilla, 10), a(.respiracion, 6), a(.ojos, 15),
+                     a(.extensionLumbar, 10), a(.pararseSentarse, 8)]
         let ordered = SensorBlockPlanner.ordered(mixed).map(\.kind)
-        #expect(ordered == [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
+        #expect(ordered == [.pasos, .pararseSentarse, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
         #expect(ordered == ActivityKind.sessionOrder)
+    }
+
+    @Test func pararseYSentarseVaPegadoALaSentadillaEnLasManos() {
+        // Misma ARSession en las manos: sin relevo de cámara entre ellas.
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .pararseSentarse, to: .sentadilla, squatMode: .handheld))
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .pasos, to: .pararseSentarse, squatMode: .handheld))
+        // La sentadilla apoyada abre otra sesión de cámara (AVCaptureSession): ahí sí hay relevo.
+        #expect(PauseCoordinator.needsCameraHandoff(from: .pararseSentarse, to: .sentadilla, squatMode: .supported))
+        // Hacia la cara (cervical) se suelta la cámara como desde la sentadilla.
+        #expect(PauseCoordinator.needsCameraHandoff(from: .pararseSentarse, to: .cuello, squatMode: .handheld))
+        #expect(PauseCoordinator.needsCameraHandoff(from: .sentadilla, to: .cuello, squatMode: .handheld))
+        #expect(!PauseCoordinator.needsCameraHandoff(from: .cuello, to: .stroop, squatMode: .supported))
+        #expect(PauseCoordinator.usesCamera(.pararseSentarse))
     }
 
     // MARK: Receta suave (Recipes.gentle vía SafetyRules.apply)
@@ -77,9 +91,9 @@ struct SessionFlowTests {
         let input = CoachInput(profileName: "Marco", treatment: .usted, checkIn: nil, moment: .campamento,
                                minutesAvailable: 5, baseRecipe: base, allowedKinds: ActivityKind.sessionOrder,
                                historyLines: [], gentle: false)
-        // La plantilla por reglas devuelve las 6 actividades de campamento: la acepta SessionPlanCheck.
+        // La plantilla por reglas devuelve las 7 actividades de campamento: la acepta SessionPlanCheck.
         let rules = PausePlan(activities: base.activities, reasoning: "", why: "", startMessage: "", backend: .rules)
-        #expect(PauseCoordinator.validated(rules, input: input, base: base, minutes: 5, demo: false)?.count == 6)
+        #expect(PauseCoordinator.validated(rules, input: input, base: base, minutes: 5, demo: false)?.count == 7)
         // El mismo plan "del LLM" supera el máximo de 5 ejercicios del prompt: PlanValidator lo rechaza.
         let llm = PausePlan(activities: base.activities, reasoning: "", why: "", startMessage: "", backend: .foundationModels)
         #expect(PauseCoordinator.validated(llm, input: input, base: base, minutes: 5, demo: false) == nil)
@@ -153,7 +167,7 @@ struct SessionFlowTests {
         let (c, _) = makeCoordinator(moment: .campamento)
         c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .campamento)
         #expect(c.stage == .planning)
-        #expect(c.plan.map(\.kind) == [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
+        #expect(c.plan.map(\.kind) == [.pasos, .pararseSentarse, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar])
     }
 
     @MainActor
@@ -250,7 +264,7 @@ struct SessionFlowTests {
         #expect(c.effectiveMoment == .campamento)
         #expect(c.recipeKind == .relevo60)
         #expect(c.plan.map(\.kind) == [.cuello, .ojos])
-        #expect(c.excluded.map(\.kind) == [.pasos, .sentadilla, .stroop, .extensionLumbar])
+        #expect(c.excluded.map(\.kind) == [.pasos, .pararseSentarse, .sentadilla, .stroop, .extensionLumbar])
         #expect(c.excluded.allSatisfy { $0.reason == PlanExclusions.relevo })
         #expect(PlanExclusions.relevo == "Eligió la pausa rápida de 1 minuto.")
         c.startActivities()
@@ -435,8 +449,8 @@ struct SessionFlowTests {
         for i in 0..<total {
             #expect(c.stage == .activity(i))
             // Durante el relevo de cámara (cuerpo ↔ cara) todavía no hay runner; saltar igual funciona.
-            let handoff = i > 0 && SensorBlockPlanner.needsCameraHandoff(from: c.plan[i - 1].kind.sensorBlock,
-                                                                          to: c.plan[i].kind.sensorBlock)
+            let handoff = i > 0 && PauseCoordinator.needsCameraHandoff(from: c.plan[i - 1].kind, to: c.plan[i].kind,
+                                                                        squatMode: SquatWiring.storedMode())
             #expect((c.runner == nil) == handoff, "actividad \(i)")
             c.skipCurrent()
         }

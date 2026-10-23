@@ -353,6 +353,8 @@ private func durationSeconds(_ d: Duration) -> Double {
 /// Por kind (fuente en vivo / fixture de replay):
 /// - `.pasos` (A2): `PedometerVerifier` ← `SensorHub` (StepSample: podómetro + movimiento + actividad) / `FixtureSynth.walk(steps:)`.
 /// - `.sentadilla` (A3): `SquatVerifier` ← `CameraPoseSource` (PoseSample) / `FixtureSynth.squats(count:)`.
+/// - `.pararseSentarse` (A4): `SitToStandVerifier` ← `HandheldSitStandSource` (la ARSession de la sentadilla en
+///   las manos, `HandheldSquatSample` → `SitStandSample`) / `SitStandSynth.completing(_:)`.
 /// - `.extensionLumbar` (A1): `ExtensionVerifier` ← `CameraPoseSource` / fixture grabada (`Fixture<PoseSample>.load`).
 /// - `.cuello` (A5): `NeckVerifier` (challenge aleatorio con semilla) ← `FaceSource` (FaceSample) / `FixtureSynth.neckSequence(_:)`.
 /// - `.ojos` (A9): `EyeRestVerifier` ← la misma `FaceSource` / `FixtureSynth.blinks(count:)` + `gaze(seconds:awayDegrees:)`.

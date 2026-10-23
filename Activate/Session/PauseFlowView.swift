@@ -201,6 +201,16 @@ private struct PauseFlowContent: View {
                                        onSkip: { coordinator.skipCurrent() })
                         .id(coordinator.runnerGeneration)
                         .transition(stageTransition)
+                } else if assignment.kind == .pararseSentarse {
+                    // Teléfono en las dos manos frente al pecho: consigna grande, nunca la imagen de la cámara.
+                    SitToStandActivityView(runner: runner,
+                                           assignment: assignment,
+                                           position: index + 1,
+                                           total: coordinator.plan.count,
+                                           onFinish: { coordinator.activityFinished($0, at: index) },
+                                           onSkip: { coordinator.skipCurrent() })
+                        .id(coordinator.runnerGeneration)
+                        .transition(stageTransition)
                 } else if assignment.kind == .sentadilla, let squat = runner.squatRunner {
                     SquatActivityView(runner: squat,
                                       assignment: assignment,

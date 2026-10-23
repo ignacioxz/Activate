@@ -51,7 +51,9 @@ struct CoachValidationTests {
     // MARK: - PlanValidator
 
     @Test func catalogIdsMatchActivityKind() {
-        #expect(CatalogIDs.all == ActivityKind.allCases.map(\.rawValue))
+        // Los ids del `@Guide(.anyOf)` son los vigentes: con A4 (pararse y sentarse) y sin A8 (retirada).
+        #expect(CatalogIDs.all == ActivityKind.allCases.filter { !$0.isRetired }.map(\.rawValue))
+        #expect(CatalogIDs.all.contains("A4") && !CatalogIDs.all.contains("A8"))
     }
 
     @Test func validProposalPasses() {
@@ -63,8 +65,8 @@ struct CoachValidationTests {
     }
 
     @Test func unknownIdFails() {
-        let r = PlanValidator.validate([.init(id: "A4", reps: 10)], input: input())
-        #expect(r == .failure(.unknownID("A4")))
+        let r = PlanValidator.validate([.init(id: "A6", reps: 10)], input: input())
+        #expect(r == .failure(.unknownID("A6")))
     }
 
     @Test func notAllowedIdFails() {

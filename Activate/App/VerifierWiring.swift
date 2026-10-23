@@ -73,6 +73,10 @@ enum VerifierWiring {
                 return ActivityRunner(assignment: assignment, verifier: verifier, source: cameraSource())
             }
 
+        case .pararseSentarse:
+            // Teléfono en las dos manos: la fuente en vivo es la de la sentadilla en las manos (ARKit cara + mundo).
+            return SitStandWiring.builder(hub: sensors, store: store, speed: speed)
+
         case .extensionLumbar:
             return { assignment, demo, replay in
                 let spec = VerificationSpec.standard(for: .extensionLumbar, target: assignment.target, demo: demo)

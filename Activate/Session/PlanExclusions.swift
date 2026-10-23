@@ -44,7 +44,8 @@ nonisolated enum PlanExclusions {
         if !inBase {
             switch recipe {
             case .relevo60: return relevo
-            case .colacion3: return kind.sensorBlock == .cameraPose ? needsPropping : campamento
+            // Pararse y sentarse comparte el bloque de cámara de la sentadilla, pero va en las manos.
+            case .colacion3: return kind.requiresPhoneSupported ? needsPropping : campamento
             case .campamento5: return unavailable
             }
         }

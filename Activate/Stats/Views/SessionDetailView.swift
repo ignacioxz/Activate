@@ -8,6 +8,13 @@ import SwiftUI
 /// aquí se traducen por palabras clave y, si no calza ninguna, se usa `detail`.
 nonisolated enum StatsAnomalyCopy {
     private static let rules: [(keys: [String], text: String)] = [
+        // Sentadilla en las manos y pararse y sentarse (antes de las reglas genéricas: "flatFace" no es
+        // perder la cara ni "altitudeDrift" un cambio de reloj).
+        (["armsonly"], "Subió el teléfono con los brazos"),
+        (["torsoonly"], "Se inclinó sin pararse del todo"),
+        (["flatface"], "La cara se veía plana, como una foto"),
+        (["holdchallenge"], "No aguantó los 2 segundos que pedía la pantalla"),
+        (["altitude", "barometer"], "Cambió de altura: escalera o ascensor"),
         (["anticip"], "Respuestas antes de tiempo"),
         (["mash", "spam", "samekey", "repeat"], "La misma tecla muchas veces"),
         (["accuracy", "precision"], "Precisión muy baja"),
@@ -71,7 +78,15 @@ nonisolated enum StatsMetricCopy {
 
     static func signedMs(_ value: Int) -> String { value > 0 ? "+\(value) ms" : "\(value) ms" }
 
-    static func lines(for metrics: ActivityMetrics) -> [StatsMetricLine] {
+    /// `kind` afina la lectura de métricas compartidas: en pararse y sentarse, `.reps` lleva la mayor
+    /// subida del teléfono en metros (no un descenso relativo).
+    static func lines(for metrics: ActivityMetrics, kind: ActivityKind? = nil) -> [StatsMetricLine] {
+        if kind == .pararseSentarse, case let .reps(count, maxRise, meanRepSeconds) = metrics {
+            var lines = [StatsMetricLine(label: "Veces de pie", value: "\(count)")]
+            if let maxRise { lines.append(.init(label: "Subida máxima", value: "\(Int((maxRise * 100).rounded())) cm")) }
+            if let meanRepSeconds { lines.append(.init(label: "Tiempo por vez", value: "\(StatsCopy.format1(meanRepSeconds)) s")) }
+            return lines
+        }
         switch metrics {
         case let .steps(count, meanCadence, walkingFraction, rmsPeak):
             var lines = [StatsMetricLine(label: "Pasos verificados", value: "\(count)")]
@@ -410,7 +425,7 @@ private struct ActivityResultCard: View {
             } else if !result.completed {
                 Label("No completada", systemImage: "xmark.circle").font(.body.weight(.semibold)).foregroundStyle(.secondary)
             }
-            let lines = StatsMetricCopy.lines(for: result.metrics)
+            let lines = StatsMetricCopy.lines(for: result.metrics, kind: result.kind)
             if !lines.isEmpty {
                 Divider()
                 ForEach(lines) { line in
