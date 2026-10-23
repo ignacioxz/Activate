@@ -219,9 +219,10 @@ struct HomeTests {
         #expect(MomentCard.includesLine(for: recipe) == "Incluye: Cervical · Pestañeo")
         #expect(MomentCard.shortName(.cuello) == "Cervical")
         #expect(MomentCard.shortName(.ojos) == "Pestañeo")
+        #expect(MomentCard.shortName(.pararseSentarse) == "Pararse")
         // Campamento en el orden fijo de la sesión.
         #expect(MomentCard.includesLine(for: Recipes.base(.campamento5, demo: false))
-                == "Incluye: Pasos · Sentadillas · Cervical · Reflejos · Pestañeo · Espalda")
+                == "Incluye: Pasos · Pararse · Sentadillas · Cervical · Reflejos · Pestañeo · Espalda")
     }
 
     // MARK: - Consentimiento antes de la pausa

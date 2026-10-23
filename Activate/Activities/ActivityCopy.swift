@@ -65,6 +65,8 @@ nonisolated extension ActivityKind {
             "Guarde el teléfono en el bolsillo del pecho y camine a paso firme, sin apuro. El teléfono vibra al llegar a la meta."
         case .sentadilla:
             "Tome el teléfono con las dos manos frente al pecho y mírelo. Baje hasta la mitad, como si fuera a sentarse, y suba sin apuro."
+        case .pararseSentarse:
+            "Siéntese en una silla con el teléfono en las dos manos frente al pecho. Párese y vuelva a sentarse sin usar las manos."
         case .cuello:
             "Siga la flecha en pantalla: sí es asentir, no es girar, quizás es inclinar. Muévase lento hasta llenar la barra y vuelva al centro."
         case .respiracion:
@@ -79,8 +81,9 @@ nonisolated extension ActivityKind {
     /// Dónde va el teléfono (texto del bloque de sensor).
     var placement: String {
         switch self {
-        // Modo por defecto de la sentadilla: en las manos (cámaras + sensores, sin mostrar la cámara).
-        case .sentadilla: "Teléfono en las dos manos, frente al pecho"
+        // Modo por defecto de la sentadilla y único de pararse y sentarse: en las manos (cámaras +
+        // sensores, sin mostrar la cámara).
+        case .sentadilla, .pararseSentarse: "Teléfono en las dos manos, frente al pecho"
         default: sensorBlock.placement
         }
     }
@@ -90,6 +93,7 @@ nonisolated extension ActivityKind {
         switch self {
         case .stroop: ["Pantalla en la mano.", "Toque el color, no la palabra.", "3 · 2 · 1"]
         case .sentadilla: ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Baje como si se sentara."]
+        case .pararseSentarse: ["Siéntese con el teléfono frente al pecho.", "Quieto un segundo.", "Párese sin usar las manos."]
         case .respiracion: ["Pantalla en la mano.", "Dedo en el botón al exhalar."]
         case .ojos: ["Sáquese los lentes.", "Mire al teléfono.", "Cierre bien los ojos."]
         case .extensionLumbar, .pasos, .cuello: sensorBlock.gatingCopy
@@ -105,6 +109,8 @@ nonisolated extension ActivityKind {
             "Caminar seguido casi duplica el tiempo sin recaídas de dolor lumbar (Pocovi 2024)."
         case .sentadilla:
             "Diez minutos de fuerza en el trabajo reducen el dolor musculoesquelético (Jakobsen 2015)."
+        case .pararseSentarse:
+            "Pararse de la silla sin manos mide y entrena la fuerza de las piernas (Jones, Rikli y Beam 1999)."
         case .cuello:
             "Dos minutos diarios de ejercicio bajan el dolor de cuello en el trabajo (Andersen 2011; Gross 2015)."
         case .respiracion:
@@ -122,6 +128,7 @@ nonisolated extension ActivityKind {
         case .extensionLumbar: "No la haga si el dolor le baja a la pierna o si al estirarse se marea."
         case .pasos: "Si al caminar el dolor le aumenta o se marea, deténgase y siéntese."
         case .sentadilla: "No la haga si hoy evita agacharse o si le duele la rodilla."
+        case .pararseSentarse: "No la haga si se marea al pararse o si le duele la rodilla."
         case .cuello: "Deténgase si se marea o si el dolor le baja al brazo."
         case .respiracion: "Si se marea, respire normal y siga cuando pase."
         case .ojos: "Si ve borroso o le duele la cabeza, cierre los ojos un momento."
@@ -135,7 +142,7 @@ nonisolated extension ActivityKind {
     /// Actividades que se hacen de pie (las reglas de seguridad las acortan si "solo está de pie por períodos cortos").
     var isStanding: Bool {
         switch self {
-        case .extensionLumbar, .pasos, .sentadilla: true
+        case .extensionLumbar, .pasos, .sentadilla, .pararseSentarse: true
         case .cuello, .respiracion, .ojos, .stroop: false
         }
     }

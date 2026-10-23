@@ -551,7 +551,8 @@ struct HandheldSquatTests {
 
     @Test func colacionLlevaSentadillaDespuesDeLosPasosYRelevoNo() {
         for demo in [false, true] {
-            #expect(Recipes.base(.colacion3, demo: demo).kinds.prefix(2) == [.pasos, .sentadilla])
+            // Pararse y sentarse va entre los pasos y la sentadilla (mismo bloque en las manos).
+            #expect(Recipes.base(.colacion3, demo: demo).kinds.prefix(3) == [.pasos, .pararseSentarse, .sentadilla])
             #expect(!Recipes.base(.relevo60, demo: demo).kinds.contains(.sentadilla))
             #expect(Recipes.base(.campamento5, demo: demo).kinds.contains(.sentadilla))
         }

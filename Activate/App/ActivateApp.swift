@@ -25,6 +25,8 @@ struct ActivateApp: App {
         VerifierWiring.register(sensors: hub, store: s)
         // Sentadilla: en las manos (ARKit cara + mundo, sin mostrar cámara) o apoyado; reemplaza el builder genérico.
         SquatWiring.register(hub: hub, store: s)
+        // Pararse y sentarse: la misma fuente en las manos que la sentadilla (sin modo apoyado ni cámara en pantalla).
+        SitStandWiring.register(hub: hub, store: s)
     }
 
     var body: some Scene {

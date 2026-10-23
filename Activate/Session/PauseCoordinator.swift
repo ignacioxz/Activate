@@ -222,6 +222,14 @@ final class PauseCoordinator {
         requestCoachPlan(base: filtered, allowed: allowed, demo: demo, reducedTargets: reduced)
     }
 
+    /// Relevo de cámara entre dos actividades seguidas: cambio de bloque (ARSession ↔ AVCaptureSession), o
+    /// pararse y sentarse (ARSession en las manos) → sentadilla apoyada (AVCaptureSession), que comparten
+    /// bloque pero no la sesión de cámara. Con la sentadilla en las manos (por defecto) van seguidas, sin relevo.
+    nonisolated static func needsCameraHandoff(from: ActivityKind, to: ActivityKind, squatMode: SquatMode) -> Bool {
+        if SensorBlockPlanner.needsCameraHandoff(from: from.sensorBlock, to: to.sensorBlock) { return true }
+        return from == .pararseSentarse && to == .sentadilla && squatMode == .supported
+    }
+
     /// Actividades que usan la cámara (cara con ARKit, cuerpo con Vision).
     nonisolated static func usesCamera(_ kind: ActivityKind) -> Bool {
         kind.sensorBlock == .face || kind.sensorBlock == .cameraPose
@@ -393,9 +401,7 @@ final class PauseCoordinator {
             stage = .postCheck
             return
         }
-        let from = plan[index].kind.sensorBlock
-        let to = plan[next].kind.sensorBlock
-        guard SensorBlockPlanner.needsCameraHandoff(from: from, to: to) else {
+        guard Self.needsCameraHandoff(from: plan[index].kind, to: plan[next].kind, squatMode: SquatWiring.storedMode()) else {
             enter(index: next)
             return
         }

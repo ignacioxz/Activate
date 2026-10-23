@@ -101,7 +101,7 @@ nonisolated enum DemoSeed {
         switch moment {
         case .entrada, .salida: [.cuello, .ojos]
         case .colacion: [.pasos, .cuello, .ojos]
-        case .campamento: [.pasos, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
+        case .campamento: [.pasos, .pararseSentarse, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
         }
     }
 
@@ -340,6 +340,11 @@ nonisolated enum DemoSeed {
         case .sentadilla:
             let rep = rng.double(3.0...3.8)
             metrics = .reps(count: achieved, minDescentRatio: round2(rng.double(0.26...0.34)), meanRepSeconds: round2(rep))
+            duration = Double(achieved) * rep + 6
+        case .pararseSentarse:
+            // `minDescentRatio` lleva la mayor subida del teléfono en metros (ver `SitToStandVerifier`).
+            let rep = rng.double(3.2...4.2)
+            metrics = .reps(count: achieved, minDescentRatio: round2(rng.double(0.38...0.46)), meanRepSeconds: round2(rep))
             duration = Double(achieved) * rep + 6
         case .extensionLumbar:
             let rep = rng.double(3.6...4.4)

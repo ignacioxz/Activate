@@ -4,8 +4,9 @@ import Foundation
 
 /// Ids del catálogo tal como los conoce el `@Guide(.anyOf(...))` de `EjercicioAsignado`
 /// (el guide exige un literal; aquí queda la copia que los tests comparan con `ActivityKind`).
+/// Solo los ejercicios vigentes: la respiración (A8) está retirada y el modelo no la puede proponer.
 nonisolated enum CatalogIDs {
-    static let all: [String] = ["A1", "A2", "A3", "A5", "A8", "A9", "A10"]
+    static let all: [String] = ["A1", "A2", "A3", "A4", "A5", "A9", "A10"]
 }
 
 /// Ejercicio propuesto (id + reps) antes de validar. Es lo que produce el LLM.
@@ -26,7 +27,7 @@ nonisolated enum PlanValidator {
     }
 
     // Umbrales nombrados (se calibran en dispositivo).
-    /// Segundos por repetición (extensión, sentadilla, movimiento de cuello, parpadeo).
+    /// Segundos por repetición (extensión, sentadilla, pararse y sentarse, movimiento de cuello, parpadeo).
     static let secondsPerRep: Double = 1
     /// Segundos por paso.
     static let secondsPerStep: Double = 0.5
@@ -45,7 +46,7 @@ nonisolated enum PlanValidator {
         case .pasos: Double(a.target) * secondsPerStep
         case .stroop: stroopSeconds
         case .respiracion: breathSeconds
-        case .extensionLumbar, .sentadilla, .cuello, .ojos: Double(a.target) * secondsPerRep
+        case .extensionLumbar, .sentadilla, .pararseSentarse, .cuello, .ojos: Double(a.target) * secondsPerRep
         }
     }
 

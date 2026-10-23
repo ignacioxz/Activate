@@ -70,7 +70,7 @@ nonisolated enum Recipes {
     static func minimumTarget(for kind: ActivityKind) -> Int {
         switch kind {
         case .pasos: SafetyRules.minStepTarget
-        case .extensionLumbar, .sentadilla, .cuello: SafetyRules.minRepTarget
+        case .extensionLumbar, .sentadilla, .pararseSentarse, .cuello: SafetyRules.minRepTarget
         case .respiracion, .ojos, .stroop: 1
         }
     }
@@ -122,8 +122,9 @@ nonisolated enum SafetyRules {
         static let shortStandingWhy = "Hoy actividades más breves."
     }
 
-    /// Lo que sacan las reglas de "no agacharse / arrodillarse" = Sí (bisagra A4 cuando exista).
-    static let bendingKinds: [ActivityKind] = [.sentadilla, .extensionLumbar]
+    /// Lo que sacan las reglas de "no agacharse / arrodillarse" = Sí: pararse y sentarse dobla cadera y
+    /// rodillas como la sentadilla.
+    static let bendingKinds: [ActivityKind] = [.pararseSentarse, .sentadilla, .extensionLumbar]
 
     /// Reglas clínicas deterministas (nunca en el prompt del LLM). Sin check-in → todo permitido.
     static func evaluate(checkIn: DailyCheckIn?) -> Decision {

@@ -169,6 +169,7 @@ nonisolated enum StatsFormatting {
         case .extensionLumbar: "extensión lumbar"
         case .pasos: "caminata"
         case .sentadilla: "sentadilla"
+        case .pararseSentarse: "pararse y sentarse"
         case .cuello: "movilidad cervical"
         case .respiracion: "respiración"
         case .ojos: "ojos"
