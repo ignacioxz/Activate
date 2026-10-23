@@ -48,6 +48,10 @@ final class PauseCoordinator {
     private(set) var coachWhy: String?
     private(set) var coachStartMessage: String?
     private(set) var coachBackend: CoachBackend?
+    /// Sin consentimiento no se usa la cámara: el plan queda solo con pasos y pantalla.
+    private(set) var cameraBlocked = false
+    /// Momento elegido en el chip "Momento" del check-in de esta pausa (nil si se reutilizó uno anterior).
+    private(set) var selectedMoment: Moment?
     private(set) var results: [ActivityResult] = []
     private(set) var post: PostResponse?
     private(set) var reward: SessionReward?
@@ -84,8 +88,12 @@ final class PauseCoordinator {
 
     var profileName: String { store.profile.name }
     var treatment: Treatment { store.profile.treatment }
-    var usualZone: PainZone { store.profile.usualZone }
-    var recipeKind: RecipeKind { moment.recipe }
+    /// Zonas habituales del perfil (preselección del check-in).
+    var usualZones: [PainZone] { store.profile.allUsualZones }
+    /// Momento vigente: el que se eligió en el check-in de esta pausa o, si no, el de apertura.
+    /// Manda en la receta, en el `CoachInput` y en la sesión guardada.
+    var effectiveMoment: Moment { selectedMoment ?? moment }
+    var recipeKind: RecipeKind { effectiveMoment.recipe }
 
     var currentIndex: Int? {
         if case .activity(let i) = stage { return i }
@@ -123,19 +131,24 @@ final class PauseCoordinator {
     // MARK: Check-in
 
     /// Guarda el check-in al instante (cuenta para estadísticas aunque no siga) y evalúa seguridad.
-    func submitCheckIn(answers: [Bool], zone: PainZone, moment checkInMoment: Moment) {
+    /// `zones` es la selección múltiple de "¿Dónde le duele?" (vacía → zonas habituales).
+    func submitCheckIn(answers: [Bool], zones: [PainZone], moment checkInMoment: Moment) {
         guard answers.count == RDQ6.items.count else { return }
-        let entry = store.makeCheckIn(date: .now, source: .pausa, answers: answers, zone: zone, moment: checkInMoment)
+        let picked = zones.isEmpty ? store.profile.allUsualZones : zones
+        let entry = store.makeCheckIn(date: .now, source: .pausa, answers: answers, zones: picked, moment: checkInMoment)
         store.addCheckIn(entry)
         checkIn = entry
+        selectedMoment = checkInMoment
         existingCheckIn = nil
         evaluateSafety()
     }
 
-    /// Sigue con el check-in de hoy ya respondido.
+    /// Sigue con el check-in de hoy ya respondido. Su momento es el de cuando se respondió (quizás
+    /// otro relevo): aquí manda el momento con que se abrió la pausa.
     func continueWithExistingCheckIn() {
         guard let existingCheckIn else { return }
         checkIn = existingCheckIn
+        selectedMoment = nil
         evaluateSafety()
     }
 
@@ -185,47 +198,105 @@ final class PauseCoordinator {
     private func buildPlan() {
         let demo = store.data.demo.shortTargets
         let d = decision ?? SafetyRules.evaluate(checkIn: checkIn)
+        let consent = store.profile.consentGiven
         // `apply` reemplaza la base por `Recipes.gentle` cuando la decisión es suave, filtra y escala metas.
-        let filtered = SafetyRules.apply(d, to: Recipes.base(moment.recipe, demo: demo), demo: demo)
+        let safe = SafetyRules.apply(d, to: Recipes.base(recipeKind, demo: demo), demo: demo)
+        // Segunda barrera del consentimiento: sin él no hay actividades de cámara (cara ni cuerpo).
+        let filtered = Self.consentFiltered(safe, consentGiven: consent, allowed: d.allowed, demo: demo)
+        let allowed = Self.consentAllowed(d.allowed, consentGiven: consent)
+        cameraBlocked = !consent
         plan = SensorBlockPlanner.ordered(filtered.activities)
         coachWhy = nil
         coachStartMessage = nil
         coachBackend = nil
         stage = .planning
-        requestCoachPlan(base: filtered, allowed: d.allowed, demo: demo)
+        let reduced = d.stepTargetFactor < 1 || d.shorterActivities
+        requestCoachPlan(base: filtered, allowed: allowed, demo: demo, reducedTargets: reduced)
     }
 
-    /// Pide el ajuste al coach en paralelo; se aplica solo si llega a tiempo y pasa la validación.
-    private func requestCoachPlan(base: Recipe, allowed: [ActivityKind], demo: Bool) {
+    /// Actividades que usan la cámara (cara con ARKit, cuerpo con Vision).
+    nonisolated static func usesCamera(_ kind: ActivityKind) -> Bool {
+        kind.sensorBlock == .face || kind.sensorBlock == .cameraPose
+    }
+
+    /// Tipos permitidos para el coach: sin consentimiento, fuera los de cámara.
+    nonisolated static func consentAllowed(_ allowed: [ActivityKind], consentGiven: Bool) -> [ActivityKind] {
+        consentGiven ? allowed : allowed.filter { !usesCamera($0) }
+    }
+
+    /// Quita las actividades de cámara sin consentimiento. Si la receta queda vacía (relevo: cuello + ojos)
+    /// y las reglas lo permiten, deja la respiración, que solo usa la pantalla.
+    nonisolated static func consentFiltered(_ recipe: Recipe, consentGiven: Bool, allowed: [ActivityKind], demo: Bool) -> Recipe {
+        guard !consentGiven, !recipe.activities.isEmpty else { return recipe }
+        var activities = recipe.activities.filter { !usesCamera($0.kind) }
+        if activities.isEmpty, allowed.contains(.respiracion) {
+            activities = [Recipes.assignment(.respiracion, demo: demo)]
+        }
+        return Recipe(kind: recipe.kind, activities: activities)
+    }
+
+    /// Pide el ajuste al coach en paralelo; se aplica solo si llega a tiempo (ver `adopt`).
+    private func requestCoachPlan(base: Recipe, allowed: [ActivityKind], demo: Bool, reducedTargets: Bool) {
         planTask?.cancel()
         let history = StatsEngine.summary(data: store.data, calendar: store.calendar, now: .now).historyLines
+        let m = effectiveMoment
         let input = CoachInput(profileName: store.profile.name, treatment: store.profile.treatment, checkIn: checkIn,
-                               moment: moment, minutesAvailable: moment.minutes, baseRecipe: base,
+                               moment: m, minutesAvailable: m.minutes, baseRecipe: base,
                                allowedKinds: allowed, historyLines: Array(history.prefix(10)), gentle: isGentle)
-        let minutes = moment.minutes
+        let minutes = m.minutes
         planTask = Task { [weak self] in
             guard let self else { return }
             guard let proposal = await self.planWithTimeout(input) else { return }
             guard !Task.isCancelled, self.stage == .planning else { return }
-            guard let accepted = Self.validated(proposal, input: input, base: base, minutes: minutes, demo: demo) else { return }
-            self.plan = SensorBlockPlanner.ordered(accepted)
-            self.coachWhy = proposal.why.isEmpty ? nil : proposal.why
-            self.coachStartMessage = proposal.startMessage.isEmpty ? nil : proposal.startMessage
+            guard let adoption = Self.adopt(proposal, current: self.plan, input: input, base: base, minutes: minutes,
+                                            demo: demo, reducedTargets: reducedTargets) else { return }
+            self.plan = adoption.plan
+            self.coachWhy = adoption.why
+            self.coachStartMessage = adoption.startMessage
             self.coachBackend = proposal.backend
+        }
+    }
+
+    /// Lo que se toma de la respuesta del coach.
+    nonisolated struct CoachAdoption: Sendable, Equatable {
+        var plan: [ActivityAssignment]
+        var why: String?
+        var startMessage: String?
+    }
+
+    /// - Reglas (`.rules`): solo el "por qué" y el mensaje de inicio. Las metas quedan las de la receta ya
+    ///   filtrada (la plantilla volvería a escalar ×0,6 el plan suave que `Recipes.gentle` ya redujo).
+    /// - IA (`.foundationModels`): metas y textos, solo si el plan pasa las dos barreras de `validated`.
+    nonisolated static func adopt(_ proposal: PausePlan, current: [ActivityAssignment], input: CoachInput, base: Recipe,
+                                  minutes: Int, demo: Bool, reducedTargets: Bool) -> CoachAdoption? {
+        let why = proposal.why.isEmpty ? nil : proposal.why
+        let start = proposal.startMessage.isEmpty ? nil : proposal.startMessage
+        switch proposal.backend {
+        case .rules:
+            guard why != nil || start != nil else { return nil }
+            return CoachAdoption(plan: current, why: why, startMessage: start)
+        case .foundationModels:
+            guard let accepted = validated(proposal, input: input, base: base, minutes: minutes, demo: demo,
+                                           reducedTargets: reducedTargets) else { return nil }
+            return CoachAdoption(plan: SensorBlockPlanner.ordered(accepted), why: why, startMessage: start)
         }
     }
 
     /// El LLM nunca decide solo: su plan pasa por `PlanValidator` (ids, duplicados, reps, duración) y,
     /// como todo plan del coach, por `SessionPlanCheck` (segunda barrera). La plantilla por reglas no
     /// pasa por `PlanValidator` (campamento trae más ejercicios que el máximo del prompt).
-    nonisolated static func validated(_ proposal: PausePlan, input: CoachInput, base: Recipe, minutes: Int, demo: Bool) -> [ActivityAssignment]? {
+    /// `reducedTargets`: las reglas ya bajaron metas (caminata corta, de pie por poco rato, plan suave);
+    /// entonces el techo es la meta reducida (1×), no el doble.
+    nonisolated static func validated(_ proposal: PausePlan, input: CoachInput, base: Recipe, minutes: Int, demo: Bool,
+                                      reducedTargets: Bool = false) -> [ActivityAssignment]? {
         var activities = proposal.activities
         if proposal.backend == .foundationModels {
             let proposed = activities.map { ProposedExercise(id: $0.kind.rawValue, reps: $0.target) }
             guard case .success(let valid) = PlanValidator.validate(proposed, input: input) else { return nil }
             activities = valid
         }
-        guard SessionPlanCheck.accepts(proposal, allowed: input.allowedKinds, base: base, minutes: minutes, demo: demo) else { return nil }
+        guard SessionPlanCheck.accepts(proposal, allowed: input.allowedKinds, base: base, minutes: minutes, demo: demo,
+                                       reducedTargets: reducedTargets) else { return nil }
         return activities
     }
 
@@ -245,7 +316,7 @@ final class PauseCoordinator {
 
     // MARK: Actividades
 
-    /// "EMPEZAR": congela el plan y arranca la primera actividad.
+    /// "Empezar": congela el plan y arranca la primera actividad.
     func startActivities() {
         planTask?.cancel()
         planTask = nil
@@ -394,12 +465,15 @@ final class PauseCoordinator {
         var level = VerificationPolicy.sessionLevel(results)
         if hardIntegrity { level = min(level, .suspicious) }
         let counted = VerificationPolicy.counts(results) && !simulated && !hardIntegrity && checkIn != nil && post != nil
+        // El momento del chip del check-in manda (si se respondió en esta pausa).
+        let m = effectiveMoment
         var s = PauseSession(workDayKey: cal.key(for: startedAt), turnoKey: cal.turnoKey(for: startedAt),
-                             recipe: moment.recipe, moment: moment, startedAt: startedAt, endedAt: .now,
+                             recipe: m.recipe, moment: m, startedAt: startedAt, endedAt: .now,
                              monotonicSeconds: monotonic, checkInScore: checkIn?.score,
                              checkInAnswers: checkIn?.answers ?? [], zone: checkIn?.zone ?? store.profile.usualZone,
                              postResponse: post, activities: results, counted: counted,
                              level: level, simulated: simulated, coachNote: coachWhy)
+        s.setZones(checkIn?.allZones ?? store.profile.allUsualZones)
         s.integrityFlags = flags
         return s
     }
@@ -414,20 +488,25 @@ nonisolated enum SessionPlanCheck {
     static let maxActivities = 5
     /// Reps máximas respecto de la meta base.
     static let maxTargetFactor = 2.0
+    /// Techo cuando `SafetyRules` ya redujo metas: nunca sobre la meta reducida.
+    static let reducedTargetFactor = 1.0
     /// Tolerancia sobre los minutos del momento (la estimación es un mínimo).
     static let durationTolerance = 1.25
     /// Segundos de preparación por actividad (gating, colocación del teléfono).
     static let setupSecondsPerActivity: Double = 5
 
-    static func accepts(_ plan: PausePlan, allowed: [ActivityKind], base: Recipe, minutes: Int, demo: Bool) -> Bool {
+    /// `reducedTargets`: las reglas clínicas ya bajaron las metas; el techo pasa a ser la meta reducida (1×).
+    static func accepts(_ plan: PausePlan, allowed: [ActivityKind], base: Recipe, minutes: Int, demo: Bool,
+                        reducedTargets: Bool = false) -> Bool {
         let acts = plan.activities
         let maxCount = max(maxActivities, base.activities.count)
         guard !acts.isEmpty, acts.count <= maxCount else { return false }
         guard Set(acts.map(\.kind)).count == acts.count else { return false }
+        let factor = reducedTargets ? reducedTargetFactor : maxTargetFactor
         for a in acts {
             guard allowed.contains(a.kind), a.target >= 1 else { return false }
             let reference = base.activities.first { $0.kind == a.kind }?.target ?? (demo ? a.kind.demoTarget : a.kind.defaultTarget)
-            guard Double(a.target) <= Double(reference) * maxTargetFactor else { return false }
+            guard Double(a.target) <= Double(reference) * factor else { return false }
         }
         return estimatedSeconds(acts, demo: demo) <= Double(minutes * 60) * durationTolerance
     }

@@ -18,7 +18,7 @@ struct AlarmView: View {
                 ForEach(RDQ6.alarmQuestions.indices, id: \.self) { i in
                     YesNoRow(text: RDQ6.alarmQuestions[i], answer: $answers[i])
                 }
-                Text("Si responde SÍ a alguna, hoy no hacemos ejercicio.")
+                Text("Si responde Sí a alguna, hoy no hacemos ejercicio.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -26,7 +26,7 @@ struct AlarmView: View {
             .padding()
         }
         .safeAreaInset(edge: .bottom) {
-            PrimaryButton(title: "SEGUIR", systemImage: "arrow.right", isEnabled: allAnswered) {
+            PrimaryButton(title: "Seguir", systemImage: "arrow.right", isEnabled: allAnswered) {
                 onSubmit(answers.compactMap { $0 })
             }
             .padding(.horizontal)
@@ -56,8 +56,9 @@ struct StopCardView: View {
                     Image(systemName: "cross.case.fill")
                         .font(.largeTitle)
                         .foregroundStyle(Theme.danger)
+                        .accessibilityHidden(true)
                     Text("Hoy no haga ejercicio.")
-                        .font(.largeTitle.weight(.heavy))
+                        .font(.largeTitle.weight(.bold))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text("\(name), con estas señales la pausa no ayuda. Avise a su supervisor y vaya al policlínico de faena hoy.")
@@ -86,7 +87,7 @@ struct StopCardView: View {
             .padding()
         }
         .safeAreaInset(edge: .bottom) {
-            PrimaryButton(title: "ENTENDIDO", tint: Theme.danger) { onClose() }
+            PrimaryButton(title: "Entendido") { onClose() }
                 .padding(.horizontal)
                 .padding(.bottom, 8)
         }

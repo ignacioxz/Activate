@@ -1,44 +1,56 @@
 import SwiftUI
 
-/// Registro rápido "Me duele ahora": zona (prellenada desde el perfil) y contexto en un toque.
-/// Guarda un `DailyCheckIn` con `source: .meDueleAhora` y cierra.
+/// Registro rápido "Me duele ahora": zonas (selección múltiple, prellenadas desde el perfil) y contexto
+/// en un toque. Guarda un `DailyCheckIn` con `source: .meDueleAhora` y cierra.
 struct PainNowSheet: View {
     @Environment(AppStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @State private var chosenZone: PainZone?
+    @State private var chosenZones: [PainZone]?
 
-    private static let chipHeight: CGFloat = 56
-    private static let zoneColumns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    private static let contextColumns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
-    private var zone: PainZone { chosenZone ?? store.profile.usualZone }
+    private var zones: [PainZone] { chosenZones ?? store.profile.allUsualZones }
+
+    private var zonesBinding: Binding<[PainZone]> {
+        Binding(get: { zones }, set: { chosenZones = PainZone.normalized($0, fallback: zones.first ?? .lumbar) })
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("¿Dónde le duele?")
-                            .font(.title3.weight(.semibold))
-                        LazyVGrid(columns: Self.zoneColumns, spacing: 12) {
-                            ForEach(PainZone.allCases) { candidate in
-                                zoneChip(candidate)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("¿Dónde le duele?")
+                                .font(.headline)
+                            Text("Marque una o más zonas.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        MultiSelectChips(items: PainZone.allCases, selection: zonesBinding, title: { $0.title })
+                    }
+                    .flatCard()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("¿Dónde estaba?")
+                                .font(.headline)
+                            Text("Toque uno y se guarda.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        LazyVGrid(columns: Self.contextColumns, spacing: 10) {
+                            ForEach(PainContext.allCases) { context in
+                                contextButton(context)
                             }
                         }
                     }
                     .flatCard()
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("¿Dónde estaba? Toque uno.")
-                            .font(.title3.weight(.semibold))
-                        ForEach(PainContext.allCases) { context in
-                            contextButton(context)
-                        }
-                    }
-                    .flatCard()
-
-                    Text("Se guarda al toque y vuelve a Hoy.")
-                        .font(.subheadline)
+                    Text("Queda en sus registros y vuelve a Hoy.")
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
                 }
                 .padding()
             }
@@ -51,39 +63,19 @@ struct PainNowSheet: View {
                 }
             }
         }
-    }
-
-    private func zoneChip(_ candidate: PainZone) -> some View {
-        Button {
-            chosenZone = candidate
-        } label: {
-            Text(candidate.title)
-                .font(.headline)
-                .frame(maxWidth: .infinity, minHeight: Self.chipHeight)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.bordered)
-        .tint(zone == candidate ? Theme.copper : .gray)
-        .accessibilityAddTraits(zone == candidate ? .isSelected : [])
+        // Acento azul en los controles (el cobre queda solo para la llama de la racha).
+        .tint(Theme.accent)
     }
 
     private func contextButton(_ context: PainContext) -> some View {
-        Button {
+        SecondaryButton(title: context.title, systemImage: Self.symbol(for: context)) {
             save(context)
-        } label: {
-            Label(context.title, systemImage: Self.symbol(for: context))
-                .font(.title3.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: Theme.rowHeight, alignment: .leading)
-                .padding(.horizontal, 6)
-                .contentShape(.rect)
         }
-        .buttonStyle(.bordered)
-        .tint(Theme.copper)
-        .accessibilityHint("Guarda el registro: \(zone.title), \(context.title)")
+        .accessibilityHint("Guarda el registro: \(PainZone.listTitle(zones)), \(context.title)")
     }
 
     private func save(_ context: PainContext) {
-        let entry = Self.entry(now: .now, profile: store.profile, zone: zone, context: context, calendar: store.calendar)
+        let entry = Self.entry(now: .now, profile: store.profile, zones: zones, context: context, calendar: store.calendar)
         store.mutate { $0.checkIns.append(entry) }
         dismiss()
     }
@@ -99,15 +91,28 @@ struct PainNowSheet: View {
         }
     }
 
-    /// Registro "Me duele ahora" con la clave del día laboral y el momento inferido.
-    nonisolated static func entry(now: Date, profile: PlayerProfile, zone: PainZone, context: PainContext, calendar: WorkCalendar) -> DailyCheckIn {
-        DailyCheckIn(date: now,
-                     workDayKey: calendar.key(for: now),
-                     turnoKey: calendar.turnoKey(for: now),
-                     source: .meDueleAhora,
-                     answers: [],
-                     zone: zone,
-                     moment: Moment.infer(date: now, shift: profile.shiftType, calendar: calendar.calendar),
-                     context: context)
+    /// Registro "Me duele ahora" con la clave del día laboral, el momento inferido y todas las zonas marcadas.
+    nonisolated static func entry(now: Date, profile: PlayerProfile, zones: [PainZone], context: PainContext, calendar: WorkCalendar) -> DailyCheckIn {
+        let picked = PainZone.normalized(zones.isEmpty ? (profile.usualZones ?? [profile.usualZone]) : zones,
+                                         fallback: profile.usualZone)
+        return DailyCheckIn(date: now,
+                            workDayKey: calendar.key(for: now),
+                            turnoKey: calendar.turnoKey(for: now),
+                            source: .meDueleAhora,
+                            answers: [],
+                            zone: picked[0],
+                            zones: picked,
+                            moment: Moment.infer(date: now, shift: profile.shiftType, calendar: calendar.calendar),
+                            context: context)
     }
+
+    /// Variante de una sola zona (compatibilidad).
+    nonisolated static func entry(now: Date, profile: PlayerProfile, zone: PainZone, context: PainContext, calendar: WorkCalendar) -> DailyCheckIn {
+        entry(now: now, profile: profile, zones: [zone], context: context, calendar: calendar)
+    }
+}
+
+#Preview {
+    PainNowSheet()
+        .environment(AppStore(inMemory: true))
 }

@@ -1,10 +1,13 @@
 import Foundation
 
 /// Semilla de la demo (caso "Marco"). Reemplaza todo el estado del store con:
-/// - perfil "Marco" (usted, 7×7, turno de día, lumbar) con `rosterStart` tal que HOY sea el día 2 de subida;
+/// - perfil "Marco" (usted, 7×7, turno de día, zona habitual lumbar) con `rosterStart` tal que HOY sea el día 2 de subida;
 /// - dos turnos anteriores completos con el patrón del caso: día 1 pausa sí, día 2 casco automático,
 ///   día 3 RDQ 4 con "no agacharse" = Sí, día 5 peak RDQ 6, resto variado; nunca dos días seguidos
-///   (el caso dice que "casi nunca alcanza a hacerla dos días seguidos");
+///   (el caso dice que "casi nunca alcanza a hacerla dos días seguidos"). Algunos días marcan
+///   espalda baja + cuello (selección múltiple);
+/// - el turno anterior cierra el día 7 con un check-in suelto, sin pausa: la racha vale 1 antes de
+///   la pausa en vivo y 2 con el Doblete;
 /// - el turno actual con AYER contado y HOY sin pausa, para que la pausa en vivo dispare el Doblete.
 ///
 /// Todas las sesiones son `.full` (salvo la respiración, `.reduced` por naturaleza) y `counted`
@@ -31,7 +34,8 @@ nonisolated enum DemoSeed {
         profile.treatment = .usted
         profile.roster = .sieteXSiete
         profile.shiftType = .day
-        profile.usualZone = .lumbar
+        profile.usualZones = PainZone.normalized(usualZones)
+        profile.usualZone = profile.usualZones?.first ?? .lumbar
         profile.cascos = cascosPerTurno
         profile.outdoorMode = false
         profile.consentGiven = true
@@ -111,9 +115,15 @@ nonisolated enum DemoSeed {
 
     // MARK: - Guion de los turnos
 
+    /// Zonas habituales del perfil sembrado.
+    static let usualZones: [PainZone] = [.lumbar]
+    /// Días en que además le dolió el cuello (horas en cabina con el camión vibrando).
+    static let lumbarYCuello: [PainZone] = [.lumbar, .cuello]
+
     nonisolated struct PainLog: Sendable {
         var moment: Moment
         var context: PainContext
+        var zones: [PainZone] = DemoSeed.usualZones
     }
 
     nonisolated struct DayScript: Sendable {
@@ -132,6 +142,8 @@ nonisolated enum DemoSeed {
         var casco: Bool = false
         var pain: PainLog? = nil
         var coachNote: String? = nil
+        /// Zonas marcadas en el check-in de ese día (selección múltiple).
+        var zones: [PainZone] = DemoSeed.usualZones
     }
 
     private static let T = true, F = false
@@ -142,9 +154,9 @@ nonisolated enum DemoSeed {
         DayScript(day: 2, casco: true, pain: PainLog(moment: .salida, context: .alBajar)),
         DayScript(day: 3, rdq: [T, F, T, T, T, F], pause: .campamento, activities: gentleCampamento,
                   post: .mejor, coachNote: "Hoy sin sentadilla: espalda cargada."),
-        DayScript(day: 4, pain: PainLog(moment: .colacion, context: .enCabina)),
+        DayScript(day: 4, pain: PainLog(moment: .colacion, context: .enCabina, zones: lumbarYCuello)),
         DayScript(day: 5, rdq: [T, T, T, T, T, T], pause: .entrada, post: .igual,
-                  coachNote: "Plan suave: dolor alto hoy."),
+                  coachNote: "Plan suave: dolor alto hoy.", zones: lumbarYCuello),
         DayScript(day: 6, rdq: [T, T, T, F, T, F], checkInMoment: .colacion),
         DayScript(day: 7, rdq: [T, F, T, F, T, F], pause: .salida, incomplete: .ojos, post: .mejor),
     ]
@@ -154,12 +166,13 @@ nonisolated enum DemoSeed {
         DayScript(day: 1, rdq: [T, F, F, F, T, F], pause: .campamento, post: .mejor),
         DayScript(day: 2, casco: true, pain: PainLog(moment: .campamento, context: .enElBus)),
         DayScript(day: 3, rdq: [T, F, T, T, F, T], pause: .colacion, post: .mejor,
-                  coachNote: "Sin agacharse: caminar y cuello."),
+                  coachNote: "Sin agacharse: caminar y cuello.", zones: lumbarYCuello),
         DayScript(day: 4, rdq: [T, F, T, F, T, F], checkInMoment: .entrada),
         DayScript(day: 5, rdq: [T, T, T, T, T, T], pause: .campamento, activities: gentleCampamento,
                   post: .igual, coachNote: "Plan suave: dolor alto hoy."),
-        DayScript(day: 6, pain: PainLog(moment: .colacion, context: .alBajar)),
-        DayScript(day: 7, rdq: [T, F, T, F, F, T], pause: .entrada, post: .mejor),
+        DayScript(day: 6, pain: PainLog(moment: .colacion, context: .alBajar, zones: lumbarYCuello)),
+        // Check-in suelto, sin pausa: la racha llega en 1 al día 2 de hoy (2 con el Doblete en vivo).
+        DayScript(day: 7, rdq: [T, F, T, F, F, T], checkInMoment: .entrada),
     ]
 
     /// Turno actual: solo ayer (día 1). Hoy (día 2) queda sin pausa.
@@ -212,9 +225,10 @@ nonisolated enum DemoSeed {
 
                 if let pain = day.pain {
                     let at = clockDate(pain.moment, on: workDate, plusMinutes: DemoSeed.painLogDelayMinutes)
+                    let zones = PainZone.normalized(pain.zones)
                     checkIns.append(DailyCheckIn(date: at, workDayKey: wc.key(for: at), turnoKey: wc.turnoKey(for: at),
                                                  source: .meDueleAhora, answers: [], alarmAnswers: [],
-                                                 zone: .lumbar, moment: pain.moment, context: pain.context))
+                                                 zone: zones[0], zones: zones, moment: pain.moment, context: pain.context))
                 }
 
                 let moment = day.pause ?? day.checkInMoment
@@ -222,10 +236,11 @@ nonisolated enum DemoSeed {
                 let startedAt = clockDate(moment, on: workDate)
                 let checkInAt = startedAt.addingTimeInterval(-DemoSeed.checkInLeadSeconds)
                 let score = rdq.filter { $0 }.count
+                let zones = PainZone.normalized(day.zones)
                 let checkIn = DailyCheckIn(date: checkInAt, workDayKey: wc.key(for: checkInAt), turnoKey: wc.turnoKey(for: checkInAt),
                                            source: .pausa, answers: rdq,
                                            alarmAnswers: score >= RDQ6.gentlePlanThreshold ? [false, false, false] : [],
-                                           zone: .lumbar, moment: moment, context: nil)
+                                           zone: zones[0], zones: zones, moment: moment, context: nil)
                 checkIns.append(checkIn)
 
                 guard day.pause != nil else { continue }
@@ -282,7 +297,8 @@ nonisolated enum DemoSeed {
                                 monotonicSeconds: seconds,
                                 checkInScore: checkIn.score,
                                 checkInAnswers: checkIn.answers,
-                                zone: .lumbar,
+                                zone: checkIn.zone,
+                                zones: checkIn.zones,
                                 postResponse: day.post,
                                 activities: results,
                                 counted: VerificationPolicy.counts(results),

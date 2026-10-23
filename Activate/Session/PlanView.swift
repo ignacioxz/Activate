@@ -8,8 +8,15 @@ struct PlanView: View {
     let why: String?
     let startMessage: String?
     let gentle: Bool
+    /// Sin consentimiento: se quitaron las actividades de cámara.
+    var cameraBlocked: Bool = false
     let onStart: () -> Void
     let onClose: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Línea que explica por qué no hay actividades de cara ni cuerpo.
+    static let cameraBlockedCopy = "Sin permiso de cámara: solo pasos y pantalla"
 
     var body: some View {
         ScrollView {
@@ -20,6 +27,13 @@ struct PlanView: View {
                     Label("Plan suave hoy.", systemImage: "leaf.fill")
                         .font(.headline)
                         .foregroundStyle(Theme.mint)
+                }
+
+                if cameraBlocked {
+                    Label(Self.cameraBlockedCopy, systemImage: "video.slash.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if activities.isEmpty {
@@ -40,11 +54,11 @@ struct PlanView: View {
                         .font(.headline)
                         .fixedSize(horizontal: false, vertical: true)
                         .flatCard()
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
                 }
             }
             .padding()
-            .animation(.smooth, value: why)
+            .animation(reduceMotion ? nil : .smooth, value: why)
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 6) {
@@ -55,14 +69,14 @@ struct PlanView: View {
                         .transition(.opacity)
                 }
                 if activities.isEmpty {
-                    PrimaryButton(title: "CERRAR", tint: .gray) { onClose() }
+                    SecondaryButton(title: "Cerrar") { onClose() }
                 } else {
-                    PrimaryButton(title: "EMPEZAR", systemImage: "play.fill") { onStart() }
+                    PrimaryButton(title: "Empezar", systemImage: "play.fill") { onStart() }
                 }
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
-            .animation(.smooth, value: startMessage)
+            .animation(reduceMotion ? nil : .smooth, value: startMessage)
         }
     }
 
@@ -78,15 +92,17 @@ struct PlanRow: View {
     let position: Int
     let assignment: ActivityAssignment
 
+    @ScaledMetric(relativeTo: .title2) private var iconSize: CGFloat = 48
+
     var body: some View {
         HStack(spacing: 14) {
             ZStack {
-                Circle().fill(Theme.copper.opacity(0.15))
+                Circle().fill(Theme.accent.opacity(0.14))
                 Image(systemName: assignment.kind.symbol)
-                    .font(.title2)
-                    .foregroundStyle(Theme.copper)
+                    .font(.title3)
+                    .foregroundStyle(Theme.accent)
             }
-            .frame(width: 52, height: 52)
+            .frame(width: iconSize, height: iconSize)
             VStack(alignment: .leading, spacing: 4) {
                 Text(assignment.kind.name)
                     .font(.headline)
@@ -100,7 +116,7 @@ struct PlanRow: View {
             }
             Spacer(minLength: 0)
             Text("\(position)")
-                .font(.caption.weight(.bold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
         .flatCard(padding: 14)

@@ -111,9 +111,9 @@ struct DemoPreflightView: View {
         return HStack(spacing: 16) {
             ZStack {
                 ProgressRing(progress: total == 0 ? 0 : Double(ready) / Double(total),
-                             color: failed > 0 ? Theme.copper : Theme.mint, lineWidth: 8)
+                             color: failed > 0 ? Theme.danger : Theme.mint, lineWidth: 8)
                 Text("\(ready)")
-                    .font(.title2.weight(.heavy))
+                    .font(.title2.weight(.bold))
                     .contentTransition(.numericText())
             }
             .frame(width: 72, height: 72)

@@ -15,7 +15,8 @@ struct BreathView: View {
 
     private static let circleMax: CGFloat = 220
     private static let circleMinScale: CGFloat = 0.55
-    private static let holdButtonHeight: CGFloat = 96
+    /// Alto de la zona para mantener el dedo (crece con Dynamic Type).
+    @ScaledMetric(relativeTo: .headline) private var holdButtonHeight: CGFloat = 80
 
     var body: some View {
         VStack(spacing: 24) {
@@ -75,8 +76,11 @@ struct BreathView: View {
                 .frame(width: Self.circleMax, height: Self.circleMax)
                 .scaleEffect(finished ? 1 : scale)
             Text(label)
-                .font(.title.weight(.heavy))
+                .font(.title.weight(.bold))
                 .foregroundStyle(.primary)
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+                .padding(.horizontal, 24)
         }
         .frame(height: Self.circleMax + 12)
         .accessibilityElement(children: .ignore)
@@ -86,11 +90,11 @@ struct BreathView: View {
     private var holdButton: some View {
         let finished = runner.outcome != nil
         return ZStack {
-            Label(pressing ? "MANTENGA" : "APRIETE AQUÍ", systemImage: "hand.tap.fill")
-                .font(.title3.weight(.heavy))
+            Label(pressing ? "Mantenga" : "Apriete aquí", systemImage: "hand.tap.fill")
+                .font(.headline)
                 .foregroundStyle(pressing ? Theme.night : .primary)
         }
-        .frame(maxWidth: .infinity, minHeight: Self.holdButtonHeight)
+        .frame(maxWidth: .infinity, minHeight: holdButtonHeight)
         .contentShape(.rect)
         .functionalGlass(tint: pressing ? Theme.mint : nil, cornerRadius: Theme.cardRadius)
         .overlay(

@@ -224,7 +224,7 @@ private struct SimulatedBanner: View {
             Image(systemName: "testtube.2")
                 .font(.title2.weight(.bold))
             VStack(alignment: .leading, spacing: 2) {
-                Text("SIMULADA").font(.title3.weight(.heavy))
+                Text("Simulada").font(.title3.weight(.bold))
                 Text("Datos de prueba. No cuenta ni suma.").font(.subheadline)
             }
         }
@@ -301,13 +301,17 @@ struct SessionDetailView: View {
             if let score = session.checkInScore {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text("\(score) de 6")
-                        .font(.largeTitle.weight(.heavy))
+                        .font(.largeTitle.weight(.bold))
                         .foregroundStyle(Theme.rdqColor(score))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("RDQ-6 · \(session.zone.title)").font(.title3)
+                        Text("RDQ-6").font(.title3)
                         Text("menos es mejor").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
+                Label(PainZone.listTitle(session.allZones), systemImage: "figure.stand")
+                    .font(.body.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Dónde le dolía: \(PainZone.listTitle(session.allZones))")
                 let marked = zip(RDQ6.items, session.checkInAnswers).filter { $0.1 }.map { $0.0 }
                 if !marked.isEmpty {
                     Divider()

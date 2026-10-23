@@ -46,7 +46,7 @@ struct ConsentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Antes de empezar")
-                    .font(.largeTitle.weight(.heavy))
+                    .font(.largeTitle.weight(.bold))
                 Text("Lea esto. Es corto y es importante.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
@@ -68,7 +68,7 @@ struct ConsentView: View {
         HStack(spacing: 12) {
             Image(systemName: store.profile.consentGiven ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                 .font(.title2)
-                .foregroundStyle(store.profile.consentGiven ? Theme.mint : Theme.copper)
+                .foregroundStyle(store.profile.consentGiven ? Theme.mint : Theme.gold)
             Text(store.profile.consentGiven
                  ? "Usted ya aceptó. Puede retirarlo cuando quiera."
                  : "Al tocar Acepto, usted autoriza este uso de sus datos.")
@@ -112,7 +112,7 @@ private struct ConsentCard: View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: point.symbol)
                 .font(.title2)
-                .foregroundStyle(Theme.copper)
+                .foregroundStyle(Theme.accent)
                 .frame(width: 32)
             VStack(alignment: .leading, spacing: 4) {
                 Text(point.title).font(.headline)

@@ -21,6 +21,8 @@ struct PauseFlowView: View {
             }
         }
         .appScreen()
+        // Acento azul en todos los controles del flujo (el cobre queda solo para la llama de la racha).
+        .tint(Theme.accent)
         .onAppear {
             if coordinator == nil {
                 coordinator = PauseCoordinator(moment: moment, store: store, game: game, coach: coach)
@@ -48,6 +50,8 @@ private struct PauseFlowContent: View {
     let coordinator: PauseCoordinator
     let onClose: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var name: String { coordinator.profileName }
 
     var body: some View {
@@ -58,7 +62,8 @@ private struct PauseFlowContent: View {
             stageView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .animation(.smooth, value: coordinator.stage)
+        // Reduce Motion: sin deslizamientos ni animación entre etapas (solo aparece la nueva).
+        .animation(reduceMotion ? nil : .smooth, value: coordinator.stage)
     }
 
     // MARK: Encabezado: cerrar + barra de avance
@@ -68,23 +73,27 @@ private struct PauseFlowContent: View {
             Button("Cerrar", systemImage: "xmark") { onClose() }
                 .labelStyle(.iconOnly)
                 .font(.headline)
+                .foregroundStyle(.primary)
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
                 .frame(minWidth: 44, minHeight: 44)
             VStack(alignment: .leading, spacing: 4) {
-                Text(coordinator.moment.title)
-                    .font(.caption.weight(.heavy))
+                Text(coordinator.effectiveMoment.title)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.primary.opacity(0.08))
                         Capsule()
-                            .fill(Theme.copper)
-                            .frame(width: max(12, geo.size.width * coordinator.progressFraction))
+                            .fill(Theme.accent)
+                            .frame(width: max(8, geo.size.width * coordinator.progressFraction))
                     }
                 }
-                .frame(height: 10)
-                .animation(.spring(duration: 0.5), value: coordinator.progressFraction)
+                .frame(height: 6)
+                .animation(reduceMotion ? nil : .spring(duration: 0.5), value: coordinator.progressFraction)
+                .accessibilityElement()
+                .accessibilityLabel("Avance de la pausa")
+                .accessibilityValue("\(Int((coordinator.progressFraction * 100).rounded())) %")
             }
         }
         .padding(.horizontal)
@@ -95,8 +104,9 @@ private struct PauseFlowContent: View {
     // MARK: Etapas
 
     private var stageTransition: AnyTransition {
-        .asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
-                    removal: .move(edge: .leading).combined(with: .opacity))
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                           removal: .move(edge: .leading).combined(with: .opacity))
     }
 
     @ViewBuilder
@@ -105,9 +115,9 @@ private struct PauseFlowContent: View {
         case .checkIn:
             CheckInView(name: name,
                         existing: coordinator.existingCheckIn,
-                        initialZone: coordinator.usualZone,
+                        initialZones: coordinator.usualZones,
                         initialMoment: coordinator.moment,
-                        onSubmit: { answers, zone, moment in coordinator.submitCheckIn(answers: answers, zone: zone, moment: moment) },
+                        onSubmit: { answers, zones, moment in coordinator.submitCheckIn(answers: answers, zones: zones, moment: moment) },
                         onContinueExisting: { coordinator.continueWithExistingCheckIn() },
                         onAnswerAgain: { coordinator.answerAgain() })
                 .id(coordinator.existingCheckIn?.id)
@@ -128,6 +138,7 @@ private struct PauseFlowContent: View {
                      why: coordinator.coachWhy,
                      startMessage: coordinator.coachStartMessage,
                      gentle: coordinator.isGentle,
+                     cameraBlocked: coordinator.cameraBlocked,
                      onStart: { coordinator.startActivities() },
                      onClose: onClose)
                 .transition(stageTransition)
@@ -171,6 +182,14 @@ private struct PauseFlowContent: View {
         case .reward:
             if let reward = coordinator.reward {
                 CelebrationView(reward: reward, post: coordinator.post, onClose: onClose)
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        // Simulador: la pausa no usó sensores reales y no suma.
+                        if coordinator.session?.simulated == true {
+                            SimulatedNotice()
+                                .padding(.top, 4)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
                     .transition(.opacity)
             } else {
                 ProgressView("Guardando…")

@@ -196,6 +196,38 @@ struct SignerTests {
         #expect(decoded.integrityFlags.first?.atMs == 70_200)
     }
 
+    @Test func canonicalPayloadIncluyeZonasSoloSiExisten() throws {
+        // Sesión antigua (sin selección múltiple): la clave "zones" no aparece, misma forma que v1.
+        let legacy = Self.sampleSession()
+        #expect(legacy.zones == nil)
+        let legacyText = String(decoding: try CanonicalPayload.data(for: legacy), as: UTF8.self)
+        #expect(!legacyText.contains("\"zones\""))
+        #expect(legacyText.contains("\"zone\":\"lumbar\""))
+
+        // Sesión nueva: van todas las zonas, normalizadas.
+        var multi = Self.sampleSession()
+        multi.setZones([.cuello, .lumbar])
+        let data = try CanonicalPayload.data(for: multi)
+        let decoded = try CanonicalPayload.decode(data)
+        #expect(decoded.v == CanonicalPayload.currentVersion)
+        #expect(decoded.checkIn?.zones == [.lumbar, .cuello])
+        #expect(decoded.checkIn?.zone == .lumbar)
+        #expect(data != (try CanonicalPayload.data(for: legacy)))
+    }
+
+    @Test func sesionFirmadaSinZonasSigueVerificando() async throws {
+        // Firmada antes de la selección múltiple; luego la app carga las zonas en memoria: se verifica con los bytes guardados.
+        let signer = Self.makeSigner()
+        let session = Self.sampleSession(seed: 5)
+        var stored = session.applying(try await signer.sign(session))
+        #expect(await signer.verify(stored))
+        stored.setZones([.lumbar, .hombro])
+        #expect(await signer.verify(stored))
+        // El payload guardado sin `zones` se sigue decodificando.
+        let old = try CanonicalPayload.decode(try #require(stored.payloadData))
+        #expect(old.checkIn?.zones == nil)
+    }
+
     @Test func canonicalPayloadSoloEnteros() throws {
         let data = try CanonicalPayload.data(for: Self.sampleSession())
         let json = try JSONSerialization.jsonObject(with: data)
