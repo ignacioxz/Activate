@@ -104,6 +104,104 @@ struct StoreTests {
         #expect(!store.profile.badges.contains(.tiroLimpio))
     }
 
+    @Test func semillaRachaUnoAntesDeLaPausaEnVivoYDosConElDoblete() {
+        let n = now()
+        let store = seededStore(now: n)
+        let wc = store.calendar
+        // El turno anterior cierra el día 7 con un check-in suelto, sin pausa: la racha no viene de antes.
+        #expect(StreakEngine.streak(days: store.data.workDays, calendar: wc, at: n) == 1)
+        #expect(StreakEngine.dobleteAvailable(days: store.data.workDays, calendar: wc, at: n))
+        // El cierre automático al arrancar no cambia eso (el casco del turno anterior ya se usó el día 2).
+        let game = GameStore(store: store)
+        game.applyDayRollover(now: n)
+        #expect(game.streak(at: n) == 1)
+        // Con la pausa en vivo de hoy (Doblete) la racha vale 2.
+        var days = store.data.workDays
+        days[wc.key(for: n)]?.countedPauses = 1
+        #expect(StreakEngine.streak(days: days, calendar: wc, at: n) == 2)
+    }
+
+    @Test func semillaTurnoAnteriorDiaSieteEsCheckInSuelto() throws {
+        let n = now()
+        let store = seededStore(now: n)
+        let wc = store.calendar
+        let current = wc.turnoKey(for: n)
+        let turnos = Set(store.data.workDays.values.map(\.turnoKey)).subtracting([current]).sorted()
+        let previous = try #require(turnos.last)
+        let day7 = try #require(store.workDays(inTurno: previous).first { $0.dayInBlock == 7 })
+        #expect(day7.countedPauses == 0 && !day7.cascoUsed)
+        #expect(store.sessions(onWorkDay: day7.key).isEmpty)
+        #expect(store.checkIns(onWorkDay: day7.key).contains { $0.source == .pausa && $0.answers.count == RDQ6.items.count })
+    }
+
+    @Test func semillaSiembraZonasMultiples() {
+        let n = now()
+        let store = seededStore(now: n)
+        #expect(store.profile.allUsualZones == [.lumbar])
+        #expect(store.profile.usualZones == [.lumbar])
+        #expect(store.data.checkIns.allSatisfy { $0.zones != nil && $0.allZones.contains(.lumbar) })
+        #expect(store.data.checkIns.contains { $0.allZones == [.lumbar, .cuello] && $0.source == .pausa })
+        #expect(store.data.checkIns.contains { $0.allZones == [.lumbar, .cuello] && $0.source == .meDueleAhora })
+        #expect(store.data.checkIns.contains { $0.allZones == [.lumbar] })
+        // Cada sesión lleva las mismas zonas que el check-in de su día.
+        for s in store.data.sessions {
+            let checkIn = store.checkIns(onWorkDay: s.workDayKey).last { $0.source == .pausa }
+            #expect(s.allZones == checkIn?.allZones)
+            #expect(s.zone == s.allZones.first)
+        }
+        #expect(store.data.sessions.contains { $0.allZones == [.lumbar, .cuello] })
+    }
+
+    // MARK: - Zonas múltiples
+
+    @Test func makeCheckInYMakeSessionConZonas() {
+        let store = AppStore(inMemory: true)
+        let n = now()
+        // Sin zonas explícitas: las habituales del perfil.
+        store.updateProfile { $0.setUsualZones([.cuello, .lumbar]) }
+        let byProfile = store.makeCheckIn(date: n, answers: Array(repeating: false, count: 6), moment: .colacion)
+        #expect(byProfile.allZones == [.lumbar, .cuello] && byProfile.zone == .lumbar)
+        // Zona única (API anterior).
+        let single = store.makeCheckIn(date: n, answers: Array(repeating: false, count: 6), zone: .hombro)
+        #expect(single.allZones == [.hombro] && single.zone == .hombro)
+        // Selección múltiple explícita: normalizada y con la principal primero.
+        let multi = store.makeCheckIn(date: n, answers: Array(repeating: false, count: 6), zones: [.otra, .hombro, .hombro])
+        #expect(multi.zones == [.hombro, .otra] && multi.zone == .hombro)
+        store.addCheckIn(multi)
+        // La sesión toma las zonas del RDQ de hoy.
+        let s = store.makeSession(moment: .colacion, startedAt: n.addingTimeInterval(60))
+        #expect(s.allZones == [.hombro, .otra] && s.zone == .hombro)
+        let explicit = store.makeSession(moment: .colacion, startedAt: n, zones: [.cuello])
+        #expect(explicit.allZones == [.cuello])
+    }
+
+    @Test func datosAntiguosSinZonasSiguenCargando() throws {
+        // JSON guardado antes de la selección múltiple: sin "zones" ni "usualZones".
+        let store = AppStore(inMemory: true)
+        var legacyCheckIn = store.makeCheckIn(date: now(), answers: [true, false, false, false, false, false], zone: .cuello)
+        legacyCheckIn.zones = nil
+        var legacySession = store.makeSession(moment: .entrada, startedAt: now(), zone: .hombro)
+        legacySession.zones = nil
+        var profile = PlayerProfile(rosterStart: now())
+        profile.usualZone = .hombro
+        profile.usualZones = nil
+        var save = SaveData(profile: profile)
+        save.checkIns = [legacyCheckIn]
+        save.sessions = [legacySession]
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let json = try encoder.encode(save)
+        let text = String(decoding: json, as: UTF8.self)
+        #expect(!text.contains("\"zones\"") && !text.contains("\"usualZones\""))
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let loaded = try decoder.decode(SaveData.self, from: json)
+        #expect(loaded.checkIns[0].allZones == [.cuello])
+        #expect(loaded.sessions[0].allZones == [.hombro])
+        #expect(loaded.profile.allUsualZones == [.hombro])
+    }
+
     @Test func semillaClavesCoherentesConWorkCalendar() throws {
         let n = now()
         let store = seededStore(now: n)

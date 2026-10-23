@@ -93,23 +93,34 @@ extension AppStore {
     }
 
     /// Factoría: check-in con `workDayKey` / `turnoKey` calculados desde `date`.
-    /// `zone` nil → zona habitual del perfil. Para "Me duele ahora": `source: .meDueleAhora`, `answers: []`, `context`.
+    /// Zonas (selección múltiple): `zones` si viene; si no, `[zone]`; si no, las zonas habituales del perfil.
+    /// Para "Me duele ahora": `source: .meDueleAhora`, `answers: []`, `context`.
     func makeCheckIn(date: Date = .now,
                      source: CheckInSource = .pausa,
                      answers: [Bool],
                      alarmAnswers: [Bool] = [],
                      zone: PainZone? = nil,
+                     zones: [PainZone]? = nil,
                      moment: Moment? = nil,
                      context: PainContext? = nil) -> DailyCheckIn {
-        DailyCheckIn(date: date,
-                     workDayKey: calendar.key(for: date),
-                     turnoKey: calendar.turnoKey(for: date),
-                     source: source,
-                     answers: answers,
-                     alarmAnswers: alarmAnswers,
-                     zone: zone ?? profile.usualZone,
-                     moment: moment,
-                     context: context)
+        var entry = DailyCheckIn(date: date,
+                                 workDayKey: calendar.key(for: date),
+                                 turnoKey: calendar.turnoKey(for: date),
+                                 source: source,
+                                 answers: answers,
+                                 alarmAnswers: alarmAnswers,
+                                 zone: zone ?? profile.usualZone,
+                                 moment: moment,
+                                 context: context)
+        entry.setZones(Self.resolvedZones(zones, zone: zone, fallback: profile.allUsualZones))
+        return entry
+    }
+
+    /// Selección explícita > zona única > zonas de respaldo (nunca vacía).
+    nonisolated static func resolvedZones(_ zones: [PainZone]?, zone: PainZone?, fallback: [PainZone]) -> [PainZone] {
+        if let zones, !zones.isEmpty { return PainZone.normalized(zones) }
+        if let zone { return [zone] }
+        return PainZone.normalized(fallback)
     }
 
     // MARK: Sesiones
@@ -137,18 +148,20 @@ extension AppStore {
         mutate { $0.sessions.removeAll { $0.id == id } }
     }
 
-    /// Factoría: sesión recién iniciada con claves, receta del momento, zona del perfil
-    /// y el snapshot del RDQ-6 de hoy si ya se respondió.
-    func makeSession(moment: Moment, startedAt: Date = .now, zone: PainZone? = nil) -> PauseSession {
+    /// Factoría: sesión recién iniciada con claves, receta del momento, zonas (las dadas, las del
+    /// RDQ-6 de hoy o las habituales del perfil) y el snapshot del RDQ-6 de hoy si ya se respondió.
+    func makeSession(moment: Moment, startedAt: Date = .now, zone: PainZone? = nil, zones: [PainZone]? = nil) -> PauseSession {
         let checkIn = todayCheckIn(now: startedAt)
-        return PauseSession(workDayKey: calendar.key(for: startedAt),
-                            turnoKey: calendar.turnoKey(for: startedAt),
-                            recipe: moment.recipe,
-                            moment: moment,
-                            startedAt: startedAt,
-                            checkInScore: checkIn?.score,
-                            checkInAnswers: checkIn?.answers ?? [],
-                            zone: zone ?? checkIn?.zone ?? profile.usualZone)
+        var session = PauseSession(workDayKey: calendar.key(for: startedAt),
+                                   turnoKey: calendar.turnoKey(for: startedAt),
+                                   recipe: moment.recipe,
+                                   moment: moment,
+                                   startedAt: startedAt,
+                                   checkInScore: checkIn?.score,
+                                   checkInAnswers: checkIn?.answers ?? [],
+                                   zone: zone ?? checkIn?.zone ?? profile.usualZone)
+        session.setZones(Self.resolvedZones(zones, zone: zone, fallback: checkIn?.allZones ?? profile.allUsualZones))
+        return session
     }
 
     // MARK: Perfil, demo y cachés

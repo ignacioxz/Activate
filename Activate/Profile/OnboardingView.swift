@@ -6,6 +6,7 @@ import SwiftUI
 /// HomeView NO la usa; la integración la cablea en RootTabView: `RootGate { RootTabView() }`.
 struct RootGate<Content: View>: View {
     @Environment(AppStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let content: () -> Content
 
     init(@ViewBuilder content: @escaping () -> Content) {
@@ -19,10 +20,12 @@ struct RootGate<Content: View>: View {
                     .transition(.opacity)
             } else {
                 OnboardingView(onDone: {})
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
             }
         }
-        .animation(.snappy, value: store.profile.onboardingDone)
+        .animation(reduceMotion ? nil : .snappy, value: store.profile.onboardingDone)
+        // Solo DEBUG: argumentos de lanzamiento para capturas de QA (ver QALaunch.swift).
+        .qaLaunchHook()
     }
 }
 
@@ -38,8 +41,9 @@ struct OnboardingView: View {
     @State private var roster: Roster = .sieteXSiete
     @State private var rosterStart = Calendar.current.startOfDay(for: .now)
     @State private var shiftType: ShiftType = .day
-    @State private var zone: PainZone = .lumbar
+    @State private var zones: [PainZone] = [.lumbar]
     @FocusState private var nameFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(onDone: @escaping () -> Void) {
         self.onDone = onDone
@@ -65,11 +69,10 @@ struct OnboardingView: View {
                     }
                     .scrollDismissesKeyboard(.interactively)
                     .id(step)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .leading).combined(with: .opacity)))
+                    .transition(stepTransition)
                 }
-                .animation(.snappy, value: step)
+                // Reduce Motion: sin deslizamiento ni animación entre pasos.
+                .animation(reduceMotion ? nil : .snappy, value: step)
             }
             .safeAreaInset(edge: .bottom) { footer }
             .appScreen()
@@ -82,6 +85,13 @@ struct OnboardingView: View {
             }
             .onAppear(perform: prefill)
         }
+        .tint(Theme.accent)
+    }
+
+    private var stepTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                           removal: .move(edge: .leading).combined(with: .opacity))
     }
 
     // MARK: - Indicador y pie
@@ -90,7 +100,7 @@ struct OnboardingView: View {
         HStack(spacing: 8) {
             ForEach(0..<Self.stepCount, id: \.self) { i in
                 Capsule()
-                    .fill(i <= step ? Theme.copper : Color.primary.opacity(0.12))
+                    .fill(i <= step ? Theme.accent : Color.primary.opacity(0.12))
                     .frame(height: 6)
             }
         }
@@ -119,7 +129,7 @@ struct OnboardingView: View {
     private var nameStep: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Hola.")
-                .font(.largeTitle.weight(.heavy))
+                .font(.largeTitle.weight(.bold))
             Text("Activate le ayuda a hacer la pausa en el turno y a saber si la espalda va mejor. Partamos por su nombre.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
@@ -157,7 +167,7 @@ struct OnboardingView: View {
     private var shiftStep: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("Su turno")
-                .font(.largeTitle.weight(.heavy))
+                .font(.largeTitle.weight(.bold))
             Text("Con esto la app sabe qué día del turno es y cuida su racha en la bajada.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
@@ -191,7 +201,7 @@ struct OnboardingView: View {
             .flatCard()
             Label(previewLine, systemImage: "calendar")
                 .font(.headline)
-                .foregroundStyle(Theme.copper)
+                .foregroundStyle(Theme.accent)
         }
     }
 
@@ -208,13 +218,13 @@ struct OnboardingView: View {
 
     private var zoneStep: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("¿Dónde le duele más?")
-                .font(.largeTitle.weight(.heavy))
-            Text("Toque la zona habitual. En cada pausa puede cambiarla.")
+            Text("¿Dónde le duele?")
+                .font(.largeTitle.weight(.bold))
+            Text("Marque una o más zonas. En cada pausa puede cambiarlas.")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            ProfilePainZonePicker(selection: $zone)
+            ProfilePainZonePicker(selection: $zones)
                 .flatCard()
             VStack(alignment: .leading, spacing: 10) {
                 Label("Sus datos quedan en el teléfono", systemImage: "lock.shield.fill")
@@ -249,7 +259,7 @@ struct OnboardingView: View {
         roster = profile.roster
         rosterStart = profile.rosterStart
         shiftType = profile.shiftType
-        zone = profile.usualZone
+        zones = profile.allUsualZones
     }
 
     private func next() {
@@ -270,7 +280,7 @@ struct OnboardingView: View {
             data.profile.roster = roster
             data.profile.rosterStart = start
             data.profile.shiftType = shiftType
-            data.profile.usualZone = zone
+            data.profile.setUsualZones(zones)
             data.profile.consentGiven = true
             data.profile.onboardingDone = true
         }

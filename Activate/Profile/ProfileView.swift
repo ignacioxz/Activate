@@ -63,6 +63,8 @@ struct ProfileView: View {
                 Text("Se borran su perfil, sus pausas y sus registros de dolor. No se puede deshacer.")
             }
         }
+        // Acento azul en los controles (el cobre queda solo para la llama de la racha).
+        .tint(Theme.accent)
     }
 
     // MARK: - Rango
@@ -74,20 +76,20 @@ struct ProfileView: View {
             ZStack {
                 ProgressRing(progress: ProfileRank.progress(xp: xp), color: Theme.gold, lineWidth: 8)
                 Text("\(ProfileRank.level(xp: xp))")
-                    .font(.title2.weight(.heavy))
+                    .font(.title2.weight(.bold))
                     .contentTransition(.numericText())
             }
             .frame(width: 72, height: 72)
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(store.profile.name)
-                    .font(.title.weight(.heavy))
+                    .font(.title.weight(.bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Text(ProfileRank.title(xp: xp))
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(Theme.copper)
-                Text("\(xp) XP · \(game.streak) días seguidos · \(cascos) \(cascos == 1 ? "casco" : "cascos")")
+                    .foregroundStyle(Theme.accent)
+                Text("\(xp) XP · \(game.streak == 1 ? "1 día seguido" : "\(game.streak) días seguidos") · \(cascos) \(cascos == 1 ? "casco" : "cascos")")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -168,8 +170,8 @@ struct ProfileView: View {
 
     private var painCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionTitle(title: "Dónde le duele", subtitle: "Zona habitual. En cada pausa puede cambiarla.")
-            ProfilePainZonePicker(selection: profileBinding(\.usualZone), showsSilhouette: false)
+            SectionTitle(title: "¿Dónde le duele?", subtitle: "Zonas habituales. Marque una o más; en cada pausa puede cambiarlas.")
+            ProfilePainZonePicker(selection: usualZonesBinding, showsSilhouette: false)
         }
         .flatCard()
     }
@@ -204,7 +206,7 @@ struct ProfileView: View {
                 Text(detail).font(.footnote).foregroundStyle(.secondary)
             }
         } icon: {
-            Image(systemName: symbol).foregroundStyle(Theme.copper)
+            Image(systemName: symbol).foregroundStyle(Theme.accent)
         }
     }
 
@@ -261,15 +263,11 @@ struct ProfileView: View {
             }
             .buttonStyle(.plain)
             SecondaryButton(title: "Cargar demo (Marco, día 2)", systemImage: "square.and.arrow.down", action: loadDemo)
-            Button(role: .destructive) {
+            Button("Reiniciar todo", systemImage: "trash", role: .destructive) {
                 confirmReset = true
-            } label: {
-                Label("Reiniciar todo", systemImage: "trash")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 56)
-                    .contentShape(.rect)
             }
-            .buttonStyle(.bordered)
+            .font(.headline)
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
         .flatCard()
     }
@@ -297,7 +295,7 @@ struct ProfileView: View {
                 HStack(spacing: 12) {
                     Image(systemName: store.profile.consentGiven ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                         .font(.title2)
-                        .foregroundStyle(store.profile.consentGiven ? Theme.mint : Theme.copper)
+                        .foregroundStyle(store.profile.consentGiven ? Theme.mint : Theme.gold)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Consentimiento").font(.headline)
                         Text(store.profile.consentGiven ? "Aceptado" : "Pendiente")
@@ -353,12 +351,23 @@ struct ProfileView: View {
         )
     }
 
+    /// Zonas habituales (selección múltiple; perfiles antiguos traen solo `usualZone`).
+    private var usualZonesBinding: Binding<[PainZone]> {
+        Binding(
+            get: { store.profile.allUsualZones },
+            set: { zones in store.mutate { $0.profile.setUsualZones(zones) } }
+        )
+    }
+
     private var notificationsBinding: Binding<Bool> {
         Binding(
             get: { store.profile.notificationsOptIn },
             set: { enable in
                 guard enable else {
                     store.mutate { $0.profile.notificationsOptIn = false }
+                    notificationsDenied = false
+                    // Opt-out: se quitan los avisos ya programados.
+                    DailyNotice.cancelAll()
                     return
                 }
                 Task { await enableNotifications() }
@@ -370,6 +379,8 @@ struct ProfileView: View {
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])) ?? false
         notificationsDenied = !granted
         store.mutate { $0.profile.notificationsOptIn = granted }
+        // Con permiso, se programan al tiro los avisos de los próximos días de turno.
+        if granted { DailyNotice.refresh(store: store) }
     }
 
     private func commitName() {
@@ -401,7 +412,7 @@ struct ProfileView: View {
 
 // MARK: - Componentes compartidos del paquete (Perfil y Onboarding)
 
-/// Botones grandes (64 pt) para elegir una opción con guantes.
+/// Elección de una opción en una grilla de chips compactos (acento azul al marcar).
 struct ProfileChoiceRow<Option: Hashable>: View {
     struct Item: Identifiable {
         var value: Option
@@ -415,49 +426,32 @@ struct ProfileChoiceRow<Option: Hashable>: View {
     var columns: Int = 2
 
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: max(1, columns)), spacing: 10) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: max(1, columns)), spacing: 8) {
             ForEach(items) { item in
-                let selected = item.value == selection
-                Button {
+                SelectionChip(title: item.title, isSelected: item.value == selection,
+                              systemImage: item.symbol, fillsWidth: true) {
                     selection = item.value
-                } label: {
-                    HStack(spacing: 8) {
-                        if let symbol = item.symbol {
-                            Image(systemName: symbol)
-                        }
-                        Text(item.title)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
-                    .font(.title3.weight(.bold))
-                    .frame(maxWidth: .infinity, minHeight: Theme.rowHeight)
-                    .contentShape(.rect)
                 }
-                .buttonStyle(.bordered)
-                .tint(selected ? Theme.copper : .gray)
-                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
         .sensoryFeedback(.selection, trigger: selection)
     }
 }
 
-/// Zona de dolor: silueta simple con marcador y 4 botones grandes.
+/// Zonas de dolor (selección múltiple, mínimo una): silueta con un punto por zona y chips que se
+/// activan y desactivan.
 struct ProfilePainZonePicker: View {
-    @Binding var selection: PainZone
+    @Binding var selection: [PainZone]
     var showsSilhouette = true
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(alignment: .leading, spacing: 14) {
             if showsSilhouette {
-                ProfileSilhouette(zone: selection)
-                    .frame(height: 220)
+                ProfileSilhouette(zones: selection)
+                    .frame(height: 200)
                     .frame(maxWidth: .infinity)
             }
-            ProfileChoiceRow(
-                items: PainZone.allCases.map { .init(value: $0, title: $0.title, symbol: Self.symbol(for: $0)) },
-                selection: $selection
-            )
+            MultiSelectChips(items: PainZone.allCases, selection: $selection, title: { $0.title })
         }
     }
 
@@ -471,12 +465,22 @@ struct ProfilePainZonePicker: View {
     }
 }
 
-/// Silueta de pie con un punto cobre en la zona elegida.
+/// Silueta de pie con un punto de acento en cada zona marcada.
 struct ProfileSilhouette: View {
-    let zone: PainZone
+    let zones: [PainZone]
 
-    /// Posición relativa (x, y) del marcador sobre la figura.
-    private var marker: CGPoint? {
+    init(zones: [PainZone]) {
+        self.zones = zones
+    }
+
+    init(zone: PainZone) {
+        self.zones = [zone]
+    }
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Posición relativa (x, y) del marcador sobre la figura ("Otra zona" no tiene punto).
+    static func marker(for zone: PainZone) -> CGPoint? {
         switch zone {
         case .cuello: CGPoint(x: 0.5, y: 0.2)
         case .hombro: CGPoint(x: 0.62, y: 0.3)
@@ -493,16 +497,18 @@ struct ProfileSilhouette: View {
                     .scaledToFit()
                     .foregroundStyle(.secondary.opacity(0.6))
                     .frame(width: geo.size.width, height: geo.size.height)
-                if let marker {
-                    Circle()
-                        .fill(Theme.copper)
-                        .frame(width: 26, height: 26)
-                        .overlay(Circle().stroke(Theme.copper.opacity(0.35), lineWidth: 10))
-                        .position(x: geo.size.width * marker.x, y: geo.size.height * marker.y)
-                        .transition(.scale.combined(with: .opacity))
+                ForEach(PainZone.normalized(zones)) { zone in
+                    if let marker = Self.marker(for: zone) {
+                        Circle()
+                            .fill(Theme.accent)
+                            .frame(width: 24, height: 24)
+                            .overlay(Circle().stroke(Theme.accent.opacity(0.3), lineWidth: 8))
+                            .position(x: geo.size.width * marker.x, y: geo.size.height * marker.y)
+                            .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
+                    }
                 }
             }
-            .animation(.snappy, value: zone)
+            .animation(reduceMotion ? nil : .snappy, value: zones)
         }
         .accessibilityHidden(true)
     }
@@ -518,7 +524,7 @@ private struct ProfileBadgeTile: View {
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(earned ? Color.white : Color.secondary)
                 .frame(width: 60, height: 60)
-                .background(earned ? AnyShapeStyle(Theme.copper) : AnyShapeStyle(.quaternary), in: .circle)
+                .background(earned ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(.quaternary), in: .circle)
             Text(badge.title)
                 .font(.caption.weight(.bold))
                 .multilineTextAlignment(.center)

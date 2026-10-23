@@ -11,7 +11,8 @@ import Foundation
 nonisolated struct CanonicalPayload: Codable, Sendable, Hashable {
     /// Versión del esquema del payload. Sube si cambia la forma; las sesiones viejas
     /// siguen verificando porque `verify` nunca re-codifica.
-    static let currentVersion = 1
+    /// v2: `checkIn.zones` (selección múltiple, opcional; ausente en payloads v1).
+    static let currentVersion = 2
 
     var v: Int = CanonicalPayload.currentVersion
     var id: UUID
@@ -34,7 +35,11 @@ nonisolated struct CanonicalPayload: Codable, Sendable, Hashable {
     nonisolated struct CheckIn: Codable, Sendable, Hashable {
         var score: Int?
         var answers: [Bool]
+        /// Zona principal (la primera marcada).
         var zone: PainZone
+        /// Todas las zonas marcadas (v2). `nil` en sesiones sin selección múltiple: no se codifica,
+        /// así sus bytes son los mismos que en v1.
+        var zones: [PainZone]? = nil
     }
 
     nonisolated struct Flag: Codable, Sendable, Hashable {
@@ -127,7 +132,8 @@ nonisolated struct CanonicalPayload: Codable, Sendable, Hashable {
         monotonicMs = Self.ms(s.monotonicSeconds)
         checkIn = (s.checkInScore == nil && s.checkInAnswers.isEmpty)
             ? nil
-            : CheckIn(score: s.checkInScore, answers: s.checkInAnswers, zone: s.zone)
+            : CheckIn(score: s.checkInScore, answers: s.checkInAnswers, zone: s.zone,
+                      zones: s.zones.map { PainZone.normalized($0, fallback: s.zone) })
         postResponse = s.postResponse
         activities = s.activities.map(Activity.init)
         counted = s.counted

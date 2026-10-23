@@ -25,16 +25,23 @@ struct StroopView: View {
         case done
     }
 
-    private static let stimulusHeight: CGFloat = 220
-    private static let keyHeight: CGFloat = 80
+    /// Alto mínimo de la tarjeta del estímulo; crece con Dynamic Type.
+    @ScaledMetric(relativeTo: .largeTitle) private var stimulusHeight: CGFloat = 200
+    /// Tamaño de la palabra, relativo a `.largeTitle` (crece con Dynamic Type; se achica si no cabe).
+    @ScaledMetric(relativeTo: .largeTitle) private var wordSize: CGFloat = 64
+    /// Alto mínimo de las teclas de color.
+    @ScaledMetric(relativeTo: .headline) private var keyHeight: CGFloat = 64
 
     var body: some View {
-        VStack(spacing: 20) {
-            header
-            stimulusCard
-            keypad
+        ScrollView {
+            VStack(spacing: 20) {
+                header
+                stimulusCard
+                keypad
+            }
+            .padding()
         }
-        .padding()
+        .scrollBounceBehavior(.basedOnSize)
         .appScreen()
         .task {
             if !runner.isRunning && runner.outcome == nil { runner.start() }
@@ -71,26 +78,29 @@ struct StroopView: View {
             switch stage {
             case .intro:
                 VStack(spacing: 14) {
-                    Text("Toque el color de la tinta").font(.title2.weight(.bold)).multilineTextAlignment(.center)
+                    Text("Toque el color de la tinta")
+                        .font(.title2.weight(.bold))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("No la palabra.").font(.title3).foregroundStyle(.secondary)
-                    PrimaryButton(title: "EMPEZAR", systemImage: "play.fill") { ready() }
+                    PrimaryButton(title: "Empezar", systemImage: "play.fill") { ready() }
                 }
                 .padding()
                 .frame(maxWidth: .infinity)
-                .frame(height: Self.stimulusHeight)
+                .frame(minHeight: stimulusHeight)
                 .flatCard(padding: 0)
             case .armed, .blank, .answered:
                 darkCard {
                     Text("+")
-                        .font(.system(size: 44, weight: .bold, design: .rounded))
+                        .font(.largeTitle.weight(.bold))
                         .foregroundStyle(.white.opacity(0.5))
                         .accessibilityHidden(true)
                 }
             case .stimulus(let cue):
                 darkCard {
                     Text(cue.wordText)
-                        .font(.system(size: 72, weight: .black, design: .rounded))
-                        .minimumScaleFactor(0.5)
+                        .font(.system(size: wordSize, weight: .black, design: .rounded))
+                        .minimumScaleFactor(0.4)
                         .lineLimit(1)
                         .foregroundStyle(Self.inkColor(cue.ink))
                         .padding(.horizontal, 12)
@@ -99,8 +109,11 @@ struct StroopView: View {
             case .done:
                 darkCard {
                     Text(runner.progress.hint.isEmpty ? "Listo." : runner.progress.hint)
-                        .font(.title.weight(.heavy))
+                        .font(.title.weight(.bold))
                         .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .minimumScaleFactor(0.6)
+                        .padding(.horizontal, 12)
                 }
             }
         }
@@ -110,7 +123,7 @@ struct StroopView: View {
     private func darkCard<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content()
             .frame(maxWidth: .infinity)
-            .frame(height: Self.stimulusHeight)
+            .frame(minHeight: stimulusHeight)
             .background(Theme.night, in: .rect(cornerRadius: Theme.cardRadius))
     }
 
@@ -120,10 +133,10 @@ struct StroopView: View {
         return LazyVGrid(columns: columns, spacing: 12) {
             ForEach(0..<StroopVerifier.colorCount, id: \.self) { k in
                 Button { tap(k) } label: {
-                    Text(StroopVerifier.colorNames[k])
-                        .font(.footnote.weight(.bold))
+                    Text(StroopVerifier.colorNames[k].capitalized)
+                        .font(.headline)
                         .foregroundStyle(Self.labelColor(k))
-                        .frame(maxWidth: .infinity, minHeight: Self.keyHeight)
+                        .frame(maxWidth: .infinity, minHeight: keyHeight)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)

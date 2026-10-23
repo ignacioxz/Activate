@@ -89,12 +89,22 @@ struct SessionFlowTests {
 
     // MARK: PauseCoordinator
 
+    /// Coordinador sobre un store en memoria. Por defecto con consentimiento (como tras el alta).
     @MainActor
-    private func makeCoordinator(moment: Moment = .colacion) -> (PauseCoordinator, AppStore) {
+    private func makeCoordinator(moment: Moment = .colacion, consent: Bool = true) -> (PauseCoordinator, AppStore) {
         let store = AppStore(inMemory: true)
+        store.mutate { $0.profile.consentGiven = consent }
         let game = GameStore(store: store)
         let coach = CoachService()
         return (PauseCoordinator(moment: moment, store: store, game: game, coach: coach), store)
+    }
+
+    /// Espera el cierre asíncrono (firma + registro).
+    @MainActor
+    private func waitForReward(_ c: PauseCoordinator) async {
+        for _ in 0..<100 where c.stage != .reward {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     @MainActor
@@ -102,7 +112,7 @@ struct SessionFlowTests {
         let (c, store) = makeCoordinator()
         #expect(c.stage == .checkIn)
         #expect(c.existingCheckIn == nil)
-        c.submitCheckIn(answers: [true, false, false, false, false, false], zone: .lumbar, moment: .colacion)
+        c.submitCheckIn(answers: [true, false, false, false, false, false], zones: [.lumbar], moment: .colacion)
         #expect(store.data.checkIns.count == 1)
         #expect(store.data.checkIns[0].score == 1)
         #expect(store.data.checkIns[0].source == .pausa)
@@ -114,7 +124,7 @@ struct SessionFlowTests {
     @MainActor
     @Test func rdqAltoPideAlarmaYUnSiDeriva() {
         let (c, store) = makeCoordinator()
-        c.submitCheckIn(answers: [true, true, true, true, true, false], zone: .lumbar, moment: .colacion)
+        c.submitCheckIn(answers: [true, true, true, true, true, false], zones: [.lumbar], moment: .colacion)
         #expect(c.stage == .alarm)
         c.submitAlarm(answers: [false, true, false])
         #expect(c.stage == .stopped)
@@ -125,7 +135,7 @@ struct SessionFlowTests {
     @MainActor
     @Test func rdqAltoSinAlarmaDaPlanSuave() {
         let (c, _) = makeCoordinator(moment: .campamento)
-        c.submitCheckIn(answers: [true, true, true, true, true, true], zone: .lumbar, moment: .campamento)
+        c.submitCheckIn(answers: [true, true, true, true, true, true], zones: [.lumbar], moment: .campamento)
         c.submitAlarm(answers: [false, false, false])
         #expect(c.stage == .planning)
         #expect(c.isGentle)
@@ -136,6 +146,7 @@ struct SessionFlowTests {
     @MainActor
     @Test func checkInExistenteSeReutiliza() {
         let store = AppStore(inMemory: true)
+        store.mutate { $0.profile.consentGiven = true }
         let cal = store.calendar
         let now = Date.now
         store.mutate {
@@ -149,10 +160,177 @@ struct SessionFlowTests {
         #expect(store.data.checkIns.count == 1)
     }
 
+    // MARK: Zonas múltiples y momento del check-in
+
+    @MainActor
+    @Test func checkInYSesionGuardanTodasLasZonas() async {
+        let (c, store) = makeCoordinator(moment: .entrada)
+        #expect(c.usualZones == [.lumbar])
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.cuello, .lumbar], moment: .entrada)
+        let saved = store.data.checkIns[0]
+        #expect(saved.zones == [.lumbar, .cuello])          // normalizadas, en el orden de PainZone
+        #expect(saved.zone == .lumbar)                       // la principal sigue siendo la primera
+        #expect(saved.allZones == [.lumbar, .cuello])
+        c.startActivities()
+        while case .activity = c.stage { c.skipCurrent() }
+        c.submitPost(.igual)
+        await waitForReward(c)
+        #expect(c.session?.allZones == [.lumbar, .cuello])
+        #expect(c.session?.zone == .lumbar)
+    }
+
+    @MainActor
+    @Test func checkInSinZonasUsaLasHabituales() {
+        let (c, store) = makeCoordinator()
+        store.mutate { $0.profile.setUsualZones([.hombro, .cuello]) }
+        #expect(c.usualZones == [.cuello, .hombro])
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [], moment: .colacion)
+        #expect(store.data.checkIns[0].allZones == [.cuello, .hombro])
+    }
+
+    @MainActor
+    @Test func elMomentoDelCheckInMandaEnPlanYSesion() async {
+        // Se abrió como colación, pero en el chip "Momento" marcó relevo de entrada.
+        let (c, _) = makeCoordinator(moment: .colacion)
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
+        #expect(c.effectiveMoment == .entrada)
+        #expect(c.recipeKind == .relevo60)
+        #expect(c.plan.map(\.kind) == SensorBlockPlanner.ordered(Recipes.base(.relevo60, demo: false).activities).map(\.kind))
+        c.startActivities()
+        while case .activity = c.stage { c.skipCurrent() }
+        c.submitPost(.mejor)
+        await waitForReward(c)
+        #expect(c.session?.moment == .entrada)
+        #expect(c.session?.recipe == .relevo60)
+    }
+
+    @MainActor
+    @Test func checkInDeOtroRelevoNoCambiaElMomento() {
+        // El RDQ de la mañana (relevo de entrada) se reutiliza en la colación: manda el momento de apertura.
+        let store = AppStore(inMemory: true)
+        store.mutate { $0.profile.consentGiven = true }
+        store.addCheckIn(store.makeCheckIn(date: .now, answers: [false, false, false, false, false, false], moment: .entrada))
+        let c = PauseCoordinator(moment: .colacion, store: store, game: GameStore(store: store), coach: CoachService())
+        c.continueWithExistingCheckIn()
+        #expect(c.effectiveMoment == .colacion)
+        #expect(c.recipeKind == .colacion3)
+    }
+
+    // MARK: Consentimiento (segunda barrera)
+
+    @MainActor
+    @Test func sinConsentimientoElPlanNoUsaCamara() {
+        let (c, _) = makeCoordinator(moment: .campamento, consent: false)
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .campamento)
+        #expect(c.stage == .planning)
+        #expect(c.cameraBlocked)
+        #expect(!c.plan.isEmpty)
+        #expect(c.plan.allSatisfy { !PauseCoordinator.usesCamera($0.kind) })
+        #expect(c.plan.map(\.kind) == [.pasos, .stroop, .respiracion])
+    }
+
+    @MainActor
+    @Test func sinConsentimientoElRelevoQuedaConRespiracion() {
+        // Relevo = cuello + ojos (ambos con cámara): queda la respiración, que solo usa la pantalla.
+        let (c, _) = makeCoordinator(moment: .entrada, consent: false)
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
+        #expect(c.plan.map(\.kind) == [.respiracion])
+        #expect(c.cameraBlocked)
+    }
+
+    @MainActor
+    @Test func conConsentimientoNoSeBloqueaLaCamara() {
+        let (c, _) = makeCoordinator(moment: .entrada, consent: true)
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
+        #expect(!c.cameraBlocked)
+        #expect(c.plan.map(\.kind) == [.cuello, .ojos])
+    }
+
+    @Test func consentimientoFiltraTiposPermitidos() {
+        let allowed = PauseCoordinator.consentAllowed(ActivityKind.allCases, consentGiven: false)
+        #expect(Set(allowed) == [.pasos, .stroop, .respiracion])
+        #expect(PauseCoordinator.consentAllowed(ActivityKind.allCases, consentGiven: true) == ActivityKind.allCases)
+    }
+
+    // MARK: Adopción del plan del coach
+
+    private func input(base: Recipe, moment: Moment, gentle: Bool, allowed: [ActivityKind] = ActivityKind.allCases) -> CoachInput {
+        CoachInput(profileName: "Marco", treatment: .usted, checkIn: nil, moment: moment, minutesAvailable: moment.minutes,
+                   baseRecipe: base, allowedKinds: allowed, historyLines: [], gentle: gentle)
+    }
+
+    @Test func planSuaveNoSeReduceDosVeces() {
+        // Recipes.gentle ya redujo los pasos; la plantilla por reglas los volvería a escalar ×0,6.
+        let decision = SafetyRules.evaluate(checkIn: DailyCheckIn(date: .now, workDayKey: "k", turnoKey: "t", source: .pausa,
+                                                                  answers: Array(repeating: true, count: 6),
+                                                                  alarmAnswers: [false, false, false], zone: .lumbar))
+        #expect(decision.gentle)
+        let base = SafetyRules.apply(decision, to: Recipes.base(.campamento5, demo: false), demo: false)
+        let current = SensorBlockPlanner.ordered(base.activities)
+        let i = input(base: base, moment: .campamento, gentle: true, allowed: decision.allowed)
+        let rules = RuleBasedCoach.makePlan(i)
+        #expect(rules.activities != base.activities)          // la plantilla trae metas re-escaladas
+        let adopted = PauseCoordinator.adopt(rules, current: current, input: i, base: base, minutes: 5, demo: false, reducedTargets: true)
+        #expect(adopted?.plan == current)                    // se quedan las metas de la receta
+        #expect(adopted?.plan.first { $0.kind == .pasos }?.target == 125)
+        #expect(adopted?.why == rules.why)                    // del coach por reglas solo el texto
+        #expect(adopted?.startMessage == rules.startMessage)
+    }
+
+    @Test func iaAdoptaMetasSoloSiValida() {
+        let base = Recipes.base(.colacion3, demo: false)
+        let current = SensorBlockPlanner.ordered(base.activities)
+        let i = input(base: base, moment: .colacion, gentle: false)
+        let good = PausePlan(activities: [a(.cuello, 12), a(.pasos, 200)], reasoning: "", why: "Hoy más cuello.",
+                             startMessage: "Vamos, Marco.", backend: .foundationModels)
+        let adopted = PauseCoordinator.adopt(good, current: current, input: i, base: base, minutes: 3, demo: false, reducedTargets: false)
+        #expect(adopted?.plan.map(\.kind) == [.pasos, .cuello])   // reordenado por bloque de sensor
+        #expect(adopted?.plan.first?.target == 200)
+        #expect(adopted?.why == "Hoy más cuello.")
+        let duplicated = PausePlan(activities: [a(.cuello, 12), a(.cuello, 12)], reasoning: "", why: "x",
+                                   startMessage: "y", backend: .foundationModels)
+        #expect(PauseCoordinator.adopt(duplicated, current: current, input: i, base: base, minutes: 3, demo: false, reducedTargets: false) == nil)
+    }
+
+    @Test func metasReducidasTienenTechoUnoPorUno() {
+        // "Sólo camina distancias cortas" = Sí: las reglas bajan los pasos; la IA no puede volver a subirlos.
+        var answers = Array(repeating: false, count: 6)
+        answers[RDQ6.itemWalksShortDistances] = true
+        let decision = SafetyRules.evaluate(checkIn: DailyCheckIn(date: .now, workDayKey: "k", turnoKey: "t", source: .pausa,
+                                                                  answers: answers, zone: .lumbar))
+        #expect(decision.stepTargetFactor < 1)
+        let base = SafetyRules.apply(decision, to: Recipes.base(.colacion3, demo: false), demo: false)
+        let reducedSteps = try? #require(base.activities.first { $0.kind == .pasos }?.target)
+        #expect(reducedSteps == 125)
+        let i = input(base: base, moment: .colacion, gentle: false, allowed: decision.allowed)
+        let atCeiling = PausePlan(activities: [a(.pasos, 125)], reasoning: "", why: "", startMessage: "", backend: .foundationModels)
+        let above = PausePlan(activities: [a(.pasos, 200)], reasoning: "", why: "", startMessage: "", backend: .foundationModels)
+        #expect(PauseCoordinator.validated(atCeiling, input: i, base: base, minutes: 3, demo: false, reducedTargets: true) != nil)
+        #expect(PauseCoordinator.validated(above, input: i, base: base, minutes: 3, demo: false, reducedTargets: true) == nil)
+        // Sin reducción de las reglas sigue valiendo el doble de la meta base.
+        #expect(SessionPlanCheck.accepts(above, allowed: ActivityKind.allCases, base: base, minutes: 3, demo: false))
+        #expect(!SessionPlanCheck.accepts(above, allowed: ActivityKind.allCases, base: base, minutes: 3, demo: false, reducedTargets: true))
+    }
+
+    // MARK: Chips de selección múltiple
+
+    @Test func chipsActivanYDesactivanConMinimoUno() {
+        let all = PainZone.allCases
+        #expect(ChipSelection.toggled(.cuello, in: [.lumbar], items: all) == [.lumbar, .cuello])
+        #expect(ChipSelection.toggled(.lumbar, in: [.lumbar, .cuello], items: all) == [.cuello])
+        // La última marcada no se puede quitar.
+        #expect(ChipSelection.toggled(.lumbar, in: [.lumbar], items: all) == [.lumbar])
+        #expect(ChipSelection.isLocked(PainZone.lumbar, in: [PainZone.lumbar]))
+        #expect(!ChipSelection.isLocked(PainZone.cuello, in: [PainZone.lumbar]))
+        // Orden estable (el de `items`), sin duplicados.
+        #expect(ChipSelection.toggled(.lumbar, in: [.otra, .hombro], items: all) == [.lumbar, .hombro, .otra])
+        #expect(ChipSelection.toggled(.otra, in: [.cuello, .cuello], items: all) == [.cuello, .otra])
+    }
+
     @MainActor
     @Test func saltarTodoLlevaAlCierreYLaSesionNoCuenta() async {
         let (c, _) = makeCoordinator(moment: .entrada)
-        c.submitCheckIn(answers: [false, false, false, false, false, false], zone: .lumbar, moment: .entrada)
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
         c.startActivities()
         let total = c.plan.count
         #expect(total == 2)
@@ -191,7 +369,7 @@ struct SessionFlowTests {
     @MainActor
     @Test func sesionCerradaLlevaBanderasDeIntegridadYMonotonico() async {
         let (c, _) = makeCoordinator(moment: .entrada)
-        c.submitCheckIn(answers: [false, false, false, false, false, false], zone: .lumbar, moment: .entrada)
+        c.submitCheckIn(answers: [false, false, false, false, false, false], zones: [.lumbar], moment: .entrada)
         c.startActivities()
         while case .activity = c.stage { c.skipCurrent() }
         c.submitPost(.mejor)
