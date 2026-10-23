@@ -6,6 +6,7 @@ struct ActivateApp: App {
     @State private var sensors: SensorHub
     @State private var coach: CoachService
     @State private var game: GameStore
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let s = AppStore()
@@ -35,6 +36,10 @@ struct ActivateApp: App {
                 // Modo exterior = apariencia clara siempre (sol directo); si no, sigue al sistema.
                 .preferredColorScheme(outdoorMode ? .light : nil)
                 .tint(Theme.accent)
+                // La pantalla no se bloquea mientras la app está abierta (pedido del usuario): las pausas
+                // se hacen con el teléfono en la mano o apoyado y sin tocarlo. Al salir se restaura.
+                .onAppear { ScreenAwake.update(for: .active) }
+                .onChange(of: scenePhase) { _, phase in ScreenAwake.update(for: phase) }
         }
     }
 
@@ -57,5 +62,13 @@ struct ActivateApp: App {
         #else
         RootGate { RootTabView() }
         #endif
+    }
+}
+
+
+/// Bloqueo automático de pantalla desactivado solo con la app en primer plano.
+enum ScreenAwake {
+    static func update(for phase: ScenePhase) {
+        UIApplication.shared.isIdleTimerDisabled = (phase == .active)
     }
 }

@@ -116,7 +116,7 @@ struct RDQByDayChart: View {
                     if let text = value.as(String.self) {
                         Text(text)
                             .font(.caption.weight(text == "Hoy" ? .bold : .regular))
-                            .foregroundStyle(text == "Hoy" ? Theme.copper : Color.secondary)
+                            .foregroundStyle(text == "Hoy" ? Theme.accent : Color.secondary)
                     }
                 }
             }
@@ -212,7 +212,7 @@ struct TurnoBarsChart: View {
         Chart(sorted) { turno in
             if let value = metric.value(turno) {
                 BarMark(x: .value("Turno", xLabel(turno)), y: .value(metric.title, value))
-                    .foregroundStyle(turno.turnoKey == currentKey ? Theme.copper : Color.secondary.opacity(0.45))
+                    .foregroundStyle(turno.turnoKey == currentKey ? Theme.accent : Color.secondary.opacity(0.45))
                     .cornerRadius(6)
                     .annotation(position: .top, spacing: 4) {
                         Text(metric.label(value))

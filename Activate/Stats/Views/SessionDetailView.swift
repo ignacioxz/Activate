@@ -92,12 +92,11 @@ nonisolated enum StatsMetricCopy {
                 .init(label: "Inclinación máxima", value: degrees(maxRoll)),
                 .init(label: "Señales acertadas", value: "\(cueMatches) de \(cueMatches + cueMismatches)"),
             ]
-        case let .eyes(completeBlinks, partialBlinks, blinksPerMinute, farGazeSeconds):
+        case let .eyes(completeBlinks, partialBlinks, blinksPerMinute, _):
             return [
                 .init(label: "Parpadeos completos", value: "\(completeBlinks)"),
                 .init(label: "Parpadeos parciales", value: "\(partialBlinks)"),
                 .init(label: "Parpadeos por minuto", value: StatsCopy.format1(blinksPerMinute)),
-                .init(label: "Mirando lejos", value: "\(Int(farGazeSeconds.rounded())) s"),
             ]
         case let .stroop(trials, valid, accuracy, medianRTms, medianCongruentRTms, medianIncongruentRTms, anticipations, lapses, seed):
             return [
@@ -138,7 +137,7 @@ enum StatsLevelStyle {
         switch level {
         case .full: Theme.mint
         case .reduced: Theme.sky
-        case .suspicious: Theme.copper
+        case .suspicious: Theme.warningText
         case .simulated: Color.secondary
         }
     }
@@ -203,7 +202,7 @@ struct StatsAnomalyLine: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: anomaly.severity == .hard ? "exclamationmark.triangle.fill" : "info.circle")
                 .font(.body.weight(.bold))
-                .foregroundStyle(anomaly.severity == .hard ? Theme.copper : Color.secondary)
+                .foregroundStyle(anomaly.severity == .hard ? Theme.warningText : Color.secondary)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(StatsAnomalyCopy.text(for: anomaly))

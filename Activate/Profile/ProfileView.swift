@@ -89,7 +89,7 @@ struct ProfileView: View {
                 Text(ProfileRank.title(xp: xp))
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(Theme.accent)
-                Text("\(xp) XP · \(game.streak == 1 ? "1 día seguido" : "\(game.streak) días seguidos") · \(cascos) \(cascos == 1 ? "casco" : "cascos")")
+                Text("\(xp) XP · \(game.streak == 1 ? "1 día seguido" : "\(game.streak) días seguidos") · \(cascos) \(cascos == 1 ? "comodín" : "comodines")")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

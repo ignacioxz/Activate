@@ -34,7 +34,7 @@ nonisolated enum TurnoDayState: Sendable, Equatable {
     var symbol: String? {
         switch self {
         case .pause: "checkmark"
-        case .casco: "shield.fill"
+        case .casco: "shield.lefthalf.filled"
         case .today: "sun.max.fill"
         case .missed: "minus"
         case .future: nil
@@ -44,7 +44,7 @@ nonisolated enum TurnoDayState: Sendable, Equatable {
     var spoken: String {
         switch self {
         case .pause: "con pausa"
-        case .casco: "casco usado, racha a salvo"
+        case .casco: "comodín usado, racha a salvo"
         case .today: "hoy, sin pausa todavía"
         case .missed: "sin pausa"
         case .future: "pendiente"
@@ -236,7 +236,7 @@ private struct DayCell: View {
         switch state {
         case .pause: Theme.mint
         case .casco: Theme.sky
-        case .today: Theme.copper.opacity(0.18)
+        case .today: Theme.accent.opacity(0.18)
         case .missed: Color.primary.opacity(0.10)
         case .future: Color.primary.opacity(0.05)
         }
@@ -245,7 +245,7 @@ private struct DayCell: View {
     private var symbolColor: Color {
         switch state {
         case .pause, .casco: Color.white
-        case .today: Theme.copper
+        case .today: Theme.accent
         case .missed, .future: Color.secondary
         }
     }
@@ -254,7 +254,7 @@ private struct DayCell: View {
         VStack(spacing: 6) {
             Text(day.isToday ? "Hoy" : "D\(day.dayInBlock)")
                 .font(.subheadline.weight(.bold))
-                .foregroundStyle(day.isToday ? Theme.copper : Color.secondary)
+                .foregroundStyle(day.isToday ? Theme.accent : Color.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Circle()
@@ -262,7 +262,7 @@ private struct DayCell: View {
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
                     if day.isToday {
-                        Circle().stroke(Theme.copper, lineWidth: 3)
+                        Circle().stroke(Theme.accent, lineWidth: 3)
                     }
                 }
                 .overlay {

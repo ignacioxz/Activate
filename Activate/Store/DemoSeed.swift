@@ -343,7 +343,7 @@ nonisolated enum DemoSeed {
         case .ojos:
             duration = rng.double(30...38)
             metrics = .eyes(completeBlinks: achieved, partialBlinks: rng.int(1...4),
-                            blinksPerMinute: round2(Double(achieved) / duration * 60), farGazeSeconds: round2(rng.double(20...24)))
+                            blinksPerMinute: round2(Double(achieved) / duration * 60), farGazeSeconds: 0)
         case .stroop:
             let trials = max(achieved, achieved + rng.int(0...6))
             let median = rng.int(720...880)
