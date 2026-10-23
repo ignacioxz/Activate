@@ -107,6 +107,7 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
     @ObservationIgnored private var waiters: [CheckedContinuation<Void, Never>] = []
     /// Grabación de diagnóstico (solo DEBUG y fuente en vivo).
     @ObservationIgnored private var recording: SampleRecording? = nil
+    @ObservationIgnored private var loggedAttempts = 0
 
     /// - Parameters:
     ///   - assignment: actividad y meta.
@@ -142,7 +143,8 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
             return
         }
         Diagnostics.log("runner \(assignment.kind.rawValue) arranca fuente=\(source.level.rawValue) meta=\(assignment.target)")
-        if source.level == .live {
+        // Toda fuente real (en vivo o de respaldo, p. ej. la sentadilla antes de que el mundo quede estable).
+        if source.level != .replay {
             recording = SampleRecording(kindID: assignment.kind.rawValue, target: assignment.target)
         }
 
@@ -207,6 +209,10 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
 
         let events = verifier.ingest(sample, at: t)
         syncProgress(at: t)
+        if let recording, let attempts = verifier as? any AttemptDiagnosticsProviding, attempts.attemptCount > loggedAttempts {
+            for i in loggedAttempts..<attempts.attemptCount { recording.event("intento " + attempts.attemptLine(i), t: t) }
+            loggedAttempts = attempts.attemptCount
+        }
 
         var completed = false
         for event in events {

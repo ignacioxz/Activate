@@ -147,3 +147,14 @@ nonisolated final class SampleRecording: @unchecked Sendable {
         }
     }
 }
+
+/// Verificadores que exponen las medidas de cada intento (rep contada o rechazada) para el registro.
+nonisolated protocol AttemptDiagnosticsProviding {
+    var attemptCount: Int { get }
+    func attemptLine(_ index: Int) -> String
+}
+
+extension HandheldSquatVerifier: AttemptDiagnosticsProviding {
+    var attemptCount: Int { diagnostics.count }
+    func attemptLine(_ index: Int) -> String { String(describing: diagnostics[index]) }
+}
