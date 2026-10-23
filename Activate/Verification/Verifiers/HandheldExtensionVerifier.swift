@@ -74,7 +74,7 @@ nonisolated enum HandheldExtensionTuning {
     /// Duración de la rep completa (desde que empieza a inclinarse hasta que vuelve). El máximo deja ir lento
     /// y sostener atrás como enseña el kine (3 s de ida, 2-3 s atrás, 3 s de vuelta).
     static let minRepSeconds = 0.8
-    static let maxRepSeconds = 16.0
+    static let maxRepSeconds = 20.0
     /// Margen extra antes de abortar una rep que no vuelve (s).
     static let abortGraceSeconds = 2.0
     /// Una ventana que nunca llegó a la meta (otra postura de pie, agarre distinto) se descarta a los (s).
@@ -128,7 +128,11 @@ nonisolated enum HandheldExtensionTuning {
     static let headMaxExtraDegrees = 15.0
     /// Con el tronco claramente atrás (cara ≥ `trunkClearlyBackPerRadian`), mirar hacia arriba al inclinarse es
     /// natural: la cabeza puede ir esto más atrás que el teléfono (dato real: +16° con la cara 34 cm atrás).
-    static let headMaxExtraDegreesTrunkBack = 30.0
+    static let headMaxExtraDegreesTrunkBack = 40.0
+    /// Con prueba de tronco, el encuadre también tolera cambios proporcionales a cuánto se fue atrás la cara en el
+    /// mundo (los brazos quedan adelante: dato real 13° con la cara 28-37 cm atrás y 9-12 cm de corrimiento).
+    static let faceRadialRetreatPerFaceBack = 0.8
+    static let faceTangentialPerFaceBack = 0.5
     /// Sin el mundo: la cabeza no puede quedarse atrás del teléfono más que esta fracción de la inclinación
     /// (Δ ≥ −0,7 × inclinación). Subir el teléfono a los ojos da −1; quien deja la cabeza algo más derecha que
     /// el tronco, −0,3 a −0,5. Con el mundo no se exige: lo cubre el teléfono que va hacia atrás.
@@ -154,7 +158,10 @@ nonisolated enum HandheldExtensionTuning {
     static let faceLostDuringRepSeconds = 5.0
     /// Rep con la cara perdida en la zona atrás: cuenta solo con el mundo, la cara vista al empezar y otra vez al
     /// volver, al menos esta fracción de muestras con cara y el teléfono yéndose atrás como un tronco.
-    static let minTrackedFractionFaceless = 0.25
+    static let minTrackedFractionFaceless = 0.15
+    /// Al enderezarse, ARKit tarda en volver a encontrar la cara (dato real ≈ 0,6 s después de cerrar la rep):
+    /// la decisión de esa rep espera hasta esto a que la cara vuelva.
+    static let faceReturnGraceSeconds = 1.5
     /// Teléfono atrás por radián que exige esa rep (reales 0,46-0,6 m/rad; muñecas, cabeza y mímicas ≤ 0,15).
     static let phoneMinBackPerRadianFaceless = 0.25
     static let minTrackedFraction = Squat.minTrackedFraction
@@ -383,6 +390,8 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
     private var worldAnchorPending = false
 
     private var faceLostSince: Double?
+    /// Rep sin cara en la zona atrás, con prueba de tronco, esperando que la cara vuelva para decidirse.
+    private var pendingReturn: (window: RepWindow, closedAt: Double)?
     private var worldEverNormal = false
     private var worldBadSince: Double?
     private var worldGoodSince: Double?
@@ -447,6 +456,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
             if let rel = s.faceRelPitchDeg { headSmooth.update(rel) }
         }
         detectWorldJump(s, t, &events)
+        resolvePendingReturn(s, t, &events)
         updateFaceGate(s, t, &events)
 
         switch progress.gate {
@@ -463,7 +473,12 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
     }
 
     mutating func finish(at t: Double, reason: FinishReason) -> ActivityOutcome {
-        ActivityOutcome(
+        if let pending = pendingReturn {
+            pendingReturn = nil
+            var ignored: [VerifierEvent] = []
+            decide(pending.window, closedAt: pending.closedAt, faceReturned: false, &ignored)
+        }
+        return ActivityOutcome(
             kind: kind,
             target: progress.target,
             achieved: count,
@@ -508,7 +523,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         if faceLostSince == nil { faceLostSince = t }
         let lost = t - (faceLostSince ?? t)
         switch progress.gate {
-        case .ready where lost >= (window != nil ? K.faceLostDuringRepSeconds : K.faceLostBlockSeconds):
+        case .ready where lost >= (window != nil || pendingReturn != nil ? K.faceLostDuringRepSeconds : K.faceLostBlockSeconds):
             abortRep()
             setGate(.blocked(reason: Copy.keepFace), &events)
             progress.hint = Copy.keepFace
@@ -799,6 +814,8 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         var strongWrists = false
         /// La cara faltó en la mayor parte de la zona atrás y el teléfono se fue atrás como un tronco.
         var facelessTrunk = false
+        /// Hay prueba de que el tronco se fue atrás (cara o teléfono por radián, con el mundo).
+        var trunkEvidence = false
         var wristsOnly: Bool { !faceStayedInFrame || !faceWentBack || !phoneWentBack || !headFollowed }
     }
 
@@ -810,10 +827,22 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         let faceBack = w.maxFaceBackward ?? 0
         let faceMostlyMissingInBack = w.backSamples > 0 && Double(w.backFaceSamples) < 0.5 * Double(w.backSamples)
         let phoneStronglyBack = world && rad > 0 && (w.maxPhoneBackward ?? 0) >= K.phoneMinBackPerRadianFaceless * rad
-        j.facelessTrunk = faceMostlyMissingInBack && phoneStronglyBack
-        let trunkClearlyBack = world && (faceBack >= max(K.faceMinBackward, K.trunkClearlyBackPerRadian * rad) || j.facelessTrunk)
-        let retreatLimit = trunkClearlyBack ? max(K.faceRadialMaxRetreat, K.faceRadialRetreatPerRadian * rad) : K.faceRadialMaxRetreat
-        let tangentialLimit = trunkClearlyBack ? max(K.faceGeometryMaxChange, K.faceTangentialPerRadian * rad) : K.faceGeometryMaxChange
+        let faceStronglyBack = world && rad > 0 && faceBack >= max(K.faceMinBackward, K.trunkClearlyBackPerRadian * rad)
+        let faceBackEnough = faceBack >= max(K.faceMinBackward, K.faceMinBackPerRadian * rad)
+        // Prueba de tronco: la cara se fue atrás como un tronco, o el teléfono se fue atrás como un tronco con la
+        // cara acompañando (en ángulos grandes lo que avanza la cara por radián baja). Las mímicas no llegan a
+        // ninguna de las dos (cara ≤ 0,35 m/rad, teléfono ≤ 0,15 m/rad).
+        // La cara faltó en la zona atrás (al menos en parte: se pierde justo en lo más atrás) y el teléfono se fue
+        // atrás como un tronco.
+        j.facelessTrunk = phoneStronglyBack && (faceMostlyMissingInBack || w.backFaceSamples < w.backSamples || w.maxFaceBackward == nil)
+        let trunkClearlyBack = world && (faceStronglyBack || (phoneStronglyBack && faceBackEnough) || j.facelessTrunk)
+        j.trunkEvidence = trunkClearlyBack
+        let retreatLimit = trunkClearlyBack
+            ? max(K.faceRadialMaxRetreat, K.faceRadialRetreatPerRadian * rad, K.faceRadialRetreatPerFaceBack * faceBack)
+            : K.faceRadialMaxRetreat
+        let tangentialLimit = trunkClearlyBack
+            ? max(K.faceGeometryMaxChange, K.faceTangentialPerRadian * rad, K.faceTangentialPerFaceBack * faceBack)
+            : K.faceGeometryMaxChange
         j.faceStayedInFrame = direction
             && w.maxTangentialChange <= tangentialLimit
             && w.maxRadialApproach <= K.faceGeometryMaxChange
@@ -840,6 +869,30 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         guard let w = window else { return }
         window = nil
         reps.reset()
+        let tracked = w.samples > 0 ? Double(w.trackedSamples) / Double(w.samples) : 0
+        let returned = (w.lastFaceT ?? -1) >= (w.lastBackT ?? .infinity)
+        let faceGap = tracked < K.minTrackedFraction || (w.backSamples > 0 && w.backFaceSamples == 0)
+        if faceGap, !returned, w.faceAtStart, tracked >= K.minTrackedFractionFaceless, judge(w).trunkEvidence {
+            // La cara todavía no vuelve: se decide cuando vuelva (o al vencer la espera).
+            pendingReturn = (w, t)
+            return
+        }
+        decide(w, closedAt: t, faceReturned: returned, &events)
+    }
+
+    /// Una rep pendiente se decide en cuanto la cara vuelve, o como cara perdida si no vuelve a tiempo.
+    private mutating func resolvePendingReturn(_ s: HandheldSquatSample, _ t: Double, _ events: inout [VerifierEvent]) {
+        guard let pending = pendingReturn else { return }
+        if s.faceTracked {
+            pendingReturn = nil
+            decide(pending.window, closedAt: pending.closedAt, faceReturned: true, &events)
+        } else if t - pending.closedAt > K.faceReturnGraceSeconds {
+            pendingReturn = nil
+            decide(pending.window, closedAt: pending.closedAt, faceReturned: false, &events)
+        }
+    }
+
+    private mutating func decide(_ w: RepWindow, closedAt t: Double, faceReturned: Bool, _ events: inout [VerifierEvent]) {
         let seconds = t - w.start
         let tracked = w.samples > 0 ? Double(w.trackedSamples) / Double(w.samples) : 0
         let energy = w.energyCount > 0 ? w.energySum / Double(w.energyCount) : 0
@@ -855,8 +908,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
                   travel > K.maxRepHorizontalTravel + K.horizontalTravelPerRadian * w.worldPeakTilt * .pi / 180 {
             rejection = .moved
         } else if (tracked < K.minTrackedFraction || (w.backSamples > 0 && w.backFaceSamples == 0))
-                    && !(j.facelessTrunk && w.faceAtStart && tracked >= K.minTrackedFractionFaceless
-                         && (w.lastFaceT ?? -1) >= (w.lastBackT ?? .infinity)) {
+                    && !(j.trunkEvidence && w.faceAtStart && tracked >= K.minTrackedFractionFaceless && faceReturned) {
             rejection = .faceMissing
         } else if energy < K.liveFaceMinEnergy {
             rejection = .notLive

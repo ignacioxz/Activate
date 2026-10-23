@@ -78,6 +78,7 @@ struct RealExtensionReplayTests {
         let detail = verifier.diagnostics.map { "\(String(format: "%.0f", $0.peakTilt))° cara \(String(format: "%.0f", $0.trackedFraction * 100))% \($0.rejection.map { "\($0)" } ?? "ok")" }
         for d in verifier.diagnostics { print("REAL3D \(String(format: "%.1f", d.at)) tilt=\(String(format: "%.0f", d.peakTilt)) s=\(String(format: "%.1f", d.seconds)) mode=\(d.mode) trk=\(String(format: "%.2f", d.trackedFraction)) tang=\(String(format: "%.3f", d.tangentialChange)) retr=\(String(format: "%.3f", d.radialRetreat)) appr=\(String(format: "%.3f", d.radialApproach)) dir=\(String(format: "%.1f", d.directionChange)) fBack=\(d.faceBackward.map { String(format: "%.3f", $0) } ?? "-") pBack=\(d.phoneBackward.map { String(format: "%.3f", $0) } ?? "-") head=\(d.headTurn.map { String(format: "%.0f", $0) } ?? "-") desc=\(d.phoneDescent.map { String(format: "%.3f", $0) } ?? "-") rej=\(d.rejection.map { "\($0)" } ?? "ok")") }
         print("REAL3 reps=\(reps) bloqueos=\(blocks) intentos=\(detail)")
-        #expect(reps >= 10, "intentos: \(detail)")
+        // Dos intentos de 13° ocurrieron sin el mundo (cámara trasera sin seguimiento): sin prueba de tronco no cuentan.
+        #expect(reps >= 8, "intentos: \(detail)")
     }
 }
