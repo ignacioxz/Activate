@@ -250,6 +250,9 @@ nonisolated struct StaticSignalDetector: Sendable, Hashable, Codable {
 /// Detecta repeticiones demasiado perfectas (vídeo en bucle, señal sintética):
 /// coeficiente de variación de los intervalos entre reps < `maxCoefficientOfVariation` con
 /// ≥ `minReps` repeticiones → anomalía `tooRegular` (hard). Dispara una sola vez.
+/// Con `maxStandardDeviation` además exige que la desviación absoluta de los intervalos sea menor (s): con
+/// reps lentas (≈ 7 s) un CV de 4 % es σ ≈ 0,3 s, la variación normal de una persona; un motor o un replay
+/// queda bajo 0,05 s.
 nonisolated struct RegularityDetector: Sendable, Hashable, Codable {
     static let anomalyKind = "tooRegular"
     static let defaultMinReps = 6
@@ -259,6 +262,7 @@ nonisolated struct RegularityDetector: Sendable, Hashable, Codable {
 
     var minReps: Int
     var maxCoefficientOfVariation: Double
+    var maxStandardDeviation: Double?
     var window: Int
 
     private var timestamps: [Double] = []
@@ -266,9 +270,11 @@ nonisolated struct RegularityDetector: Sendable, Hashable, Codable {
 
     init(minReps: Int = RegularityDetector.defaultMinReps,
          maxCoefficientOfVariation: Double = RegularityDetector.defaultMaxCoefficientOfVariation,
+         maxStandardDeviation: Double? = nil,
          window: Int = RegularityDetector.defaultWindow) {
         self.minReps = max(3, minReps)
         self.maxCoefficientOfVariation = maxCoefficientOfVariation
+        self.maxStandardDeviation = maxStandardDeviation
         self.window = max(2, window)
     }
 
@@ -281,15 +287,23 @@ nonisolated struct RegularityDetector: Sendable, Hashable, Codable {
         return Array(all.suffix(window))
     }
 
-    /// std / mean de los intervalos (nil si hay menos de 2 intervalos o media ≤ 0).
-    var coefficientOfVariation: Double? {
+    /// Desviación estándar de los intervalos (s); nil si hay menos de 2 intervalos.
+    var standardDeviation: Double? {
         let xs = intervals
         guard xs.count >= 2 else { return nil }
         let n = Double(xs.count)
         let mean = xs.reduce(0, +) / n
-        guard mean > 0 else { return nil }
         let variance = xs.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / n
-        return variance.squareRoot() / mean
+        return variance.squareRoot()
+    }
+
+    /// std / mean de los intervalos (nil si hay menos de 2 intervalos o media ≤ 0).
+    var coefficientOfVariation: Double? {
+        let xs = intervals
+        guard xs.count >= 2, let sd = standardDeviation else { return nil }
+        let mean = xs.reduce(0, +) / Double(xs.count)
+        guard mean > 0 else { return nil }
+        return sd / mean
     }
 
     @discardableResult
@@ -297,6 +311,7 @@ nonisolated struct RegularityDetector: Sendable, Hashable, Codable {
         timestamps.append(t)
         guard !fired, timestamps.count >= minReps, let cv = coefficientOfVariation else { return nil }
         guard cv < maxCoefficientOfVariation else { return nil }
+        if let maxStandardDeviation, let sd = standardDeviation, sd >= maxStandardDeviation { return nil }
         fired = true
         return Anomaly(kind: Self.anomalyKind, severity: .hard, at: t,
                        detail: String(format: "CV de intervalos %.3f en %d reps", cv, timestamps.count))

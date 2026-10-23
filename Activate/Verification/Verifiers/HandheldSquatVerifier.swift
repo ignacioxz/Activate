@@ -49,6 +49,11 @@ nonisolated struct HandheldSquatSample: Sendable, Codable, Hashable, TimedSample
     var verticalAccel: Double? = nil
     /// Pasos del podómetro acumulados desde el inicio de la serie.
     var steps: Int? = nil
+    /// Cabeceo de la cara respecto del teléfono (°): elevación de la mirada de la cara en el mundo (eje +z de
+    /// `ARFaceAnchor`, hacia afuera de la cara) + cabeceo del teléfono. No cambia si cabeza y teléfono giran
+    /// juntos (el tronco); sube si la cabeza se echa atrás más que el teléfono y baja si el teléfono gira y la
+    /// cabeza no. nil sin cara o sin deviceMotion. Lo usa la extensión lumbar (no depende del mundo).
+    var faceRelPitchDeg: Double? = nil
 }
 
 // MARK: - Umbrales (constantes nombradas; se calibran en el iPhone con el texto de depuración de la demo)

@@ -65,10 +65,15 @@ nonisolated enum SourceLevel: String, Sendable, Codable { case live, fallback, r
 
 /// Política pura que convierte (outcome, fuente) en nivel de verificación.
 nonisolated enum VerificationPolicy {
+    /// Anomalías soft que por sí solas limitan el nivel a `reduced`: alguna rep se contó sin el seguimiento
+    /// del mundo (respaldo inercial), aunque la fuente haya quedado `.live` en el resto de la serie.
+    static let reducedAnomalyKinds: Set<String> = [HandheldSquatAnomaly.inertialFallback]
+
     static func level(for outcome: ActivityOutcome, source: SourceLevel, kind: ActivityKind) -> VerificationLevel {
         if source == .replay { return .simulated }
         if outcome.anomalies.contains(where: { $0.severity == .hard }) { return .suspicious }
         if source == .fallback || kind.weakByNature { return .reduced }
+        if outcome.anomalies.contains(where: { reducedAnomalyKinds.contains($0.kind) }) { return .reduced }
         return .full
     }
 
