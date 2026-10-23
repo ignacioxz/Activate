@@ -15,7 +15,7 @@ import simd
 // En cada `ARFrame` (cola serial propia del delegate) se convierte a `HandheldSquatSample`: posición del
 // teléfono (`camera.transform`), cara en el mundo (`ARFaceAnchor.transform`) y en el espacio del teléfono
 // (`camera⁻¹ · face`), cabeceo de la cabeza respecto de la gravedad (eje +Z de la cara en el mundo
-// alineado a la gravedad), relieve 3D de la cara en el mapa de profundidad TrueDepth
+// alineado a la gravedad), cabeceo de la cara respecto del teléfono (extensión lumbar), relieve 3D de la cara en el mapa de profundidad TrueDepth
 // (`frame.capturedDepthData`, ≈ 15 Hz, ver `FaceReliefEstimator`), energía de 8 blendShapes, estado del
 // seguimiento del mundo y lo último del `SensorHub` (gravedad y aceleración vertical de deviceMotion,
 // altímetro, podómetro). Nada de ARKit sale de este archivo. Dos `ARSession` no corren a la vez: el runner
@@ -338,6 +338,7 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
         var energy: Float = 0
         var headPitch: Double? = nil
         var relief: Float? = nil
+        var faceRelPitch: Double?
         if let face {
             let p = face.transform.columns.3
             facePos = SIMD3(p.x, p.y, p.z)
@@ -345,6 +346,8 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
             relief = reliefIfNewDepth(frame)
             let rel = (camera.inverse * face.transform).columns.3
             faceInPhone = SIMD3(rel.x, rel.y, rel.z)
+            // Solo con la gravedad de CoreMotion: el cabeceo del respaldo por la cámara tiene signo incierto.
+            if motion.gravity != nil { faceRelPitch = Self.faceElevation(face.transform) + attitude.pitch }
             let shapes = face.blendShapes
             let current = Self.energyShapes.map { shapes[$0]?.floatValue ?? 0 }
             if let previousShapes, previousShapes.count == current.count {
@@ -370,7 +373,8 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
             verticalAccel: motion.verticalAccel,
             steps: motion.steps,
             headPitchDeg: headPitch,
-            faceRelief: relief)
+            faceRelief: relief,
+            faceRelPitchDeg: faceRelPitch)
 
         statsLock.lock()
         if normal { _stats.everNormal = true }
@@ -458,6 +462,15 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
         let n = g / length
         let k = 180 / Double.pi
         return (asin(max(-1, min(1, -n.z))) * k, atan2(n.x, -n.y) * k)
+    }
+
+    /// Elevación (°) de la mirada de la cara en el mundo (`worldAlignment = .gravity`, Y arriba): el eje +z
+    /// de `ARFaceAnchor` sale de la cara hacia adelante. Mirar hacia arriba (cabeza atrás) > 0.
+    static func faceElevation(_ face: simd_float4x4) -> Double {
+        let z = face.columns.2
+        let length = Double(simd_length(SIMD3(z.x, z.y, z.z)))
+        guard length > 0 else { return 0 }
+        return asin(max(-1, min(1, Double(z.y) / length))) * 180 / .pi
     }
 
     /// Respaldo sin deviceMotion: el eje óptico de la cámara (columna 2) es perpendicular a la pantalla,

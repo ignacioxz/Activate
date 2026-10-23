@@ -62,6 +62,11 @@ nonisolated struct HandheldSquatSample: Sendable, Codable, Hashable, TimedSample
     /// Relieve 3D de la cara en el mapa de profundidad TrueDepth (m, ver `FaceReliefEstimator`): una cara
     /// real ≈ 1 cm, una foto o una pantalla ≈ 0. nil si este frame no trae profundidad utilizable.
     var faceRelief: Float? = nil
+    /// Cabeceo de la cara respecto del teléfono (°): elevación de la mirada de la cara en el mundo (eje +z de
+    /// `ARFaceAnchor`, hacia afuera de la cara) + cabeceo del teléfono. No cambia si cabeza y teléfono giran
+    /// juntos (el tronco); sube si la cabeza se echa atrás más que el teléfono y baja si el teléfono gira y la
+    /// cabeza no. nil sin cara o sin deviceMotion. Lo usa la extensión lumbar (no depende del mundo).
+    var faceRelPitchDeg: Double? = nil
 }
 
 // MARK: - Umbrales (constantes nombradas; se calibran en el iPhone con el texto de depuración de la demo)
