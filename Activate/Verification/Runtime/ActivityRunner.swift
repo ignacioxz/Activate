@@ -36,6 +36,15 @@ extension ActivityResult {
     }
 }
 
+// MARK: - Nivel de la fuente limitado por el verificador
+
+/// Un verificador puede BAJAR (nunca subir) el nivel que declaró la fuente cuando sabe que parte de la
+/// serie se midió peor que lo declarado (p. ej. la sentadilla en las manos que contó reps con el respaldo
+/// IMU porque la cámara trasera estuvo tapada). El runner lo aplica antes de `VerificationPolicy`.
+nonisolated protocol SourceLevelLimiting {
+    func limitedSourceLevel(_ declared: SourceLevel) -> SourceLevel
+}
+
 // MARK: - ActivityRunner
 
 /// Runner genérico: un verificador (struct) + una fuente de muestras del mismo tipo.
@@ -252,7 +261,11 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
         if startInstant != nil { source.stop() }
 
         let out = verifier.finish(at: t, reason: reason)
-        let lvl = VerificationPolicy.level(for: out, source: source.level, kind: assignment.kind)
+        let declared = source.level
+        // Solo puede bajar `.live` a `.fallback`; `.fallback` y `.replay` quedan como los declaró la fuente.
+        let limited = (verifier as? any SourceLevelLimiting)?.limitedSourceLevel(declared) ?? declared
+        let effective = declared == .live && limited == .fallback ? .fallback : declared
+        let lvl = VerificationPolicy.level(for: out, source: effective, kind: assignment.kind)
         syncProgress(at: t)
         if reason == .timeout, !out.completed {
             cue = Cue(text: "Se acabó el tiempo.", symbol: "clock")

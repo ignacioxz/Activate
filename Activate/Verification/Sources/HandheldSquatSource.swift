@@ -12,10 +12,12 @@ import simd
 //
 // En cada `ARFrame` (cola serial propia del delegate) se convierte a `HandheldSquatSample`: posición del
 // teléfono (`camera.transform`), cara en el mundo (`ARFaceAnchor.transform`) y en el espacio del teléfono
-// (`camera⁻¹ · face`), energía de 8 blendShapes, estado del seguimiento del mundo y lo último del
-// `SensorHub` (gravedad y aceleración vertical de deviceMotion, altímetro, podómetro). Nada de ARKit sale
-// de este archivo. `ARSession` y `AVCaptureSession` no conviven: el coordinador / `SquatRunner` hacen
-// `stop()` de una antes del `start()` de la otra.
+// (`camera⁻¹ · face`), cabeceo de la cabeza respecto de la gravedad (eje +Z de la cara en el mundo
+// alineado a la gravedad), relieve 3D de la cara en el mapa de profundidad TrueDepth
+// (`frame.capturedDepthData`, ≈ 15 Hz, ver `FaceReliefEstimator`), energía de 8 blendShapes, estado del
+// seguimiento del mundo y lo último del `SensorHub` (gravedad y aceleración vertical de deviceMotion,
+// altímetro, podómetro). Nada de ARKit sale de este archivo. `ARSession` y `AVCaptureSession` no conviven:
+// el coordinador / `SquatRunner` hacen `stop()` de una antes del `start()` de la otra.
 
 /// `SampleSource` de la sentadilla en las manos. Vive en MainActor; el trabajo corre en la cola del relay.
 @Observable
@@ -252,6 +254,8 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
     ]
     /// Cada cuántos frames se publica la telemetría de depuración (60 Hz / 6 ≈ 10 Hz).
     static let telemetryEveryFrames = 6
+    /// Cada cuántos mapas de profundidad nuevos se mide el relieve (≈ 15 Hz / 2 ≈ 7 Hz).
+    static let reliefEveryDepthMaps = 2
 
     let worldTracking: Bool
     /// Llamado en `queue` con una muestra cada `telemetryEveryFrames`.
@@ -268,6 +272,10 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
     private var firstFrameOffset = 0.0
     private var previousShapes: [Float]?
     private var frameIndex = 0
+    private var lastDepthTimestamp: TimeInterval = -1
+    private var depthMapIndex = 0
+    /// Último relieve medido (para la telemetría de depuración, que no coincide con los frames de profundidad).
+    private var lastRelief: Float?
 
     init(continuation: AsyncStream<HandheldSquatSample>.Continuation, tap: HandheldMotionTap, worldTracking: Bool) {
         self.continuation = continuation
@@ -289,6 +297,9 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
             firstFrameTimestamp = nil
             previousShapes = nil
             frameIndex = 0
+            lastDepthTimestamp = -1
+            depthMapIndex = 0
+            lastRelief = nil
         }
         statsLock.lock()
         _stats = HandheldSquatSourcePolicy.Stats()
@@ -319,9 +330,13 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
         var facePos = SIMD3<Float>(repeating: 0)
         var faceInPhone = SIMD3<Float>(repeating: 0)
         var energy: Float = 0
+        var headPitch: Double? = nil
+        var relief: Float? = nil
         if let face {
             let p = face.transform.columns.3
             facePos = SIMD3(p.x, p.y, p.z)
+            headPitch = Self.headPitch(face: face.transform)
+            relief = reliefIfNewDepth(frame)
             let rel = (camera.inverse * face.transform).columns.3
             faceInPhone = SIMD3(rel.x, rel.y, rel.z)
             let shapes = face.blendShapes
@@ -347,7 +362,9 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
             altitude: motion.altitude,
             userAccelRMS: motion.accelRMS,
             verticalAccel: motion.verticalAccel,
-            steps: motion.steps)
+            steps: motion.steps,
+            headPitchDeg: headPitch,
+            faceRelief: relief)
 
         statsLock.lock()
         if normal { _stats.everNormal = true }
@@ -359,7 +376,12 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
 
         continuation.yield(sample)
         frameIndex += 1
-        if frameIndex % Self.telemetryEveryFrames == 0 { onTelemetry?(sample) }
+        if let relief { lastRelief = relief }
+        if frameIndex % Self.telemetryEveryFrames == 0 {
+            var telemetry = sample
+            telemetry.faceRelief = relief ?? lastRelief
+            onTelemetry?(telemetry)
+        }
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
@@ -372,6 +394,43 @@ nonisolated final class HandheldSquatRelay: NSObject, ARSessionDelegate, @unchec
     }
 
     // MARK: Conversión
+
+    /// Relieve de la cara si este frame trae un mapa de profundidad nuevo (uno de cada
+    /// `reliefEveryDepthMaps`); nil en los demás.
+    private func reliefIfNewDepth(_ frame: ARFrame) -> Float? {
+        guard let depth = frame.capturedDepthData, frame.capturedDepthDataTimestamp != lastDepthTimestamp else { return nil }
+        lastDepthTimestamp = frame.capturedDepthDataTimestamp
+        depthMapIndex += 1
+        guard depthMapIndex % Self.reliefEveryDepthMaps == 0 else { return nil }
+        return Self.relief(depth)
+    }
+
+    /// Profundidad en metros (Float32) → `FaceReliefEstimator`. nil si el formato no es el esperado.
+    static func relief(_ data: AVDepthData) -> Float? {
+        let depth = data.depthDataType == kCVPixelFormatType_DepthFloat32
+            ? data : data.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        let map = depth.depthDataMap
+        guard CVPixelBufferGetPixelFormatType(map) == kCVPixelFormatType_DepthFloat32 else { return nil }
+        CVPixelBufferLockBaseAddress(map, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(map, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(map) else { return nil }
+        let width = CVPixelBufferGetWidth(map), height = CVPixelBufferGetHeight(map)
+        let rowBytes = CVPixelBufferGetBytesPerRow(map)
+        let stride = MemoryLayout<Float32>.stride
+        guard width > 0, height > 0, rowBytes >= width * stride else { return nil }
+        return FaceReliefEstimator.relief(width: width, height: height) { x, y in
+            base.loadUnaligned(fromByteOffset: y * rowBytes + x * stride, as: Float32.self)
+        }
+    }
+
+    /// Cabeceo de la cabeza respecto de la gravedad (°): elevación del eje +Z del `ARFaceAnchor` (sale de
+    /// la cara) en el mundo con `worldAlignment = .gravity` (Y arriba). Negativo = la cara mira hacia abajo.
+    static func headPitch(face transform: simd_float4x4) -> Double? {
+        let z = transform.columns.2
+        let length = simd_length(SIMD3(z.x, z.y, z.z))
+        guard length > 0 else { return nil }
+        return asin(Double(max(-1, min(1, z.y / length)))) * 180 / .pi
+    }
 
     /// Tiempo monotónico: el primer frame se ancla al ContinuousClock; los siguientes usan el timestamp
     /// de captura de ARKit (dt exacto para integrar).

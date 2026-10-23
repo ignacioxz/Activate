@@ -8,9 +8,13 @@ import simd
 //
 // Sentadilla apoyada, anti-trampa:
 // - Rodillas que se doblan de verdad: en el cuadro el muslo se acorta (la cadera baja más que la rodilla),
-//   los tobillos no se mueven y el torso no se pliega (inclinarse de cintura no cuenta).
+//   la canilla casi no se acorta (una foto inclinada o un zoom acortan las dos igual), los tobillos no se
+//   mueven durante la rep y el torso no se pliega (inclinarse de cintura no cuenta).
+// - Misma distancia: el ancho de hombros y caderas no se achica (alejarse con la cámara en el suelo, un
+//   zoom en una tablet o un carro que aleja el teléfono achican todo) → `distanceChanged`.
 // - Teléfono inmóvil: con deviceMotion, si el teléfono se mueve mientras una rep está por contar
-//   (alguien lo sube y baja para simular la sentadilla) → `phoneHandheld` (hard).
+//   (alguien lo sube y baja para simular la sentadilla) → `phoneHandheld` (soft la 1ª vez, hard la 2ª).
+// - Reps idénticas al frame y al milímetro (vídeo o GIF en bucle) → `tooRegular` (hard).
 // - El mismo desafío "Quédese abajo 2 segundos" que el modo en las manos (`SquatHoldChallenge`).
 
 // MARK: - Umbrales (valores iniciales; se calibran en el iPhone)
@@ -36,8 +40,28 @@ nonisolated enum PoseThresholds {
     /// Torso que no se pliega: (cuello − cadera) se acorta a lo sumo esta fracción del descenso + margen.
     static let squatTorsoMaxFoldRatio = 0.5
     static let squatTorsoFoldSlack = 0.03
-    /// Tobillos quietos (fracción de h0).
-    static let squatAnkleMaxMove = 0.04
+    /// Tobillos quietos durante la rep (fracción de h0): tobillo suavizado respecto del tobillo de pie al
+    /// empezar esa rep. Tolera recoger los pies al pararse de una silla y el ruido de botas y pantalón
+    /// holgado; mover la foto o el teléfono desplaza todo mucho más (y además lo frenan las rodillas).
+    static let squatAnkleMaxMove = 0.07
+    /// Suavizado de los tobillos (por frame, ~30 fps).
+    static let ankleEmaAlpha = 0.3
+    /// Misma distancia: en el fondo, ancho de hombros y caderas / ancho de pie ≥ esto.
+    static let squatMinWidthRatio = 0.90
+    /// En el fondo la canilla conserva su largo y el muslo se acorta: (canilla / canilla de pie) −
+    /// (muslo / muslo de pie) ≥ esto, promediado en el fondo. Una escala o inclinación de la imagen
+    /// acorta los dos igual (diferencia ≈ 0).
+    static let squatShinOverThighMin = 0.08
+    /// Con el gate listo basta ver cuello, cadera y una pierna con al menos esta fracción de la estatura
+    /// calibrada (abajo de la sentadilla, o un poco más lejos, el cuerpo se ve más chico que 1/3 del cuadro).
+    static let minTrackedHeightFraction = 0.55
+    /// Reps idénticas (bucle): curvas de descenso remuestreadas a estos puntos, con diferencia RMS
+    /// (fracción de h0) bajo el umbral y la misma duración al frame, en tantos pares seguidos.
+    static let identicalRepPoints = 32
+    static let identicalRepMaxRMS = 0.004
+    static let identicalRepPairs = 2
+    /// La 2ª rep vetada por teléfono en la mano registra `phoneHandheld` hard (la 1ª, soft).
+    static let phoneHandheldHardAt = 2
     /// "Abajo" para el desafío de la pausa (fracción de h0).
     static let squatHoldMinDescent = 0.09
     /// Quedarse abajo = la cadera varía a lo sumo esto (fracción de h0, máx − mín) durante la pausa.
@@ -88,6 +112,8 @@ nonisolated enum PoseCopy {
     static let bendKnees = "Doble las rodillas, espalda derecha."
     static let stayInPlace = "Quédese en su lugar."
     static let leavePhone = "Deje el teléfono apoyado."
+    static let comeCloser = "Acérquese un poco."
+    static let sameDistance = "Quédese a la misma distancia."
 }
 
 /// Nombres de anomalía que producen estos verificadores.
@@ -121,6 +147,9 @@ nonisolated struct PoseFrame: Sendable {
     var neck: PosePoint?
     var hip: PosePoint?
     var shoulders: PosePoint?
+    /// |x izquierda − x derecha| de hombros y de caderas (nil si no se ven los dos).
+    var shoulderWidth: Double?
+    var hipWidth: Double?
     var ankleY: Double?
     /// Altura media de las rodillas vistas (con su cadera).
     var kneeY: Double?
@@ -128,6 +157,8 @@ nonisolated struct PoseFrame: Sendable {
     var height: Double?
     /// Cuerpo entero en cuadro: cadera/rodilla/tobillo de una pierna, cuello y altura ≥ mínimo.
     var fullBody: Bool
+    /// Cuello, cadera y una pierna entera, sin exigir tamaño.
+    var wholeBody: Bool
     /// Alguna articulación con confianza mínima.
     var anyJoint: Bool
     /// Máximo |Δ| de una articulación respecto del frame anterior (nil si no es comparable).
@@ -144,6 +175,7 @@ nonisolated struct PoseFrame: Sendable {
         anyJoint = sample.joints.values.contains { $0.confidence >= minC }
 
         let ls = seen(.leftShoulder), rs = seen(.rightShoulder)
+        if let l = ls, let r = rs { shoulderWidth = abs(l.x - r.x) } else { shoulderWidth = nil }
         switch (ls, rs) {
         case let (l?, r?): shoulders = PosePoint.mid(l, r)
         case let (l?, nil): shoulders = l
@@ -153,6 +185,7 @@ nonisolated struct PoseFrame: Sendable {
         neck = seen(.neck) ?? shoulders
 
         let lh = seen(.leftHip), rh = seen(.rightHip)
+        if let l = lh, let r = rh { hipWidth = abs(l.x - r.x) } else { hipWidth = nil }
         if let root = seen(.root) {
             hip = root
         } else {
@@ -182,7 +215,8 @@ nonisolated struct PoseFrame: Sendable {
         } else {
             height = nil
         }
-        fullBody = neck != nil && hip != nil && (height ?? 0) >= PoseThresholds.minBodyHeight
+        wholeBody = neck != nil && hip != nil && height != nil
+        fullBody = wholeBody && (height ?? 0) >= PoseThresholds.minBodyHeight
 
         if let previous {
             var maxMove: Double? = nil
@@ -196,6 +230,13 @@ nonisolated struct PoseFrame: Sendable {
         } else {
             motion = nil
         }
+    }
+
+    /// Se puede medir con esta calibración: para calibrar se exige `fullBody`; ya calibrado basta el cuerpo
+    /// entero con al menos `minTrackedHeightFraction` de la estatura de pie.
+    func isTrackable(_ cal: PoseCalibration?) -> Bool {
+        guard let cal, wholeBody, let height else { return fullBody }
+        return height >= PoseThresholds.minTrackedHeightFraction * cal.h0
     }
 }
 
@@ -211,6 +252,9 @@ nonisolated struct PoseCalibration: Sendable, Equatable {
     /// Rodillas y tobillos de pie (nil si no se vieron).
     var kneeY0: Double? = nil
     var ankleY0: Double? = nil
+    /// Ancho de hombros y de caderas de pie (nil si no se vieron los dos lados).
+    var shoulderWidth0: Double? = nil
+    var hipWidth0: Double? = nil
 }
 
 // MARK: - Núcleo compartido: gating, calibración y anomalías de cámara
@@ -235,6 +279,8 @@ nonisolated struct PoseCore: Sendable {
     private var lastNeck: PosePoint?
     private var pendingJumpFrom: PosePoint?
     private var lastPhoneMovedAt: Double?
+    /// El último frame mostró el cuerpo entero pero más chico de lo necesario (persona lejos).
+    private var smallBody = false
 
     nonisolated struct CalibrationWindow: Sendable {
         var n = 0
@@ -243,6 +289,8 @@ nonisolated struct PoseCore: Sendable {
         var shoulderDx = 0.0
         var nKnees = 0, kneeY = 0.0
         var nAnkles = 0, ankleY = 0.0
+        var nShoulderW = 0, shoulderW = 0.0
+        var nHipW = 0, hipW = 0.0
         mutating func reset() { self = CalibrationWindow() }
         mutating func add(_ f: PoseFrame) {
             guard let hip = f.hip, let neck = f.neck, let height = f.height else { return }
@@ -251,6 +299,8 @@ nonisolated struct PoseCore: Sendable {
             if let s = f.shoulders { nShoulders += 1; shoulderDx += s.x - hip.x }
             if let k = f.kneeY { nKnees += 1; kneeY += k }
             if let a = f.ankleY { nAnkles += 1; ankleY += a }
+            if let w = f.shoulderWidth { nShoulderW += 1; shoulderW += w }
+            if let w = f.hipWidth { nHipW += 1; hipW += w }
         }
         var calibration: PoseCalibration? {
             guard n > 0 else { return nil }
@@ -258,7 +308,9 @@ nonisolated struct PoseCore: Sendable {
             return PoseCalibration(hipX0: hipX / d, hipY0: hipY / d, neckY0: neckY / d, h0: h / d,
                                    shoulderDx0: nShoulders > 0 ? shoulderDx / Double(nShoulders) : nil,
                                    kneeY0: nKnees > 0 ? kneeY / Double(nKnees) : nil,
-                                   ankleY0: nAnkles > 0 ? ankleY / Double(nAnkles) : nil)
+                                   ankleY0: nAnkles > 0 ? ankleY / Double(nAnkles) : nil,
+                                   shoulderWidth0: nShoulderW > 0 ? shoulderW / Double(nShoulderW) : nil,
+                                   hipWidth0: nHipW > 0 ? hipW / Double(nHipW) : nil)
         }
     }
 
@@ -282,7 +334,7 @@ nonisolated struct PoseCore: Sendable {
 
     var hint: String {
         switch gate {
-        case .calibrating: okSince == nil ? PoseCopy.placePhone : PoseCopy.holdStill
+        case .calibrating: okSince == nil ? (smallBody ? PoseCopy.comeCloser : PoseCopy.placePhone) : PoseCopy.holdStill
         case .ready: readyHint
         case .blocked(let reason): reason
         }
@@ -302,14 +354,17 @@ nonisolated struct PoseCore: Sendable {
         detectLowFps(frame, &step)
         detectStatic(frame, &step)
 
-        step.trackable = gate == .ready && calibration != nil && frame.fullBody
+        step.trackable = gate == .ready && calibration != nil && frame.isTrackable(calibration)
         return step
     }
 
     // MARK: Gate
 
     private mutating func updateGate(_ f: PoseFrame, _ step: inout Step) {
-        if f.fullBody {
+        // Ya calibrado basta el cuerpo entero (más chico abajo o un poco más lejos); para calibrar, ≥ 1/3.
+        let ok = gate == .ready ? f.isTrackable(calibration) : f.fullBody
+        smallBody = f.wholeBody && !ok
+        if ok {
             lossSince = nil
             if okSince == nil {
                 okSince = f.t
@@ -330,7 +385,8 @@ nonisolated struct PoseCore: Sendable {
             okSince = nil
             window.reset()
             if lossSince == nil { lossSince = f.t }
-            let reason = f.anyJoint ? PoseCopy.partialBody : PoseCopy.noBody
+            // Entero pero chico: está lejos (pedirle que se aleje lo empeora).
+            let reason = f.wholeBody ? PoseCopy.comeCloser : (f.anyJoint ? PoseCopy.partialBody : PoseCopy.noBody)
             switch gate {
             case .ready:
                 if f.t - (lossSince ?? f.t) >= PoseThresholds.gateLossGraceSeconds {
@@ -628,17 +684,32 @@ nonisolated struct PoseRepEngine: Sendable {
 // MARK: - A3 Sentadilla parcial (modo "Apoyado")
 
 /// Lo medido en una rep de cámara: el fondo (frame de máximo descenso de la cadera), los tobillos,
-/// la pausa abajo y si el teléfono se movió.
+/// el ancho del cuerpo y la canilla en el fondo, la pausa abajo, la curva de descenso y si el teléfono
+/// se movió.
 nonisolated struct SquatPoseWindow: Sendable, Hashable {
     var peakDescent = 0.0
     /// Acortamiento del muslo y del torso en el frame de máximo descenso (fracción de h0).
     var thighShortAtPeak: Double?
     var torsoShortAtPeak: Double?
+    /// Tobillo de pie justo antes de la rep (suavizado); nil = el de la calibración.
+    var ankleStart: Double?
+    var ankleSmooth = ExponentialSmoother(alpha: PoseThresholds.ankleEmaAlpha)
     var ankleMoveMax = 0.0
+    /// En el fondo (descenso ≥ `squatEnter`): ancho de hombros/caderas relativo al de pie y
+    /// (canilla relativa − muslo relativo), sumados para promediar.
+    var widthRatioSum = 0.0
+    var widthRatioCount = 0
+    var shinOverThighSum = 0.0
+    var shinOverThighCount = 0
+    /// Descenso crudo por frame (para detectar reps idénticas).
+    var trajectory: [PlateauTimer.Point] = []
     var hold = PlateauTimer(band: PoseThresholds.squatHoldBand, floor: PoseThresholds.squatHoldMinDescent)
     var holdBest: Double { hold.best }
     /// deviceMotion vio el teléfono moverse durante la rep.
     var phoneMoved = false
+
+    var widthRatio: Double? { widthRatioCount > 0 ? widthRatioSum / Double(widthRatioCount) : nil }
+    var shinOverThigh: Double? { shinOverThighCount > 0 ? shinOverThighSum / Double(shinOverThighCount) : nil }
 
     mutating func observe(_ frame: PoseFrame, _ cal: PoseCalibration, descent: Double, at t: Double) {
         if descent > peakDescent {
@@ -652,10 +723,78 @@ nonisolated struct SquatPoseWindow: Sendable, Hashable {
                 torsoShortAtPeak = (torso0 - (neck.y - hip.y)) / cal.h0
             }
         }
-        if let ankle = frame.ankleY, let ankle0 = cal.ankleY0 {
-            ankleMoveMax = max(ankleMoveMax, abs(ankle - ankle0) / cal.h0)
+        if let ankle = frame.ankleY, let reference = ankleStart ?? cal.ankleY0 {
+            let smoothed = ankleSmooth.update(ankle)
+            ankleMoveMax = max(ankleMoveMax, abs(smoothed - reference) / cal.h0)
         }
+        if descent >= PoseThresholds.squatEnter {
+            var ratios: [Double] = []
+            if let w = frame.shoulderWidth, let w0 = cal.shoulderWidth0, w0 > 0 { ratios.append(w / w0) }
+            if let w = frame.hipWidth, let w0 = cal.hipWidth0, w0 > 0 { ratios.append(w / w0) }
+            if !ratios.isEmpty {
+                widthRatioSum += ratios.reduce(0, +) / Double(ratios.count)
+                widthRatioCount += 1
+            }
+            if let hip = frame.hip, let knee = frame.kneeY, let ankle = frame.ankleY,
+               let knee0 = cal.kneeY0, let ankle0 = cal.ankleY0 {
+                let thigh0 = cal.hipY0 - knee0, shin0 = knee0 - ankle0
+                if thigh0 > 0, shin0 > 0 {
+                    shinOverThighSum += (knee - ankle) / shin0 - (hip.y - knee) / thigh0
+                    shinOverThighCount += 1
+                }
+            }
+        }
+        trajectory.append(PlateauTimer.Point(t: t, v: descent))
         hold.add(descent, at: t)
+    }
+}
+
+/// Reps idénticas (vídeo o GIF en bucle): la misma duración al frame y la misma curva de descenso.
+/// Una persona nunca repite dos sentadillas iguales al milímetro y al frame; con dos pares seguidos
+/// (tres reps iguales) → `tooRegular` (hard), aunque la meta sea corta para el CV de intervalos.
+nonisolated struct RepTrajectoryMatcher: Sendable, Hashable {
+    nonisolated struct Curve: Sendable, Hashable {
+        var duration: Double
+        var values: [Double]
+    }
+
+    private(set) var previous: Curve?
+    private(set) var streak = 0
+    private(set) var fired = false
+
+    /// Curva remuestreada a `count` puntos equiespaciados en el tiempo (interpolación lineal).
+    static func resample(_ points: [PlateauTimer.Point], count: Int) -> Curve? {
+        guard count >= 2, points.count >= 2, let first = points.first, let last = points.last, last.t > first.t else { return nil }
+        var values: [Double] = []
+        values.reserveCapacity(count)
+        var j = 0
+        for i in 0..<count {
+            let target = first.t + (last.t - first.t) * Double(i) / Double(count - 1)
+            while j < points.count - 2, points[j + 1].t < target { j += 1 }
+            let a = points[j], b = points[j + 1]
+            let u = b.t > a.t ? min(1, max(0, (target - a.t) / (b.t - a.t))) : 0
+            values.append(a.v + (b.v - a.v) * u)
+        }
+        return Curve(duration: last.t - first.t, values: values)
+    }
+
+    /// Registra la curva de una rep contada. `frameSeconds` = 1 / fps de la cámara.
+    mutating func record(_ points: [PlateauTimer.Point], frameSeconds: Double, at t: Double) -> Anomaly? {
+        guard let curve = Self.resample(points, count: PoseThresholds.identicalRepPoints) else {
+            previous = nil
+            streak = 0
+            return nil
+        }
+        defer { previous = curve }
+        guard let prev = previous else { return nil }
+        let squares = zip(curve.values, prev.values).reduce(0.0) { $0 + ($1.0 - $1.1) * ($1.0 - $1.1) }
+        let rms = (squares / Double(curve.values.count)).squareRoot()
+        let sameDuration = abs(curve.duration - prev.duration) <= frameSeconds * 1.01
+        streak = sameDuration && rms < PoseThresholds.identicalRepMaxRMS ? streak + 1 : 0
+        guard !fired, streak >= PoseThresholds.identicalRepPairs else { return nil }
+        fired = true
+        return Anomaly(kind: PoseAnomaly.tooRegular, severity: .hard, at: t,
+                       detail: "\(streak + 1) reps idénticas: vídeo en bucle")
     }
 }
 
@@ -673,13 +812,22 @@ nonisolated struct PhoneStillnessMonitor: Sendable, Hashable {
 
     private(set) var isMoving = false
     private var movingSince: Double?
-    private var stillSince: Double?
+    private var quietSince: Double?
     private var gravityRef: SIMD3<Double>?
 
     /// Devuelve si el teléfono se está moviendo (sostenido) tras esta muestra.
     @discardableResult
     mutating func ingest(_ m: MotionSample, at t: Double) -> Bool {
         let g = m.gravity
+        let agitated = simd_length(m.rotationRate) > Self.maxRotationRate || simd_length(m.userAccel) > Self.maxUserAccel
+        if agitated {
+            quietSince = nil
+        } else if quietSince == nil {
+            quietSince = t
+        }
+        // Sin agitación un rato (aunque quede inclinado respecto de la referencia): el teléfono quedó apoyado
+        // en otra posición (lo apoyaron después de iniciar, se fue de lado contra la taza). Nueva referencia.
+        if let quiet = quietSince, t - quiet >= Self.rebaseStillSeconds { gravityRef = g }
         var tilted = false
         if let ref = gravityRef, simd_length(ref) > 0, simd_length(g) > 0 {
             let c = max(-1, min(1, simd_dot(ref, g) / (simd_length(ref) * simd_length(g))))
@@ -687,19 +835,18 @@ nonisolated struct PhoneStillnessMonitor: Sendable, Hashable {
         } else {
             gravityRef = g
         }
-        let agitated = simd_length(m.rotationRate) > Self.maxRotationRate || simd_length(m.userAccel) > Self.maxUserAccel
         if agitated || tilted {
-            stillSince = nil
             if movingSince == nil { movingSince = t }
             isMoving = t - (movingSince ?? t) >= Self.sustainSeconds
         } else {
             movingSince = nil
             isMoving = false
-            if stillSince == nil { stillSince = t }
-            if let still = stillSince, t - still >= Self.rebaseStillSeconds { gravityRef = g }
         }
         return isMoving
     }
+
+    /// Olvida la referencia (calibración nueva de la pose).
+    mutating func reset() { self = PhoneStillnessMonitor() }
 }
 
 /// Señal = descenso vertical de la cadera normalizado por la estatura en el frame.
@@ -709,7 +856,7 @@ nonisolated struct SquatVerifier: ActivityVerifier {
     typealias Sample = PoseSample
 
     nonisolated enum Rejection: String, Sendable, Hashable, Codable {
-        case phoneHandheld, feetMoved, kneesStraight, torsoBend, holdMissed
+        case phoneHandheld, feetMoved, distanceChanged, kneesStraight, torsoBend, holdMissed
     }
 
     let kind: ActivityKind = .sentadilla
@@ -720,7 +867,10 @@ nonisolated struct SquatVerifier: ActivityVerifier {
     private(set) var rejections: [Rejection] = []
     private var window = SquatPoseWindow()
     private var stillness = PhoneStillnessMonitor()
-    private var phoneHandheldReported = false
+    /// Tobillo de pie (suavizado) entre reps: referencia de `feetMoved` para la rep siguiente.
+    private var standingAnkle = ExponentialSmoother(alpha: PoseThresholds.ankleEmaAlpha)
+    private var trajectories = RepTrajectoryMatcher()
+    private var phoneHandheldCount = 0
     private var movingCueShown = false
     private var torsoBendCount = 0
 
@@ -746,34 +896,49 @@ nonisolated struct SquatVerifier: ActivityVerifier {
         rejections = []
         window = SquatPoseWindow()
         stillness = PhoneStillnessMonitor()
-        phoneHandheldReported = false
+        standingAnkle.reset()
+        trajectories = RepTrajectoryMatcher()
+        phoneHandheldCount = 0
         movingCueShown = false
         torsoBendCount = 0
     }
 
     mutating func ingest(_ sample: PoseSample, at t: Double) -> [VerifierEvent] {
         var w = window
+        var standing = standingAnkle
         var rejection: Rejection?
         let armed = challenge.isArmed(nextRep: engine.reps.count + 1)
         var events = engine.ingest(sample, at: t, signal: { frame, cal, inRep in
             guard let hip = frame.hip, cal.h0 > 0 else { return nil }
             let descent = (cal.hipY0 - hip.y) / cal.h0
             if inRep {
+                if w.ankleStart == nil { w.ankleStart = standing.value ?? cal.ankleY0 }
                 w.observe(frame, cal, descent: descent, at: t)
             } else {
                 w = SquatPoseWindow()
+                if descent < PoseThresholds.squatExit, let ankle = frame.ankleY { standing.update(ankle) }
             }
             return descent
         }, veto: { _ in
             rejection = Self.evaluate(w, armed: armed)
             return rejection == nil ? nil : []
         })
+        standingAnkle = standing
         window = engine.reps.inRep ? w : SquatPoseWindow()
+        if events.contains(.gate(.ready)) {
+            // Calibración nueva (encuadre nuevo o teléfono recién apoyado): referencias nuevas.
+            standingAnkle.reset()
+            stillness.reset()
+        }
         let counted = events.contains { event in
             if case .rep = event { return true }
             return false
         }
-        if counted, armed { challenge.pass() }
+        if counted {
+            if armed { challenge.pass() }
+            let frameSeconds = 1 / max(1, sample.fps)
+            if let a = trajectories.record(w.trajectory, frameSeconds: frameSeconds, at: t) { record(a, &events) }
+        }
         if let rejection { handle(rejection, at: t, &events) }
         announceChallengeIfNeeded(&events)
         return events
@@ -803,7 +968,9 @@ nonisolated struct SquatVerifier: ActivityVerifier {
     static func evaluate(_ w: SquatPoseWindow, armed: Bool) -> Rejection? {
         if w.phoneMoved { return .phoneHandheld }
         if w.ankleMoveMax > PoseThresholds.squatAnkleMaxMove { return .feetMoved }
+        if let ratio = w.widthRatio, ratio < PoseThresholds.squatMinWidthRatio { return .distanceChanged }
         if let thigh = w.thighShortAtPeak, thigh < PoseThresholds.squatThighMinRatio * w.peakDescent { return .kneesStraight }
+        if let shin = w.shinOverThigh, shin < PoseThresholds.squatShinOverThighMin { return .kneesStraight }
         if let torso = w.torsoShortAtPeak,
            torso > PoseThresholds.squatTorsoMaxFoldRatio * w.peakDescent + PoseThresholds.squatTorsoFoldSlack {
             return .torsoBend
@@ -816,14 +983,18 @@ nonisolated struct SquatVerifier: ActivityVerifier {
         rejections.append(rejection)
         switch rejection {
         case .phoneHandheld:
-            if !phoneHandheldReported {
-                phoneHandheldReported = true
-                record(Anomaly(kind: PoseAnomaly.phoneHandheld, severity: .hard, at: t,
+            // Un episodio aislado (lo acomodó, lo rozó) es soft; la 2ª rep con el teléfono en movimiento, hard.
+            phoneHandheldCount += 1
+            if phoneHandheldCount <= PoseThresholds.phoneHandheldHardAt {
+                let severity: Anomaly.Severity = phoneHandheldCount == PoseThresholds.phoneHandheldHardAt ? .hard : .soft
+                record(Anomaly(kind: PoseAnomaly.phoneHandheld, severity: severity, at: t,
                                detail: "El teléfono se movió mientras contaba: debía estar apoyado"), &events)
             }
             events.append(.cue(Cue(text: PoseCopy.leavePhone, symbol: "iphone")))
         case .feetMoved:
             events.append(.cue(Cue(text: PoseCopy.stayInPlace, symbol: "figure.stand")))
+        case .distanceChanged:
+            events.append(.cue(Cue(text: PoseCopy.sameDistance, symbol: "arrow.left.and.right")))
         case .kneesStraight:
             events.append(.cue(Cue(text: PoseCopy.bendKnees, symbol: "figure.cross.training")))
         case .torsoBend:
@@ -934,6 +1105,7 @@ nonisolated enum SupportedSquatFixtures {
             func joint(_ px: Double, _ py: Double) -> JointPoint {
                 JointPoint(x: px + rng.symmetric(0.002), y: py + rng.symmetric(0.002), confidence: 0.9)
             }
+            // Sentadilla de frente: la rodilla baja ≈ 0,3 de lo que baja la cadera (la canilla casi no se acorta).
             let knee = S.kneeHalfWidth + d * 0.3
             let joints: [JointKey: JointPoint] = [
                 .nose: joint(cx, S.noseY - d), .neck: joint(cx, S.neckY - d),
@@ -941,7 +1113,7 @@ nonisolated enum SupportedSquatFixtures {
                 .rightShoulder: joint(cx + S.shoulderHalfWidth, S.shoulderY - d),
                 .root: joint(cx, S.hipY - d), .leftHip: joint(cx - S.hipHalfWidth, S.hipY - d),
                 .rightHip: joint(cx + S.hipHalfWidth, S.hipY - d),
-                .leftKnee: joint(cx - knee, S.kneeY - d * 0.45), .rightKnee: joint(cx + knee, S.kneeY - d * 0.45),
+                .leftKnee: joint(cx - knee, S.kneeY - d * 0.3), .rightKnee: joint(cx + knee, S.kneeY - d * 0.3),
                 .leftAnkle: joint(cx - S.ankleHalfWidth, S.ankleY), .rightAnkle: joint(cx + S.ankleHalfWidth, S.ankleY),
             ]
             out.append(.pose(PoseSample(t: t, joints: joints, fps: poseFps)))
