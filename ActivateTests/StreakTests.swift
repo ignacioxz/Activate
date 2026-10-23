@@ -224,16 +224,48 @@ struct StreakTests {
         #expect(r.totalXP == 34)
         #expect(!r.newBadges.contains(.rajoCompleto))
 
-        // Sesión sospechosa: no suma, no cuenta, no rompe.
-        let s = game.record(session(at: date(13), store: store, level: .suspicious))
-        #expect(s.totalXP == 0 && !s.counted && s.lines.isEmpty)
+        // Sesión sospechosa (integridad dura): el coordinador no la cuenta. No suma racha ni la rompe,
+        // pero las actividades que sí se verificaron dan su XP (sin bono de primera pausa).
+        let s = game.record(session(at: date(13), store: store, counted: false, level: .suspicious))
+        #expect(!s.counted)
+        #expect(s.lines.map(\.xp) == [12, 12])
+        #expect(s.totalXP == 24)
         #expect(store.data.workDays["2026-10-13"]?.countedPauses == 0)
         #expect(game.streak(at: date(13)) == 1)
 
-        // Simulada: fuera de todo.
-        let sim = game.record(session(at: date(13), store: store, level: .full, simulated: true))
-        #expect(sim.totalXP == 0 && !sim.counted)
-        #expect(store.data.profile.xp == 34)
+        // Sesión con nivel `suspicious` por una actividad, pero contada por el coordinador (≥ 1 `full`):
+        // cuenta (y como ayer hubo pausa, es Doblete); la actividad sospechosa da 0.
+        let mixed = game.record(session(at: date(13, hour: 18), store: store,
+                                        activities: [result(.cuello), result(.ojos, level: .suspicious)],
+                                        counted: true, level: .suspicious))
+        #expect(mixed.counted)
+        #expect(mixed.isDoblete)
+        #expect(mixed.lines.map(\.xp) == [12, 0, 10, 22])
+        #expect(store.data.workDays["2026-10-13"]?.countedPauses == 1)
+
+        // Simulada: fuera de todo, aunque venga marcada como contada.
+        let xpBefore = store.data.profile.xp
+        let sim = game.record(session(at: date(14), store: store, level: .full, simulated: true))
+        #expect(sim.totalXP == 0 && !sim.counted && sim.lines.isEmpty)
+        #expect(store.data.workDays["2026-10-14"]?.countedPauses ?? 0 == 0)
+        #expect(store.data.profile.xp == xpBefore)
+        #expect(store.data.profile.xp == 34 + 24 + 44)
+    }
+
+    @Test func noReescribeElCountedFirmado() {
+        let (store, game) = makeGame()
+        // `counted` queda bajo la firma: GameStore lo usa tal cual y no lo recalcula con otra regla.
+        let contada = session(at: date(12), store: store, counted: true, level: .suspicious)
+        game.record(contada)
+        #expect(store.data.sessions.first { $0.id == contada.id }?.counted == true)
+        #expect(store.data.workDays["2026-10-12"]?.countedPauses == 1)
+
+        let noContada = session(at: date(13), store: store, counted: false, level: .full)
+        let r = game.record(noContada)
+        #expect(!r.counted)
+        #expect(store.data.sessions.first { $0.id == noContada.id }?.counted == false)
+        #expect(store.data.workDays["2026-10-13"]?.countedPauses == 0)
+        #expect(!r.isDoblete)
     }
 
     // MARK: Tiro limpio e insignias
@@ -266,7 +298,11 @@ struct StreakTests {
         let full = Recipes.base(.campamento5, demo: false).activities.map { a -> ActivityResult in
             result(a.kind, level: a.kind.weakByNature ? .reduced : .full, steps: a.kind == .pasos ? 1_300 : nil)
         }
-        let rajo = game.record(session(at: date(17), store: store, recipe: .campamento5, activities: full))
+        // Un campamento recortado (todo verificado, pero sin la receta completa) no basta.
+        let recortado = game.record(session(at: date(17), store: store, recipe: .campamento5,
+                                            activities: [result(.cuello), result(.ojos)]))
+        #expect(!recortado.newBadges.contains(.rajoCompleto))
+        let rajo = game.record(session(at: date(17, hour: 21), store: store, recipe: .campamento5, activities: full))
         #expect(rajo.newBadges.contains(.rajoCompleto))
         #expect(!rajo.newBadges.contains(.caminanteDelRajo))
 
@@ -274,6 +310,10 @@ struct StreakTests {
         let sospechoso = game.record(session(at: date(18), store: store, recipe: .colacion3,
                                              activities: [result(.pasos, level: .suspicious, steps: 5_000), result(.cuello)]))
         #expect(!sospechoso.newBadges.contains(.caminanteDelRajo))
+        // Los pasos se miden por actividad: una sesión `suspicious` no borra pasos `full` (ni los simulados suman).
+        let simulada = game.record(session(at: date(18, hour: 12), store: store, recipe: .colacion3,
+                                           activities: [result(.pasos, steps: 5_000)], simulated: true))
+        #expect(!simulada.newBadges.contains(.caminanteDelRajo))
         let caminante = game.record(session(at: date(18, hour: 21), store: store, recipe: .colacion3,
                                             activities: [result(.pasos, steps: 1_200), result(.cuello)]))
         #expect(caminante.newBadges.contains(.caminanteDelRajo))

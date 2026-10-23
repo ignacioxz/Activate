@@ -7,10 +7,13 @@ import UniformTypeIdentifiers
 // Escalera sobria por hito (`CelebrationMilestone`):
 //   notVerified → "Pausa terminada" + "No pude verificarla. Repita cuando pueda." (sin castigo)
 //   day1 / pauseDone → "Pausa cumplida" · Día N de 7 con la casilla llenándose · XP compacto
-//   doblete → "Doblete" grande: confeti + háptica + símbolo con bounce / drawOn
+//   doblete → "Doblete" grande: confeti + háptica AHAP fuerte + símbolo con bounce / drawOn
 //   tiroLimpio → "Tiro limpio" + tarjeta para la familia (ImageRenderer → PNG + ShareLink)
 // Vidrio solo en el símbolo de celebración, las insignias nuevas y el CTA (un GlassEffectContainer).
 // Respeta Reduce Motion (sin confeti, sin bounce, transiciones de opacidad, vidrio `.materialize`) y modo exterior.
+// Háptica: una sola por celebración. Pausa contada normal = `.success` (sensoryFeedback);
+// Doblete / Tiro limpio = patrón AHAP fuerte de `Haptics.shared.celebrate(strong: true)` en el hito.
+// Acento azul (`Theme.accent`) en el botón y las casillas; el cobre queda para la llama.
 
 struct CelebrationView: View {
     let reward: SessionReward
@@ -57,6 +60,11 @@ struct CelebrationView: View {
                         FactRow(systemImage: postSymbol, text: line, note: CelebrationCopy.postNote(post), tint: Theme.sky)
                     }
                     verificationRow
+                    if comodinUsedYesterday {
+                        FactRow(systemImage: StreakChips.comodinSymbol,
+                                text: CelebrationCopy.comodinUsedYesterdayLine,
+                                tint: Theme.accent)
+                    }
                     xpCard
                     if !reward.newBadges.isEmpty && badgesShown {
                         badgesBlock
@@ -65,7 +73,7 @@ struct CelebrationView: View {
                     if milestone == .tiroLimpio {
                         familyCardBlock
                     }
-                    PrimaryButton(title: CelebrationCopy.closeAction, systemImage: "checkmark") { onClose() }
+                    PrimaryButton(title: CelebrationCopy.closeAction, systemImage: "checkmark", tint: Theme.accent) { onClose() }
                         .padding(.top, 8)
                 }
                 .padding(.horizontal, 20)
@@ -84,6 +92,7 @@ struct CelebrationView: View {
         }
         .sensoryFeedback(.success, trigger: hapticTick) { _, new in new > 0 }
         .onAppear(perform: runLadder)
+        .onDisappear { Haptics.shared.release() }
         .task(id: milestone) {
             guard milestone == .tiroLimpio else { return }
             familyCard = renderFamilyCard()
@@ -93,6 +102,10 @@ struct CelebrationView: View {
 
     // MARK: - Escalera
 
+    /// Una sola háptica por celebración: el hito fuerte (Doblete / Tiro limpio) usa el patrón AHAP
+    /// y no dispara además el `.success`; la pausa contada normal usa solo el `.success`.
+    private var usesStrongHaptic: Bool { CelebrationHaptic.isStrong(milestone) }
+
     private func runLadder() {
         if reduceMotion {
             heroShown = true
@@ -100,14 +113,18 @@ struct CelebrationView: View {
             todayFilled = reward.counted
             xpShown = reward.totalXP
             badgesShown = true
-            if reward.counted { hapticTick += 1 }
+            if usesStrongHaptic {
+                Haptics.shared.celebrate(strong: true)
+            } else if reward.counted {
+                hapticTick += 1
+            }
             return
         }
         dayShown = max(1, reward.dayInBlock - 1)
         schedule(Timing.hero) {
             withAnimation(.spring(duration: 0.5, bounce: 0.3)) { heroShown = true }
             bounceTick += 1
-            if reward.counted { hapticTick += 1 }
+            if reward.counted && !usesStrongHaptic { hapticTick += 1 }
         }
         schedule(Timing.day) {
             withAnimation(.spring(duration: 0.6, bounce: 0.25)) {
@@ -122,7 +139,7 @@ struct CelebrationView: View {
             schedule(Timing.milestone) {
                 confettiShown = true
                 bounceTick += 1
-                hapticTick += 1
+                if usesStrongHaptic { Haptics.shared.celebrate(strong: true) }
             }
         }
         schedule(Timing.badges) {
@@ -194,6 +211,12 @@ struct CelebrationView: View {
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
+    }
+
+    /// Ayer (día de turno) la racha la cuidó el comodín.
+    private var comodinUsedYesterday: Bool {
+        guard let store else { return false }
+        return StreakEngine.usedCascoYesterday(days: store.data.workDays, calendar: store.calendar, at: .now)
     }
 
     private var subtitle: String {
@@ -379,7 +402,7 @@ private struct FactRow: View {
     let systemImage: String
     let text: String
     var note: String? = nil
-    var tint: Color = Theme.copper
+    var tint: Color = Theme.accent
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -405,8 +428,19 @@ private struct FactRow: View {
     }
 }
 
+// MARK: - Háptica del hito
+
+/// Qué háptica corresponde a cada hito (lógica pura, testeable).
+nonisolated enum CelebrationHaptic {
+    /// Doblete y Tiro limpio usan el patrón AHAP fuerte (`Haptics.celebrate(strong: true)`).
+    static func isStrong(_ milestone: CelebrationMilestone) -> Bool {
+        milestone == .doblete || milestone == .tiroLimpio
+    }
+}
+
 // MARK: - Casillas del turno
 
+/// `casco` = día cubierto por el comodín (nombre interno).
 nonisolated enum TurnoBoxState: Sendable, Hashable { case pending, done, casco }
 
 /// Tira de casillas del turno (7 en 7×7). La del día se llena con animación.
@@ -428,13 +462,13 @@ private struct TurnoBoxStrip: View {
             RoundedRectangle(cornerRadius: 10)
                 .fill(fill(for: state))
             RoundedRectangle(cornerRadius: 10)
-                .stroke(isToday ? Theme.copper : Color.primary.opacity(0.15), lineWidth: isToday ? 2.5 : 1)
+                .stroke(isToday ? Theme.accent : Color.primary.opacity(0.15), lineWidth: isToday ? 2.5 : 1)
             Group {
                 switch state {
                 case .done:
                     Image(systemName: "checkmark").font(.headline.weight(.heavy)).foregroundStyle(.white)
                 case .casco:
-                    Image(systemName: "shield.fill").font(.subheadline.weight(.bold)).foregroundStyle(Theme.sky)
+                    Image(systemName: StreakChips.comodinSymbol).font(.subheadline.weight(.bold)).foregroundStyle(Theme.accent)
                 case .pending:
                     Text("\(number)").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 }
@@ -448,8 +482,8 @@ private struct TurnoBoxStrip: View {
 
     private func fill(for state: TurnoBoxState) -> Color {
         switch state {
-        case .done: Theme.copper
-        case .casco: Theme.sky.opacity(0.18)
+        case .done: Theme.accent
+        case .casco: Theme.accent.opacity(0.15)
         case .pending: Color.primary.opacity(0.05)
         }
     }
@@ -483,7 +517,7 @@ struct FamilyCardView: View {
                 Text("ACTIVATE")
                     .font(.caption.weight(.heavy))
                     .tracking(3)
-                    .foregroundStyle(Theme.copper)
+                    .foregroundStyle(Theme.sky)
                 BadgeView(badge: .tiroLimpio, style: .flat, size: 120, showsTitle: false)
                 VStack(spacing: 6) {
                     Text(CelebrationCopy.familyCardHeadline)

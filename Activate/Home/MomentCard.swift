@@ -1,6 +1,8 @@
 import SwiftUI
 
 /// Tarjeta única de Hoy: el momento inferido, sus minutos, qué incluye y el CTA "Hacer la pausa".
+/// Jerarquía sobria: título del momento, una línea de detalle, el estado de hoy y un solo botón
+/// del sistema de diseño con el acento azul (el cobre queda solo para la llama de la racha).
 struct MomentCard: View {
     let moment: Moment
     let recipe: Recipe
@@ -9,31 +11,43 @@ struct MomentCard: View {
     let onStart: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Label(moment.title, systemImage: Self.symbol(for: moment))
-                    .font(.title2.weight(.bold))
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label {
+                    Text(moment.title)
+                } icon: {
+                    Image(systemName: Self.symbol(for: moment))
+                        .foregroundStyle(Theme.accent)
+                }
+                .font(.title3.weight(.bold))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
                 Text("\(moment.minutes) min")
-                    .font(.title2.weight(.heavy))
-                    .foregroundStyle(Theme.copper)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
                     .accessibilityLabel("\(moment.minutes) minutos")
             }
 
             Text(Self.includesLine(for: recipe))
-                .font(.body)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text(status)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(pausedToday ? Theme.mint : .primary)
-                .fixedSize(horizontal: false, vertical: true)
+            // El verde va solo en el símbolo: el texto queda en `.primary` para leerse al sol.
+            Label {
+                Text(status)
+            } icon: {
+                Image(systemName: pausedToday ? "checkmark.circle.fill" : "circle.dashed")
+                    .foregroundStyle(pausedToday ? Theme.mint : .secondary)
+            }
+            .font(.subheadline.weight(.semibold))
+            .fixedSize(horizontal: false, vertical: true)
 
-            PrimaryButton(title: "Hacer la pausa", systemImage: "play.fill", action: onStart)
+            PrimaryButton(title: "Hacer la pausa", systemImage: "play.fill", tint: Theme.accent, action: onStart)
+                .padding(.top, 4)
                 .accessibilityHint("\(moment.title), \(moment.minutes) minutos")
         }
         .flatCard()
@@ -56,7 +70,7 @@ struct MomentCard: View {
         }
     }
 
-    /// Una línea con lo que incluye la receta: "Incluye: Cuello · Ojos".
+    /// Una línea con lo que incluye la receta: "Incluye: Cuello · Pestañeo".
     nonisolated static func includesLine(for recipe: Recipe) -> String {
         let names = recipe.activities.map { shortName($0.kind) }
         guard !names.isEmpty else { return "Incluye: lo que alcance." }
@@ -71,7 +85,7 @@ struct MomentCard: View {
         case .sentadilla: "Sentadillas"
         case .cuello: "Cuello"
         case .respiracion: "Respiración"
-        case .ojos: "Ojos"
+        case .ojos: "Pestañeo"
         case .stroop: "Reflejos"
         }
     }

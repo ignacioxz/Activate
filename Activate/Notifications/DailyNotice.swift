@@ -79,10 +79,16 @@ enum DailyNotice {
         "Día \(dayInBlock) está a 5 minutos."
     }
 
+    /// La demo silencia los avisos solo mientras está activa: `notificationsMuted` vale `true`
+    /// por defecto y, sin demo, no debe bloquear el aviso real.
+    nonisolated static func isMutedByDemo(_ demo: DemoConfig) -> Bool {
+        demo.enabled && demo.notificationsMuted
+    }
+
     /// Avisos a programar: uno por día laboral de turno en los próximos `lookaheadDays`,
-    /// solo si hay opt-in, la demo no los silencia, el instante es futuro y el día no tiene pausa contada.
+    /// solo si hay opt-in, la demo (activa) no los silencia, el instante es futuro y el día no tiene pausa contada.
     nonisolated static func plan(profile: PlayerProfile, data: SaveData, now: Date, calendar: WorkCalendar) -> [Notice] {
-        guard profile.notificationsOptIn, !data.demo.notificationsMuted else { return [] }
+        guard profile.notificationsOptIn, !isMutedByDemo(data.demo) else { return [] }
         var seen: Set<String> = []
         var notices: [Notice] = []
         for offset in 0..<lookaheadDays {

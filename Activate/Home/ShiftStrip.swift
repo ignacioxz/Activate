@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Tira del turno actual: una casilla por día laboral del bloque (7 en el 7×7).
-/// Con pausa contada = cobre lleno · casco usado = gris · hoy = borde · futuro = vacío.
-/// En bajada muestra el turno recién terminado con "Bajada: racha a salvo".
+/// Con pausa contada = acento lleno · comodín usado (`casco` en los datos) = escudo · hoy = borde ·
+/// futuro = punteado. En bajada muestra el turno recién terminado con "Bajada: racha a salvo".
 struct ShiftStrip: View {
     @Environment(AppStore.self) private var store
     @Environment(GameStore.self) private var game
@@ -18,9 +18,9 @@ struct ShiftStrip: View {
         var id: String { workDayKey }
     }
 
-    private static let boxHeight: CGFloat = 44
-    private static let boxRadius: CGFloat = 10
-    private static let todayStroke: CGFloat = 3
+    private static let boxHeight: CGFloat = 34
+    private static let boxRadius: CGFloat = 9
+    private static let todayStroke: CGFloat = 2.5
 
     var body: some View {
         let now = Date.now
@@ -31,35 +31,37 @@ struct ShiftStrip: View {
                                      dayInBlock: calendar.dayInBlock(for: now),
                                      workDays: calendar.roster.workDays,
                                      pausedToday: game.pausedToday,
-                                     allPaused: boxes.allSatisfy { $0.fill == .pausa })
+                                     allPaused: boxes.allSatisfy { $0.fill == .pausa },
+                                     dobleteAvailable: game.dobleteAvailable,
+                                     tiroLimpioAvailable: Self.tiroLimpioAvailable(boxes: boxes))
         let note = Self.note(data: store.data, calendar: calendar, now: now)
 
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             Text(headline)
-                .font(.headline)
+                .font(.subheadline.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ForEach(boxes) { box in
                     boxView(box)
                 }
             }
             if let note {
-                Text(note)
-                    .font(.subheadline)
+                Label(note, systemImage: StreakChips.comodinSymbol)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .flatCard()
+        .flatCard(padding: 16)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(headline)
     }
 
     private func boxView(_ box: DayBox) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             Text("D\(box.day)")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(box.isToday ? Theme.copper : .secondary)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(box.isToday ? Theme.accent : .secondary)
             RoundedRectangle(cornerRadius: Self.boxRadius)
                 .fill(fillColor(box.fill))
                 .frame(height: Self.boxHeight)
@@ -72,14 +74,14 @@ struct ShiftStrip: View {
                 .overlay {
                     if let symbol = symbol(box.fill) {
                         Image(systemName: symbol)
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(.white)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(box.fill == .pausa ? Color.white : Theme.accent)
                     }
                 }
                 .overlay {
                     if box.isToday {
                         RoundedRectangle(cornerRadius: Self.boxRadius)
-                            .strokeBorder(Theme.copper, lineWidth: Self.todayStroke)
+                            .strokeBorder(Theme.accent, lineWidth: Self.todayStroke)
                     }
                 }
         }
@@ -90,8 +92,8 @@ struct ShiftStrip: View {
 
     private func fillColor(_ fill: Fill) -> Color {
         switch fill {
-        case .pausa: Theme.copper
-        case .casco: Color.gray.opacity(0.5)
+        case .pausa: Theme.accent
+        case .casco: Theme.accent.opacity(0.15)
         case .vacio: Color.primary.opacity(0.07)
         case .futuro: Color.clear
         }
@@ -100,7 +102,7 @@ struct ShiftStrip: View {
     private func symbol(_ fill: Fill) -> String? {
         switch fill {
         case .pausa: "checkmark"
-        case .casco: "helmet.fill"
+        case .casco: StreakChips.comodinSymbol
         case .vacio, .futuro: nil
         }
     }
@@ -129,24 +131,36 @@ struct ShiftStrip: View {
     }
 
     /// "Turno · día N de 7 · Vamos por el Doblete" y variantes del día 1, del último día y de la bajada.
-    nonisolated static func headline(kind: DayKind, dayInBlock: Int, workDays: Int, pausedToday: Bool, allPaused: Bool) -> String {
+    /// Solo promete un hito que todavía se puede lograr hoy: el Doblete si ayer hubo pausa
+    /// (`dobleteAvailable`) y el Tiro limpio si todos los días anteriores del turno la tuvieron.
+    nonisolated static func headline(kind: DayKind, dayInBlock: Int, workDays: Int, pausedToday: Bool, allPaused: Bool,
+                                     dobleteAvailable: Bool, tiroLimpioAvailable: Bool) -> String {
         guard kind == .turno else { return "Bajada: racha a salvo" }
         let prefix = "Turno · día \(dayInBlock) de \(workDays)"
         if dayInBlock <= 1 {
             return "\(prefix) · Mañana: día 2, Doblete"
         }
         if dayInBlock >= workDays {
-            return allPaused ? "\(prefix) · Tiro limpio" : "\(prefix) · Vamos por el Tiro limpio"
+            if allPaused { return "\(prefix) · Tiro limpio" }
+            if tiroLimpioAvailable { return "\(prefix) · Vamos por el Tiro limpio" }
         }
-        return pausedToday ? "\(prefix) · Día \(dayInBlock) cumplido" : "\(prefix) · Vamos por el Doblete"
+        if pausedToday { return "\(prefix) · Día \(dayInBlock) cumplido" }
+        if dobleteAvailable { return "\(prefix) · Vamos por el Doblete" }
+        return prefix
     }
 
-    /// Nota corta bajo la tira: casco automático de ayer.
+    /// Hoy sin pausa todavía y todos los días anteriores del turno con pausa contada.
+    nonisolated static func tiroLimpioAvailable(boxes: [DayBox]) -> Bool {
+        guard let todayIndex = boxes.firstIndex(where: \.isToday), boxes[todayIndex].fill != .pausa else { return false }
+        return boxes[..<todayIndex].allSatisfy { $0.fill == .pausa }
+    }
+
+    /// Nota corta bajo la tira: comodín automático de ayer.
     nonisolated static func note(data: SaveData, calendar: WorkCalendar, now: Date) -> String? {
         guard calendar.kind(for: now) == .turno else { return nil }
         let yesterdayKey = calendar.key(for: calendar.previousWorkDay(of: now))
         if data.workDays[yesterdayKey]?.cascoUsed == true {
-            return "Ayer usó el casco. Racha a salvo."
+            return CelebrationCopy.comodinUsedYesterdayLine
         }
         return nil
     }
@@ -155,7 +169,7 @@ struct ShiftStrip: View {
         let state: String
         switch box.fill {
         case .pausa: state = "pausa cumplida"
-        case .casco: state = "casco usado"
+        case .casco: state = "comodín usado, racha a salvo"
         case .vacio: state = box.isToday ? "hoy, aún sin pausa" : "sin pausa"
         case .futuro: state = "pendiente"
         }

@@ -2,7 +2,8 @@ import Testing
 import Foundation
 @testable import Activate
 
-/// Lógica pura del paquete Home: avisos diarios, tira del turno, tarjeta del momento y registro de dolor.
+/// Lógica pura del paquete Home: avisos diarios, tira del turno, tarjeta del momento, comodín,
+/// consentimiento antes de la pausa y escenarios de QA.
 struct HomeTests {
     private static let santiago: Calendar = {
         var c = Calendar(identifier: .gregorian)
@@ -26,8 +27,10 @@ struct HomeTests {
         Self.santiago.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute))!
     }
 
-    private func data(_ p: PlayerProfile, muted: Bool = false) -> SaveData {
+    /// Por defecto, igual que una instalación nueva: demo apagada y `notificationsMuted` en su valor por defecto (`true`).
+    private func data(_ p: PlayerProfile, demo: Bool = false, muted: Bool = DemoConfig().notificationsMuted) -> SaveData {
         var d = SaveData(profile: p)
+        d.demo.enabled = demo
         d.demo.notificationsMuted = muted
         return d
     }
@@ -52,8 +55,20 @@ struct HomeTests {
 
     @Test func demoSilenciadaNoHayAvisos() {
         let p = profile()
-        let notices = DailyNotice.plan(profile: p, data: data(p, muted: true), now: date(13, 10), calendar: calendar(p))
+        let notices = DailyNotice.plan(profile: p, data: data(p, demo: true, muted: true), now: date(13, 10), calendar: calendar(p))
         #expect(notices.isEmpty)
+    }
+
+    @Test func sinDemoElSilencioPorDefectoNoBloqueaElAviso() {
+        let p = profile()
+        // `DemoConfig.notificationsMuted` vale `true` por defecto: sin demo activa no debe silenciar nada.
+        #expect(DemoConfig().notificationsMuted)
+        #expect(!DailyNotice.isMutedByDemo(DemoConfig()))
+        let notices = DailyNotice.plan(profile: p, data: data(p, demo: false, muted: true), now: date(13, 10), calendar: calendar(p))
+        #expect(!notices.isEmpty)
+        // Demo activa pero sin silencio: avisa.
+        let conDemo = DailyNotice.plan(profile: p, data: data(p, demo: true, muted: false), now: date(13, 10), calendar: calendar(p))
+        #expect(!conDemo.isEmpty)
     }
 
     @Test func unAvisoPorDiaLaboralSoloEnTurno() {
@@ -127,21 +142,71 @@ struct HomeTests {
         #expect(boxes.allSatisfy { $0.fill == .vacio })
     }
 
-    @Test func titularesDeLaTira() {
-        #expect(ShiftStrip.headline(kind: .descanso, dayInBlock: 3, workDays: 7, pausedToday: false, allPaused: false) == "Bajada: racha a salvo")
-        #expect(ShiftStrip.headline(kind: .turno, dayInBlock: 1, workDays: 7, pausedToday: true, allPaused: false) == "Turno · día 1 de 7 · Mañana: día 2, Doblete")
-        #expect(ShiftStrip.headline(kind: .turno, dayInBlock: 2, workDays: 7, pausedToday: false, allPaused: false) == "Turno · día 2 de 7 · Vamos por el Doblete")
-        #expect(ShiftStrip.headline(kind: .turno, dayInBlock: 2, workDays: 7, pausedToday: true, allPaused: false) == "Turno · día 2 de 7 · Día 2 cumplido")
-        #expect(ShiftStrip.headline(kind: .turno, dayInBlock: 7, workDays: 7, pausedToday: false, allPaused: false) == "Turno · día 7 de 7 · Vamos por el Tiro limpio")
-        #expect(ShiftStrip.headline(kind: .turno, dayInBlock: 7, workDays: 7, pausedToday: true, allPaused: true) == "Turno · día 7 de 7 · Tiro limpio")
+    private func headline(kind: DayKind = .turno, day: Int, paused: Bool = false, allPaused: Bool = false,
+                          doblete: Bool = false, tiro: Bool = false) -> String {
+        ShiftStrip.headline(kind: kind, dayInBlock: day, workDays: 7, pausedToday: paused, allPaused: allPaused,
+                            dobleteAvailable: doblete, tiroLimpioAvailable: tiro)
     }
 
-    @Test func notaDelCascoDeAyer() {
+    @Test func titularesDeLaTira() {
+        #expect(headline(kind: .descanso, day: 3) == "Bajada: racha a salvo")
+        #expect(headline(day: 1, paused: true) == "Turno · día 1 de 7 · Mañana: día 2, Doblete")
+        #expect(headline(day: 2, doblete: true) == "Turno · día 2 de 7 · Vamos por el Doblete")
+        #expect(headline(day: 2, paused: true) == "Turno · día 2 de 7 · Día 2 cumplido")
+        #expect(headline(day: 7, doblete: true, tiro: true) == "Turno · día 7 de 7 · Vamos por el Tiro limpio")
+        #expect(headline(day: 7, paused: true, allPaused: true) == "Turno · día 7 de 7 · Tiro limpio")
+    }
+
+    @Test func sinPausaAyerNoPrometeElDoblete() {
+        // Ayer sin pausa: el Doblete ya no se puede lograr hoy, no se anuncia.
+        #expect(headline(day: 3, doblete: false) == "Turno · día 3 de 7")
+        #expect(!headline(day: 3, doblete: false).contains("Doblete"))
+        // Último día con un día sin pausa antes: no hay Tiro limpio posible; si ayer hubo pausa, va por el Doblete.
+        #expect(headline(day: 7, doblete: true, tiro: false) == "Turno · día 7 de 7 · Vamos por el Doblete")
+        #expect(headline(day: 7, paused: true, allPaused: false) == "Turno · día 7 de 7 · Día 7 cumplido")
+    }
+
+    @Test func tiroLimpioDisponibleSegunLasCasillas() {
+        let p = profile()
+        var d = data(p)
+        for day in 12...17 {
+            let key = "2026-10-\(day)"
+            d.workDays[key] = WorkDay(key: key, kind: .turno, dayInBlock: day - 11, turnoKey: "2026-10-12", countedPauses: 1)
+        }
+        let dia7 = ShiftStrip.boxes(data: d, calendar: calendar(p), now: date(18, 10))
+        #expect(ShiftStrip.tiroLimpioAvailable(boxes: dia7))
+        // Con el día 3 cubierto por el comodín (sin pausa) ya no hay Tiro limpio posible.
+        d.workDays["2026-10-14"]?.countedPauses = 0
+        d.workDays["2026-10-14"]?.cascoUsed = true
+        let conComodin = ShiftStrip.boxes(data: d, calendar: calendar(p), now: date(18, 10))
+        #expect(!ShiftStrip.tiroLimpioAvailable(boxes: conComodin))
+    }
+
+    @Test func notaDelComodinDeAyer() {
         let p = profile()
         var d = data(p)
         d.workDays["2026-10-13"] = WorkDay(key: "2026-10-13", kind: .turno, dayInBlock: 2, turnoKey: "2026-10-12", cascoUsed: true)
-        #expect(ShiftStrip.note(data: d, calendar: calendar(p), now: date(14, 10)) == "Ayer usó el casco. Racha a salvo.")
+        #expect(ShiftStrip.note(data: d, calendar: calendar(p), now: date(14, 10)) == "Ayer se usó su comodín: racha a salvo.")
         #expect(ShiftStrip.note(data: d, calendar: calendar(p), now: date(15, 10)) == nil)
+        let box = ShiftStrip.DayBox(day: 2, workDayKey: "2026-10-13", fill: .casco, isToday: false)
+        #expect(ShiftStrip.spoken(box) == "Día 2: comodín usado, racha a salvo")
+    }
+
+    @Test func elComodinNoSeLlamaCascoEnPantalla() {
+        let visibles = [
+            CelebrationCopy.comodinName,
+            CelebrationCopy.comodinExplanation,
+            CelebrationCopy.comodinUsedYesterdayLine,
+            CelebrationCopy.comodinStatus(available: 1),
+            CelebrationCopy.comodinStatus(available: 0),
+            ShiftStrip.spoken(ShiftStrip.DayBox(day: 2, workDayKey: "k", fill: .casco, isToday: false)),
+        ]
+        for text in visibles {
+            #expect(!text.lowercased().contains("casco"), "Texto visible con \"casco\": \(text)")
+            #expect(!CelebrationCopy.containsBannedFragment(text), "Texto prohibido: \(text)")
+        }
+        #expect(CelebrationCopy.comodinExplanation
+                == "Si un día de turno no alcanza a hacer la pausa, el comodín cuida su racha. Tiene 1 por turno y se usa solo.")
     }
 
     // MARK: - MomentCard
@@ -151,22 +216,44 @@ struct HomeTests {
             ActivityAssignment(kind: .cuello, target: 15),
             ActivityAssignment(kind: .ojos, target: 15),
         ])
-        #expect(MomentCard.includesLine(for: recipe) == "Incluye: Cuello · Ojos")
+        #expect(MomentCard.includesLine(for: recipe) == "Incluye: Cuello · Pestañeo")
+        #expect(MomentCard.shortName(.ojos) == "Pestañeo")
     }
 
-    // MARK: - PainNowSheet
+    // MARK: - Consentimiento antes de la pausa
 
-    @Test func registroMeDueleAhora() {
-        let p = profile(shift: .night)
-        let now = date(14, 1)
-        let entry = PainNowSheet.entry(now: now, profile: p, zone: .cuello, context: .alBajar, calendar: calendar(p))
-        #expect(entry.source == .meDueleAhora)
-        #expect(entry.answers.isEmpty)
-        #expect(entry.score == 0)
-        #expect(entry.workDayKey == "2026-10-13")
-        #expect(entry.turnoKey == "2026-10-12")
-        #expect(entry.zone == .cuello)
-        #expect(entry.context == .alBajar)
-        #expect(entry.moment == .colacion)
+    @Test func sinConsentimientoLaPausaPideConsentimiento() {
+        var p = profile()
+        p.consentGiven = false
+        #expect(HomeView.needsConsent(p))
+        p.consentGiven = true
+        #expect(!HomeView.needsConsent(p))
+    }
+
+    // MARK: - Escenarios de QA
+
+    @Test @MainActor func escenariosDeQA() {
+        let now = date(14, 10)
+        let demo = HomeQA.data(arguments: [HomeQA.demo], now: now, calendar: Self.santiago)
+        #expect(demo.profile.onboardingDone)
+        #expect(demo.profile.consentGiven)
+
+        let comodin = HomeQA.data(arguments: [HomeQA.comodinAyer], now: now, calendar: Self.santiago)
+        let wc = WorkCalendar(profile: comodin.profile, calendar: Self.santiago)
+        #expect(wc.dayInBlock(for: now) == 3)
+        #expect(ShiftStrip.note(data: comodin, calendar: wc, now: now) == CelebrationCopy.comodinUsedYesterdayLine)
+        #expect(ShiftStrip.boxes(data: comodin, calendar: wc, now: now).prefix(3).map(\.fill) == [.pausa, .casco, .vacio])
+        #expect(comodin.profile.cascos == 0)
+
+        let pausa = HomeQA.data(arguments: [HomeQA.pausaHoy], now: now, calendar: Self.santiago)
+        let wcPausa = WorkCalendar(profile: pausa.profile, calendar: Self.santiago)
+        #expect((pausa.workDays[wcPausa.key(for: now)]?.countedPauses ?? 0) >= 1)
+
+        let sinConsentimiento = HomeQA.data(arguments: [HomeQA.sinConsentimiento], now: now, calendar: Self.santiago)
+        #expect(HomeView.needsConsent(sinConsentimiento.profile))
+
+        let store = AppStore(inMemory: true)
+        #expect(!HomeQA.apply(arguments: ["Activate"], to: store, now: now))
+        #expect(!store.profile.onboardingDone)
     }
 }

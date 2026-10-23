@@ -171,7 +171,21 @@ nonisolated enum CelebrationCopy {
     static let familyCardSubline = "7 de 7 días con pausa"
     static let familyCardFooter = "Pausas verificadas con sensores · Activate"
 
-    static let closeAction = "LISTO"
+    static let closeAction = "Listo"
+
+    // MARK: - Comodín (internamente "casco")
+
+    /// Nombre visible del comodín que protege la racha (1 por turno, se usa solo).
+    static let comodinName = "Comodín"
+    /// Explicación corta del comodín (chip de Hoy).
+    static let comodinExplanation = "Si un día de turno no alcanza a hacer la pausa, el comodín cuida su racha. Tiene 1 por turno y se usa solo."
+    /// Aviso cuando ayer se usó el comodín (tira del turno y celebración). Es un dato, no una frase del pool.
+    static let comodinUsedYesterdayLine = "Ayer se usó su comodín: racha a salvo."
+
+    /// Estado del comodín bajo la explicación.
+    nonisolated static func comodinStatus(available: Int) -> String {
+        available > 0 ? "Disponible en este turno." : "Ya se usó en este turno. Vuelve el día 1 del próximo."
+    }
 
     // MARK: - Utilidades de validación (tests)
 
