@@ -281,6 +281,122 @@ struct LevelProgressTests {
         #expect(!none.contains { $0.id == "nivel" })
     }
 
+    /// Historial de nivel 7 · 43 %: 6 días completos, uno con 1 de 7 y otro con 2 de 7 (1 + 6 + 3/7).
+    private var nivelSiete: [PauseSession] {
+        (12...17).map { pause(day: $0, done: 7) } + [pause(day: 18, done: 1), pause(day: 26, done: 2)]
+    }
+
+    @Test func elModeloNoPuedeDarOtroNivelEnUnHallazgo() throws {
+        let p = progress(nivelSiete, today: 26)
+        #expect(p.level == 7 && p.percentToNext == 43)
+        let nivel = try #require(KineFacts.nivel(p))
+        #expect(nivel.value == "Nivel 7 · 43\(pct)")
+        // El detalle trae otras cifras (el nivel siguiente, los días): no sirven de ancla para la frase.
+        #expect(nivel.detail.hasPrefix("Nivel 7 · 43\(pct) hacia el nivel 8: 6 días con pausa completa de 8 días con pausa."))
+        #expect(KineConsultRules.computedLevel(in: [nivel]) == KineConsultRules.ComputedLevel(level: 7))
+
+        // La frase del nivel va sin cifras (ni con letras): la cifra la pone el chip de la app.
+        for wrong in ["Está en el nivel 6.", "Está en el nivel ocho.", "Llegó al nivel 8 con su pausa.",
+                      "Está en el nivel 7.", "Está en el nivel uno.", "Llegó al séptimo nivel.",
+                      "Lleva seis días con la pausa completa."] {
+            #expect(KineConsultRules.cleanFinding(wrong, fact: nivel) == nil, "\(wrong)")
+        }
+        #expect(KineConsultRules.cleanFinding("Completa la pausa entera más de la mitad de los días.", fact: nivel) != nil)
+        #expect(KineConsultRules.cleanFinding("Sube un nivel cada día que completa la pausa.", fact: nivel) != nil)
+        // Otro hecho tampoco nombra un nivel con cifra.
+        let other = KineFact(id: KineFactID.adherencia.rawValue, title: "Pausas del turno", value: "6 de 8 días",
+                             detail: "Hizo la pausa 6 de 8 días del turno.", gist: "Hace la pausa casi todos los días.")
+        #expect(KineConsultRules.cleanFinding("Hizo la pausa 6 de 8 días.", fact: other) != nil)
+        #expect(KineConsultRules.cleanFinding("Está en el nivel 6 de pausas.", fact: other) == nil)
+
+        // Validada como salida del modelo: el hallazgo vuelve a la frase de plantilla (el resumen).
+        let d = data(nivelSiete)
+        let now = date(26, hour: 18)
+        let facts = KineFacts.build(data: d, summary: StatsEngine.summary(data: d, calendar: work, now: now), calendar: santiago)
+        let built = try #require(facts.first { $0.id == KineFactID.nivel.rawValue })
+        #expect(built.value == nivel.value)
+        let others = facts.filter { $0.id != KineFactID.nivel.rawValue && !$0.mustInclude }
+        try #require(others.count >= 2)
+        for wrong in ["Está en el nivel 6.", "Está en el nivel ocho."] {
+            let proposal = KineConsultRules.Proposal(
+                findings: [KineFinding(factID: "nivel", sentence: wrong),
+                           KineFinding(factID: others[0].id, sentence: others[0].gist),
+                           KineFinding(factID: others[1].id, sentence: others[1].gist)],
+                questions: ["¿Qué hago para no bajar el ritmo?", "¿Qué hago?", "¿Cómo sigo?"],
+                focus: "Completar la pausa más días.")
+            guard case .success(let consult) = KineConsultRules.validate(proposal, facts: facts, profile: d.profile) else {
+                Issue.record("La validación debía pasar con la frase de plantilla")
+                continue
+            }
+            let finding = try #require(consult.findings.first { $0.factID == "nivel" })
+            #expect(finding.sentence == KineConsultRules.templateSentence(built), "\(wrong)")
+            #expect(!finding.sentence.contains { $0.isNumber })
+        }
+    }
+
+    @Test func elModeloNoPuedeDarOtroNivelEnPreguntasNiFoco() throws {
+        let d = data(nivelSiete)
+        let now = date(26, hour: 18)
+        let facts = KineFacts.build(data: d, summary: StatsEngine.summary(data: d, calendar: work, now: now), calendar: santiago)
+        let nivel = try #require(facts.first { $0.id == KineFactID.nivel.rawValue })
+        let level = try #require(KineConsultRules.computedLevel(in: facts))
+        #expect(level.level == 7 && level.next == 8)
+        let corpus = KineConsultRules.groundingCorpus(facts, profile: d.profile)
+        func question(_ q: String) -> String? {
+            KineConsultRules.cleanQuestion(q, corpus: corpus, profile: d.profile, level: level)
+        }
+        // El 6 está en el corpus (los días con pausa completa), pero no es el nivel.
+        #expect(question("¿Por qué sigo en el nivel 6?") == nil)
+        #expect(question("¿Por qué sigo en el nivel seis?") == nil)
+        #expect(question("¿Cómo llego al nivel 9?") == nil)
+        #expect(question("¿Qué hago para seguir en el nivel 8?") == nil)  // el siguiente, solo "al"/"hacia el"
+        #expect(question("¿Me conviene subir dos niveles?") == nil)
+        #expect(question("¿Qué me falta para llegar al nivel 8?") == "¿Qué me falta para llegar al nivel 8?")
+        #expect(question("¿Qué hago para seguir en el nivel 7?") == "¿Qué hago para seguir en el nivel 7?")
+        #expect(question("¿Qué me sirve para subir de nivel?") == "¿Qué me sirve para subir de nivel?")
+        // Sin nivel calculado, ninguna cifra junto a "nivel".
+        #expect(KineConsultRules.cleanQuestion("¿Qué hago para seguir en el nivel 7?", corpus: corpus, profile: d.profile) == nil)
+
+        // En la validación completa: la pregunta y el foco inventados vuelven a los de plantilla.
+        let others = facts.filter { $0.id != KineFactID.nivel.rawValue && !$0.mustInclude }
+        try #require(others.count >= 2)
+        let proposal = KineConsultRules.Proposal(
+            findings: [KineFinding(factID: "nivel", sentence: nivel.gist),
+                       KineFinding(factID: others[0].id, sentence: others[0].gist),
+                       KineFinding(factID: others[1].id, sentence: others[1].gist)],
+            questions: ["¿Por qué sigo en el nivel 6?", "¿Qué hago?", "¿Cómo sigo?"],
+            focus: "Seguir en el nivel 6 completando la pausa.")
+        guard case .success(let consult) = KineConsultRules.validate(proposal, facts: facts, profile: d.profile) else {
+            Issue.record("La validación debía pasar con la pregunta y el foco de plantilla")
+            return
+        }
+        #expect(consult.findings.first?.factID == "nivel")
+        #expect(consult.questions.first == nivel.question)
+        #expect(!consult.questions.contains { $0.contains("nivel 6") })
+        #expect(consult.focus == nivel.focus)
+        let ok = KineConsultRules.Proposal(findings: proposal.findings, questions: proposal.questions,
+                                           focus: "Completar la pausa para pasar al nivel 8.")
+        if case .success(let k) = KineConsultRules.validate(ok, facts: facts, profile: d.profile) {
+            #expect(k.focus == "Completar la pausa para pasar al nivel 8.")
+        } else {
+            Issue.record("Un foco con el nivel siguiente bien dicho debía pasar")
+        }
+    }
+
+    @Test func lasCifrasJuntoANivelSeLeenConDigitosOLetras() {
+        typealias M = KineConsultRules.LevelMention
+        #expect(KineConsultRules.levelMentions(in: "Está en el nivel 6.") == [M(value: 6, towardNext: false)])
+        #expect(KineConsultRules.levelMentions(in: "Llegó al nivel ocho.") == [M(value: 8, towardNext: true)])
+        #expect(KineConsultRules.levelMentions(in: "Va hacia el nivel 8.") == [M(value: 8, towardNext: true)])
+        #expect(KineConsultRules.levelMentions(in: "Subió al séptimo nivel.") == [M(value: 7, towardNext: true)])
+        #expect(KineConsultRules.levelMentions(in: "Nivel 7º del turno") == [M(value: 7, towardNext: false)])
+        #expect(KineConsultRules.levelMentions(in: "nivel treinta y dos") == [M(value: 32, towardNext: false)])
+        #expect(KineConsultRules.levelMentions(in: "nivel ciento cinco") == [M(value: 105, towardNext: false)])
+        #expect(KineConsultRules.levelMentions(in: "Subió 2 niveles.") == [M(value: 2, towardNext: false)])
+        #expect(KineConsultRules.levelMentions(in: "Cada día con la pausa completa sube un nivel.").isEmpty)
+        #expect(KineConsultRules.levelMentions(in: "Sin cifras de nivel.").isEmpty)
+    }
+
     @Test func elNivelVaEnLaTablaDelReporte() {
         let sessions = [pause(day: 13, done: 7), pause(day: 14, done: 7), pause(day: 16, done: 5)]
         let d = data(sessions)
