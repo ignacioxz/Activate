@@ -1,7 +1,12 @@
 import Foundation
 import Observation
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
-// Dueño: agente "coach". Stub con firma congelada (devuelve la receta fija).
+// Dueño: agente "coach". Gate de disponibilidad + elección de backend + latencia + fallback.
+// Firma pública congelada: Availability, availability, backend, override, lastLatencyMs,
+// refreshAvailability(), prewarm(), plan(_:), statsReading(_:profile:), kineSheet(_:profile:).
 
 @Observable
 final class CoachService {
@@ -9,23 +14,136 @@ final class CoachService {
 
     private(set) var availability: Availability = .unknown
     private(set) var backend: CoachBackend = .rules
-    var override: CoachOverride = .auto
+    var override: CoachOverride = .auto {
+        didSet { backend = resolvedBackend() }
+    }
     private(set) var lastLatencyMs: Int?
+    /// Último motivo por el que se usó la plantilla con el modelo activo (nil = el modelo respondió).
+    private(set) var lastModelError: CoachModelError?
+    /// Backend que produjo la última respuesta (puede ser `.rules` aunque `backend` sea `.foundationModels`).
+    private(set) var lastAnsweredBy: CoachBackend?
+
+    @ObservationIgnored private let rules = RuleBasedCoach()
+    @ObservationIgnored private let models = FoundationModelsCoach()
+    #if canImport(FoundationModels)
+    @ObservationIgnored private var warmSession: LanguageModelSession?
+    #endif
+
+    /// Locales aceptados: es_CL primero; el modelo cae a es-419 si hace falta.
+    nonisolated static let acceptedLocales = ["es_CL", "es_419", "es"]
 
     init() {}
 
-    func refreshAvailability() {}
-    func prewarm() {}
+    // MARK: - Gate
+
+    func refreshAvailability() {
+        availability = Self.readAvailability()
+        backend = resolvedBackend()
+    }
+
+    nonisolated static func readAvailability() -> Availability {
+        #if canImport(FoundationModels)
+        let model = SystemLanguageModel.default
+        switch model.availability {
+        case .available:
+            let ok = acceptedLocales.contains { model.supportsLocale(Locale(identifier: $0)) }
+            return ok ? .available : .localeUnsupported
+        case .unavailable(let reason):
+            switch reason {
+            case .deviceNotEligible: return .deviceNotEligible
+            case .appleIntelligenceNotEnabled: return .notEnabled
+            case .modelNotReady: return .modelNotReady
+            @unknown default: return .unknown
+            }
+        }
+        #else
+        return .deviceNotEligible
+        #endif
+    }
+
+    /// `.rules` fuerza plantillas; `.ai` fuerza el modelo si el sistema lo tiene (aunque el locale no
+    /// sea es_CL: cae a es-419); `.auto` exige disponibilidad y locale.
+    private func resolvedBackend() -> CoachBackend {
+        switch override {
+        case .rules: return .rules
+        case .ai: return (availability == .available || availability == .localeUnsupported) ? .foundationModels : .rules
+        case .auto: return availability == .available ? .foundationModels : .rules
+        }
+    }
+
+    /// Texto corto para la tarjeta de Perfil.
+    var statusTitle: String {
+        switch availability {
+        case .available: backend == .foundationModels ? "Coach con Apple Intelligence" : "Coach con reglas"
+        case .deviceNotEligible: "Este iPhone no tiene Apple Intelligence"
+        case .notEnabled: "Apple Intelligence está apagado"
+        case .modelNotReady: "El modelo se está preparando"
+        case .localeUnsupported: "El modelo no habla español de Chile"
+        case .unknown: "Comprobando el coach"
+        }
+    }
+
+    /// Conviene mostrar la tarjeta "cómo activar Apple Intelligence".
+    var shouldSuggestEnabling: Bool { availability == .notEnabled }
+
+    // MARK: - Prewarm (al entrar al check-in)
+
+    func prewarm() {
+        #if canImport(FoundationModels)
+        guard backend == .foundationModels else { return }
+        let session = LanguageModelSession(instructions: CoachPrompts.instructions)
+        session.prewarm()
+        warmSession = session
+        #endif
+    }
+
+    // MARK: - Trabajos (siempre devuelven algo)
 
     func plan(_ input: CoachInput) async -> PausePlan {
-        PausePlan(activities: input.baseRecipe.activities, reasoning: "", why: "", startMessage: "Vamos.", backend: .rules)
+        let start = ContinuousClock.now
+        defer { record(start) }
+        if backend == .foundationModels {
+            let out = await models.planResult(input)
+            lastModelError = out.error
+            lastAnsweredBy = out.value.backend
+            return out.value
+        }
+        lastModelError = nil
+        lastAnsweredBy = .rules
+        return RuleBasedCoach.makePlan(input)
     }
 
     func statsReading(_ summary: StatsSummary, profile: PlayerProfile) async -> StatsReading {
-        StatsReading(sentences: ["Aún no hay datos suficientes."], trend: .sinDatos, backend: .rules)
+        let start = ContinuousClock.now
+        defer { record(start) }
+        if backend == .foundationModels {
+            let out = await models.statsReadingResult(summary, profile: profile)
+            lastModelError = out.error
+            lastAnsweredBy = out.value.backend
+            return out.value
+        }
+        lastModelError = nil
+        lastAnsweredBy = .rules
+        return RuleBasedCoach.makeReading(summary, profile: profile)
     }
 
     func kineSheet(_ summary: StatsSummary, profile: PlayerProfile) async -> KineSheet {
-        KineSheet(period: "", whenItHurts: "", whatHeDid: "", whatWorsens: "", howItGoes: "", alerts: "", backend: .rules)
+        let start = ContinuousClock.now
+        defer { record(start) }
+        if backend == .foundationModels {
+            let out = await models.kineSheetResult(summary, profile: profile)
+            lastModelError = out.error
+            lastAnsweredBy = out.value.backend
+            return out.value
+        }
+        lastModelError = nil
+        lastAnsweredBy = .rules
+        return RuleBasedCoach.makeKineSheet(summary, profile: profile)
+    }
+
+    private func record(_ start: ContinuousClock.Instant) {
+        let elapsed = start.duration(to: .now)
+        let ms = elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000
+        lastLatencyMs = Int(ms)
     }
 }
