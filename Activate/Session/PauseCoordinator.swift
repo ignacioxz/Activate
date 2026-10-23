@@ -131,11 +131,10 @@ final class PauseCoordinator {
     // MARK: Check-in
 
     /// Guarda el check-in al instante (cuenta para estadísticas aunque no siga) y evalúa seguridad.
-    /// `zones` es la selección múltiple de "¿Dónde le duele?" (vacía → zonas habituales).
+    /// `zones` es la selección múltiple de "¿Dónde le duele?" (vacía = "No me duele": se guarda sin zonas).
     func submitCheckIn(answers: [Bool], zones: [PainZone], moment checkInMoment: Moment) {
         guard answers.count == RDQ6.items.count else { return }
-        let picked = zones.isEmpty ? store.profile.allUsualZones : zones
-        let entry = store.makeCheckIn(date: .now, source: .pausa, answers: answers, zones: picked, moment: checkInMoment)
+        let entry = store.makeCheckIn(date: .now, source: .pausa, answers: answers, zones: zones, moment: checkInMoment)
         store.addCheckIn(entry)
         checkIn = entry
         selectedMoment = checkInMoment
