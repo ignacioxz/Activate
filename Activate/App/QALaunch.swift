@@ -8,6 +8,8 @@ import Foundation
 //   -qa-tab home|stats|profile   pestaña inicial (también "hoy", "estadisticas", "perfil")
 //   -qa-outdoor              enciende el Modo exterior
 //   -qa-gallery [1-3]        muestra la galería del design system (página opcional)
+//   -qa-scroll-bottom        abre Hoy al final (segunda captura)
+//   -qaPausaHoy …            escenarios de Hoy (ver HomeQA): pausa hecha, comodín de ayer, sin consentimiento
 // Ejemplo: xcrun simctl launch <UDID> com.ignaciosalazar.activate -qa-seed -qa-tab stats
 
 /// Opciones de QA leídas de `ProcessInfo.arguments`.
@@ -17,12 +19,14 @@ nonisolated struct QALaunch: Equatable, Sendable {
     var tab: RootTab? = nil
     var gallery = false
     var galleryPage: Int? = nil
+    /// Hoy abre al final (capturas del resto de las tarjetas).
+    var scrollBottom = false
 
     /// Opciones del proceso actual.
     static let current = parse(ProcessInfo.processInfo.arguments)
 
     /// `true` si se pidió cualquier opción.
-    var isActive: Bool { seed || outdoor || tab != nil || gallery }
+    var isActive: Bool { seed || outdoor || tab != nil || gallery || scrollBottom }
 
     static func parse(_ arguments: [String]) -> QALaunch {
         var result = QALaunch()
@@ -35,6 +39,8 @@ nonisolated struct QALaunch: Equatable, Sendable {
                 result.seed = true
             case "-qa-outdoor":
                 result.outdoor = true
+            case "-qa-scroll-bottom":
+                result.scrollBottom = true
             case "-qa-tab":
                 if let next, let tab = RootTab(argument: next) {
                     result.tab = tab

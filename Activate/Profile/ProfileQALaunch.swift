@@ -100,7 +100,8 @@ private struct QALaunchHook: ViewModifier {
     private func apply(_ o: QALaunchOptions) {
         guard !o.isEmpty else { return }
         options = o
-        if o.seed { DemoSeed.load(into: store, now: .now) }
+        // `-qa-seed` ya lo sembró `QALaunch.prepare` al arrancar (antes de crear los servicios). Sembrar
+        // de nuevo aquí borraba lo que se aplicó después (Modo exterior, escenarios de Hoy).
         if let zones = o.zones { store.mutate { $0.profile.setUsualZones(zones) } }
         if o.noConsent { store.mutate { $0.profile.consentGiven = false } }
         switch o.screen {

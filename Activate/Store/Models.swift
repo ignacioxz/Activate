@@ -198,8 +198,8 @@ nonisolated enum Badge: String, Codable, CaseIterable, Sendable, Identifiable {
         switch self {
         case .primeraPausa: "Hizo su primera pausa verificada."
         case .doblete: "Dos días seguidos con pausa."
-        case .relevoCumplido: "Cinco pausas de relevo verificadas."
-        case .rajoCompleto: "Pausa de 5 minutos completa en el campamento."
+        case .relevoCumplido: "Cinco pausas de 1 minuto verificadas."
+        case .rajoCompleto: "Ruta completa con todo verificado."
         case .tiroLimpio: "Los 7 días del turno con pausa."
         case .caminanteDelRajo: "2.500 pasos verificados en pausas."
         }

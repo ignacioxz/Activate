@@ -1,13 +1,15 @@
 import SwiftUI
 
-/// Pantalla Hoy: saludo, racha y comodín, tira del turno, una sola acción para el momento actual
-/// y dos secundarias ("Solo tengo 1 minuto", "Me duele ahora"). Todo plano; vidrio solo en controles.
+/// Pantalla Hoy, el tablero del turno: encabezado ("Día 2 de 7" + "Me duele ahora"), meta de hoy
+/// (anillo con la racha, hito en juego, lo que gana y "Hacer la pausa"), momentos de hoy, camino del
+/// turno con el comodín, nivel, insignias y su espalda hoy. Todo plano; vidrio solo en controles.
+/// Cada cifra sale de `HoyProgress.snapshot` (datos reales del store), nunca de valores fijos.
 /// Sin consentimiento, empezar una pausa abre primero el consentimiento y, al aceptar, sigue con la pausa.
 struct HomeView: View {
     @Environment(AppStore.self) private var store
-    @Environment(GameStore.self) private var game
     @Environment(CoachService.self) private var coach
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var activeMoment: Moment?
     /// La pausa abierta es la rápida de 1 minuto.
     @State private var quickPause = false
@@ -16,6 +18,9 @@ struct HomeView: View {
     @State private var consentFor: Moment?
     /// Pausa que arranca cuando se cierra la hoja de consentimiento aceptado.
     @State private var startAfterConsent: Moment?
+    /// "Le ayuda más": el libro mayor de estadísticas se arma una vez por día laboral (y por pausa nueva),
+    /// no cada minuto del `TimelineView`.
+    @State private var helpCache = PerDayCache<ActivityKind?>()
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -44,42 +49,49 @@ struct HomeView: View {
 
     private func content(now: Date) -> some View {
         let calendar = store.calendar
-        let isRestDay = calendar.kind(for: now) == .descanso
+        let snapshot = HoyProgress.snapshot(data: store.data, calendar: calendar, now: now)
         let moment = Moment.infer(date: now, shift: store.profile.shiftType)
-        let recipe = Recipes.base(moment.recipe, demo: store.data.demo.shortTargets)
+        let help = bestHelp(calendar: calendar, now: now)
 
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(greeting(isRestDay: isRestDay))
-                        .font(.title2.weight(.bold))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityAddTraits(.isHeader)
-                    StreakChips()
+                HoyHeader(title: snapshot.title, subtitle: snapshot.subtitle) {
+                    showPainSheet = true
                 }
 
-                ShiftStrip()
+                HoyGoalCard(goal: snapshot.goal,
+                            route: snapshot.route,
+                            routeMinutes: snapshot.routeMinutes,
+                            momentTitle: moment.title,
+                            onStart: {
+                                quickPause = false
+                                requestStart(moment)
+                            },
+                            onQuick: {
+                                quickPause = true
+                                requestStart(Moment.infer(date: .now, shift: store.profile.shiftType))
+                            })
 
-                MomentCard(moment: moment,
-                           recipe: recipe,
-                           pausedToday: game.pausedToday,
-                           isRestDay: isRestDay) {
-                    quickPause = false
-                    requestStart(moment)
+                if let moments = snapshot.moments {
+                    HoyMomentsCard(moments: moments)
                 }
 
-                secondaryRow
+                TurnoPathCard(path: snapshot.path, cascos: store.profile.cascos)
 
-                if let line = painLoggedLine(now: now) {
-                    Label(line, systemImage: "checkmark.circle.fill")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                LevelCard(level: snapshot.level)
+
+                BadgesCard(badges: snapshot.badges, earned: snapshot.earnedBadges)
+
+                BackCard(back: snapshot.back, help: help)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+            // Al volver de la pausa: el anillo se cierra, la racha y el XP cuentan; sin confeti (ya lo hizo la celebración).
+            .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.5), value: snapshot.goal.done)
+            .animation(reduceMotion ? nil : .snappy, value: snapshot.level.xp)
         }
+        .defaultScrollAnchor(Self.initialAnchor)
         .sheet(item: $consentFor, onDismiss: startPendingPause) { moment in
             NavigationStack {
                 ConsentView(onAccept: { startAfterConsent = moment })
@@ -92,32 +104,21 @@ struct HomeView: View {
         }
     }
 
-    /// Dos acciones secundarias compactas (cápsulas de vidrio) bajo la tarjeta; se apilan con letra grande.
-    private var secondaryRow: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                oneMinuteButton(fill: false)
-                painNowButton(fill: false)
-            }
-            .frame(maxWidth: .infinity)
-            VStack(spacing: 8) {
-                oneMinuteButton(fill: true)
-                painNowButton(fill: true)
-            }
+    /// Ejercicio verificado que más se repite en pausas que terminaron "Mejor" (dato, sin premio).
+    private func bestHelp(calendar: WorkCalendar, now: Date) -> ActivityKind? {
+        let key = "\(calendar.key(for: now))#\(store.data.sessions.count)"
+        return helpCache.value(for: key) {
+            StatsEngine.mostHelpfulActivity(ledger: StatsLedger(data: store.data, calendar: calendar))
         }
     }
 
-    private func oneMinuteButton(fill: Bool) -> some View {
-        QuickActionButton(title: "Solo tengo 1 minuto", systemImage: "timer", fill: fill) {
-            quickPause = true
-            requestStart(Moment.infer(date: .now, shift: store.profile.shiftType))
-        }
-    }
-
-    private func painNowButton(fill: Bool) -> some View {
-        QuickActionButton(title: "Me duele ahora", systemImage: "bolt.heart", fill: fill) {
-            showPainSheet = true
-        }
+    /// Solo QA (DEBUG): `-qa-scroll-bottom` abre Hoy al final para la segunda captura.
+    private static var initialAnchor: UnitPoint {
+        #if DEBUG
+        return QALaunch.current.scrollBottom ? .bottom : .top
+        #else
+        return .top
+        #endif
     }
 
     /// Sin consentimiento no se abre la pausa (usa la cámara y datos de salud): primero el consentimiento.
@@ -143,27 +144,10 @@ struct HomeView: View {
         activeMoment = moment
     }
 
-    private func greeting(isRestDay: Bool) -> String {
-        let name = store.profile.name.trimmingCharacters(in: .whitespaces)
-        let who = name.isEmpty ? "" : ", \(name)"
-        return isRestDay ? "Buen descanso\(who)." : "Buen turno\(who)."
-    }
-
     /// Registros "Me duele ahora" de hoy (dispara la háptica de confirmación al guardar).
     private var painLogsToday: Int {
         let todayKey = store.calendar.key(for: .now)
         return store.data.checkIns.filter { $0.source == .meDueleAhora && $0.workDayKey == todayKey }.count
-    }
-
-    private func painLoggedLine(now: Date) -> String? {
-        let todayKey = store.calendar.key(for: now)
-        guard let last = store.data.checkIns.last(where: { $0.source == .meDueleAhora && $0.workDayKey == todayKey }) else {
-            return nil
-        }
-        if let context = last.context {
-            return "Dolor registrado hoy · \(context.title)"
-        }
-        return "Dolor registrado hoy"
     }
 
     // MARK: - Lógica pura
@@ -171,49 +155,5 @@ struct HomeView: View {
     /// La pausa usa la cámara y datos de salud: sin consentimiento expreso no se abre.
     nonisolated static func needsConsent(_ profile: PlayerProfile) -> Bool {
         !profile.consentGiven
-    }
-}
-
-/// Acción secundaria compacta de Hoy: cápsula de vidrio funcional, texto `.subheadline` y símbolo en el acento.
-/// Más liviana que `SecondaryButton` para no competir con "Hacer la pausa" (una acción principal por pantalla).
-/// Usa `functionalGlass`, así degrada a superficie opaca en modo exterior y con Reducir transparencia.
-private struct QuickActionButton: View {
-    let title: String
-    let systemImage: String
-    /// `true` ocupa todo el ancho (versión apilada); `false` usa su ancho natural (versión en fila).
-    var fill: Bool = false
-    let action: () -> Void
-
-    static let height: CGFloat = 48
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(Theme.accent)
-                Text(title)
-                    .foregroundStyle(.primary)
-                    .lineLimit(fill ? nil : 1)
-                    .fixedSize(horizontal: !fill, vertical: fill)
-            }
-            .font(.subheadline.weight(.semibold))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .frame(maxWidth: fill ? .infinity : nil, minHeight: Self.height)
-            .contentShape(.capsule)
-        }
-        .buttonStyle(QuickActionStyle())
-    }
-}
-
-private struct QuickActionStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .functionalGlass(in: Capsule())
-            .opacity(configuration.isPressed ? 0.75 : 1)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
-            .animation(.snappy(duration: 0.15), value: configuration.isPressed)
     }
 }
