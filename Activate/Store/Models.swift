@@ -257,47 +257,68 @@ nonisolated struct SaveData: Codable, Sendable {
 
 
 // MARK: - Zonas múltiples (compatibles con datos guardados antes de la selección múltiple)
+// Semántica: `zones == nil` → registro antiguo (usar `zone`); `zones == []` → "No me duele" (sin dolor);
+// `zones` con elementos → selección múltiple. `zone` se conserva como la primera zona para datos antiguos.
 
 extension PainZone {
-    /// Normaliza una selección: sin duplicados y en el orden de `allCases`; nunca vacía.
-    nonisolated static func normalized(_ zones: [PainZone], fallback: PainZone = .lumbar) -> [PainZone] {
+    /// Sin duplicados y en el orden de `allCases`. Puede quedar vacía (= sin dolor).
+    nonisolated static func ordered(_ zones: [PainZone]) -> [PainZone] {
         let set = Set(zones)
-        let ordered = PainZone.allCases.filter { set.contains($0) }
+        return PainZone.allCases.filter { set.contains($0) }
+    }
+
+    /// Como `ordered`, pero nunca vacía (usa `fallback`). Para campos que exigen una zona.
+    nonisolated static func normalized(_ zones: [PainZone], fallback: PainZone = .lumbar) -> [PainZone] {
+        let ordered = ordered(zones)
         return ordered.isEmpty ? [fallback] : ordered
     }
 
-    /// "Espalda baja y cuello", "Espalda baja, cuello y hombro".
+    /// "Espalda baja y cuello", "Espalda baja, cuello y hombro"; vacía → "Sin dolor".
     nonisolated static func listTitle(_ zones: [PainZone]) -> String {
-        let titles = normalized(zones).map(\.title)
-        guard titles.count > 1 else { return titles.first ?? "" }
-        return titles.dropLast().joined(separator: ", ") + " y " + (titles.last ?? "")
+        let titles = ordered(zones).map(\.title)
+        guard !titles.isEmpty else { return noPainTitle }
+        guard titles.count > 1 else { return titles[0] }
+        return titles.dropLast().joined(separator: ", ") + " y " + titles[titles.count - 1]
     }
+
+    nonisolated static let noPainTitle = "Sin dolor"
+    /// Texto de la opción para marcar que no duele nada.
+    nonisolated static let noPainOption = "No me duele"
+}
+
+private nonisolated func resolvedZones(_ zones: [PainZone]?, legacy: PainZone) -> [PainZone] {
+    guard let zones else { return [legacy] }
+    return PainZone.ordered(zones)
 }
 
 extension DailyCheckIn {
-    var allZones: [PainZone] { PainZone.normalized(zones ?? [zone], fallback: zone) }
-    /// Asigna la selección completa y deja `zone` como la primera.
+    /// Zonas marcadas; vacía si respondió "No me duele".
+    var allZones: [PainZone] { resolvedZones(zones, legacy: zone) }
+    var noPain: Bool { zones?.isEmpty == true }
+    /// Asigna la selección completa (vacía = sin dolor) y deja `zone` como la primera si hay.
     mutating func setZones(_ newValue: [PainZone]) {
-        let n = PainZone.normalized(newValue, fallback: zone)
+        let n = PainZone.ordered(newValue)
         zones = n
-        zone = n[0]
+        if let first = n.first { zone = first }
     }
 }
 
 extension PauseSession {
-    var allZones: [PainZone] { PainZone.normalized(zones ?? [zone], fallback: zone) }
+    var allZones: [PainZone] { resolvedZones(zones, legacy: zone) }
+    var noPain: Bool { zones?.isEmpty == true }
     mutating func setZones(_ newValue: [PainZone]) {
-        let n = PainZone.normalized(newValue, fallback: zone)
+        let n = PainZone.ordered(newValue)
         zones = n
-        zone = n[0]
+        if let first = n.first { zone = first }
     }
 }
 
 extension PlayerProfile {
-    var allUsualZones: [PainZone] { PainZone.normalized(usualZones ?? [usualZone], fallback: usualZone) }
+    /// Zonas habituales; vacía si indicó que no tiene dolor habitual.
+    var allUsualZones: [PainZone] { resolvedZones(usualZones, legacy: usualZone) }
     mutating func setUsualZones(_ newValue: [PainZone]) {
-        let n = PainZone.normalized(newValue, fallback: usualZone)
+        let n = PainZone.ordered(newValue)
         usualZones = n
-        usualZone = n[0]
+        if let first = n.first { usualZone = first }
     }
 }
