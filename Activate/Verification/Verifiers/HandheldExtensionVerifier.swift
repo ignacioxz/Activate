@@ -26,7 +26,9 @@ import simd
 // - Desafío: en una rep al azar aparece "Quédese atrás 2 segundos"; fallarlo 2 veces → `holdChallengeFailed`.
 // - Sacudidas, ritmo de metrónomo y caminar → anomalías, como en la sentadilla.
 // - Sin seguimiento del mundo (cámara trasera tapada, equipo sin soporte): respaldo con el cabeceo
-//   (deviceMotion) + la cara quieta en el encuadre; la fuente se declara `.fallback` y queda `reduced`.
+//   (deviceMotion) + la cara quieta en el encuadre. Si alguna rep se contó con el respaldo, el nivel baja a
+//   `reduced` aunque la fuente declare `.live` (`SourceLevelLimiting`): tapar la cámara solo en las reps no
+//   deja `full`.
 // Seguridad: con dolor lumbar alto las reglas (`SafetyRules`) excluyen la extensión. La instrucción dice
 // "hasta donde no duela" y el umbral es bajo a propósito: una extensión corta (13-15°) y lenta cuenta.
 
@@ -160,7 +162,7 @@ nonisolated enum HandheldExtensionAnomaly {
 
 // MARK: - Verificador
 
-nonisolated struct HandheldExtensionVerifier: ActivityVerifier {
+nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimiting {
     typealias Sample = HandheldSquatSample
     private typealias K = HandheldExtensionTuning
     private typealias Copy = HandheldExtensionCopy
@@ -307,6 +309,12 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier {
     var isLive: Bool { !staticReported }
     var minPeakTilt: Double? { repPeaks.min() }
     var meanRepSeconds: Double? { repSeconds.isEmpty ? nil : repSeconds.reduce(0, +) / Double(repSeconds.count) }
+
+    /// Si alguna rep se midió con el respaldo IMU (sin seguimiento del mundo), la fuente no puede quedar
+    /// `.live` aunque el resto de la serie lo fuera: tapar la cámara trasera solo en las reps baja a reduced.
+    func limitedSourceLevel(_ declared: SourceLevel) -> SourceLevel {
+        declared == .live && inertialReps > 0 ? .fallback : declared
+    }
 
     // MARK: ActivityVerifier
 

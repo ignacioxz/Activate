@@ -30,6 +30,40 @@ private func anomalies(_ outcome: ActivityOutcome, _ kind: String) -> [Anomaly] 
     outcome.anomalies.filter { $0.kind == kind }
 }
 
+/// Fuente que declara `.live` y entrega muestras sintéticas: prueba que el runner aplica el nivel que limita
+/// el verificador de la extensión (en la app solo `HandheldSquatSource` declara `.live`).
+@MainActor
+private final class LiveDeclaredExtensionReplay: SampleSource {
+    typealias Sample = HandheldSquatSample
+    let samples: [HandheldSquatSample]
+    var level: SourceLevel { .live }
+
+    init(samples: [HandheldSquatSample]) { self.samples = samples }
+
+    func start() throws -> AsyncStream<HandheldSquatSample> {
+        let samples = samples
+        return AsyncStream { continuation in
+            for s in samples { continuation.yield(s) }
+            continuation.finish()
+        }
+    }
+
+    func stop() {}
+}
+
+/// Estadística de la fuente tal como la arma `HandheldSquatRelay` (frames con cara desde que el mundo arrancó).
+private func sourceStats(_ samples: [HandheldSquatSample]) -> HandheldSquatSourcePolicy.Stats {
+    var stats = HandheldSquatSourcePolicy.Stats()
+    for s in samples {
+        if s.worldTrackingNormal { stats.everNormal = true }
+        if stats.everNormal, s.faceTracked {
+            stats.countedFrames += 1
+            if s.worldTrackingNormal { stats.normalFrames += 1 }
+        }
+    }
+    return stats
+}
+
 struct HandheldExtensionTests {
     // MARK: Física de la señal
 
@@ -326,6 +360,90 @@ struct HandheldExtensionTests {
         #expect(VerificationPolicy.level(for: outcome, source: level, kind: .extensionLumbar) == .reduced)
     }
 
+    @Test func repsConElRespaldoBajanElNivelDeLaFuente() {
+        var v = HandheldExtensionVerifier(target: 10)
+        #expect(v.limitedSourceLevel(.live) == .live)
+        var options = Synth.Options()
+        options.world = false
+        options.leadInSeconds = 4.5
+        let samples = Synth.samples(reps: Synth.extensionReps(count: 2), options: options)
+        _ = run(&v, samples)
+        #expect(v.inertialReps == 2)
+        #expect(v.limitedSourceLevel(.live) == .fallback)
+        #expect(v.limitedSourceLevel(.replay) == .replay)
+        #expect(v.limitedSourceLevel(.fallback) == .fallback)
+    }
+
+    @Test func extensionesTapandoLaCamaraSoloEnLasRepsQuedanReduced() {
+        // La política es por reps, no por frames: extensiones reales medidas con el respaldo IMU (la cámara
+        // trasera tapada justo en cada rep) cuentan, pero el nivel baja a reduced aunque más del 80 % de los
+        // frames tuviera el seguimiento del mundo normal y la fuente se declare `.live`.
+        var reps: [Synth.Rep] = []
+        for i in 0..<5 {
+            let k = Double(i % 3)
+            let back: Double = 1.1 + 0.1 * Double(i % 2)
+            let ret: Double = 1.1 + 0.1 * k
+            let rest: Double = 30 + 0.7 * k
+            reps.append(Synth.Rep(tilt: 19 + k, backSeconds: back, holdSeconds: 0.3, returnSeconds: ret, restSeconds: rest))
+        }
+        var options = Synth.Options()
+        options.leadInSeconds = 30
+        let seen = Synth.samples(reps: reps, options: options)
+        options.world = false
+        let covered = Synth.samples(reps: reps, options: options)
+        // Mismo ruido en las dos series: se tapa desde 2,6 s antes de cada rep hasta 0,2 s después.
+        var windows: [ClosedRange<Double>] = []
+        var cursor = options.leadInSeconds
+        for r in reps {
+            let moving: Double = r.backSeconds + r.holdSeconds + r.returnSeconds
+            windows.append((cursor - 2.6)...(cursor + moving + 0.2))
+            cursor += moving + r.restSeconds
+        }
+        var samples: [HandheldSquatSample] = []
+        for i in seen.indices {
+            let t: Double = seen[i].t
+            let isCovered: Bool = windows.contains(where: { (w: ClosedRange<Double>) -> Bool in w.contains(t) })
+            samples.append(isCovered ? covered[i] : seen[i])
+        }
+
+        var v = HandheldExtensionVerifier(target: 5)
+        _ = run(&v, samples)
+        let outcome = finish(&v, samples, reason: .completed)
+
+        let diag: [String] = v.diagnostics.map { "\($0.mode) \($0.peakTilt) \(String(describing: $0.rejection))" }
+        #expect(outcome.achieved == 5, "\(diag)")
+        #expect(v.inertialReps == 5)
+        #expect(hardKinds(outcome).isEmpty, "\(outcome.anomalies)")
+        let stats = sourceStats(samples)
+        let fraction = Double(stats.normalFrames) / Double(max(1, stats.countedFrames))
+        #expect(fraction >= HandheldSquatSourcePolicy.minWorldFraction, "fracción normal \(fraction)")
+        let declared = HandheldSquatSourcePolicy.level(worldTrackingSupported: true, stats: stats)
+        #expect(declared == .live)
+        #expect(v.limitedSourceLevel(declared) == .fallback)
+        let limited: SourceLevel = v.limitedSourceLevel(declared)
+        let level: VerificationLevel = VerificationPolicy.level(for: outcome, source: limited, kind: .extensionLumbar)
+        #expect(level != .full)
+        #expect(level == .reduced)
+    }
+
+    @MainActor
+    @Test func elRunnerAplicaElNivelLimitadoPorElVerificador() async {
+        // Fuente "en vivo" que en realidad entrega extensiones sin seguimiento del mundo: el runner baja a reduced.
+        var options = Synth.Options()
+        options.world = false
+        options.leadInSeconds = 4.5
+        let samples = Synth.samples(reps: Synth.extensionReps(count: 3), options: options)
+        let runner = ActivityRunner(assignment: Recipes.assignment(.extensionLumbar, demo: true),
+                                    verifier: HandheldExtensionVerifier(target: 3),
+                                    source: LiveDeclaredExtensionReplay(samples: samples))
+        runner.start()
+        for _ in 0..<400 where runner.outcome == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(runner.outcome?.achieved == 3)
+        #expect(runner.level == .reduced)
+    }
+
     @Test func respaldoTambienRechazaLasMunecas() {
         // Sin mundo no se ve la cara irse hacia atrás, pero la cara se mueve en el encuadre del teléfono.
         var options = Synth.Options()
@@ -457,6 +575,18 @@ struct HandheldExtensionTests {
         #expect(ActivityKind.extensionLumbar.gatingCopy == ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Inclínese hacia atrás."])
         #expect(ActivityKind.extensionLumbar.instructions == HandheldExtensionCopy.instructions)
         #expect(HandheldExtensionCopy.instructions.contains("hasta donde no duela"))
+    }
+
+    @MainActor
+    @Test func laFilaDelPlanDiceEnLasDosManosParaLosEjerciciosEnLasManos() {
+        // La extensión es `.face` como cuello y ojos, pero la fila del plan no debe decir "en la mano" (selfie).
+        for kind in [ActivityKind.sentadilla, .pararseSentarse, .extensionLumbar] {
+            #expect(PlanRow.placement(for: kind) == "Teléfono en las dos manos, frente al pecho", "\(kind)")
+            #expect(PlanRow.placementSymbol(for: kind) == "iphone", "\(kind)")
+        }
+        #expect(PlanRow.placement(for: .extensionLumbar) == ActivityKind.sentadilla.placement)
+        #expect(PlanRow.placement(for: .cuello) == PlanRow.placement(for: SensorBlock.face))
+        #expect(PlanRow.placementSymbol(for: .ojos) == PlanRow.placementSymbol(for: SensorBlock.face))
     }
 
     @MainActor

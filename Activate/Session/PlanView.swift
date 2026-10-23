@@ -145,18 +145,18 @@ struct PlanRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// Dónde va el teléfono. Pararse y sentarse y la sentadilla (modo por defecto) comparten el bloque de
-    /// cámara, pero van con el teléfono en las dos manos, sin apoyarlo.
+    /// Dónde va el teléfono. La sentadilla, pararse y sentarse y la extensión lumbar usan el bloque de cara
+    /// (`.face`), pero van con el teléfono en las dos manos frente al pecho, no en una mano a distancia selfie.
     static func placement(for kind: ActivityKind) -> String {
         switch kind {
-        case .sentadilla, .pararseSentarse: kind.placement
+        case .sentadilla, .pararseSentarse, .extensionLumbar: kind.placement
         default: placement(for: kind.sensorBlock)
         }
     }
 
     static func placementSymbol(for kind: ActivityKind) -> String {
         switch kind {
-        case .sentadilla, .pararseSentarse: "iphone"
+        case .sentadilla, .pararseSentarse, .extensionLumbar: "iphone"
         default: placementSymbol(for: kind.sensorBlock)
         }
     }
