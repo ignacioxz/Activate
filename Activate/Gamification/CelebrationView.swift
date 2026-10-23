@@ -61,7 +61,7 @@ struct CelebrationView: View {
                     }
                     verificationRow
                     if comodinUsedYesterday {
-                        FactRow(systemImage: StreakChips.comodinSymbol,
+                        FactRow(systemImage: ComodinInfo.symbol,
                                 text: CelebrationCopy.comodinUsedYesterdayLine,
                                 tint: Theme.accent)
                     }
@@ -468,7 +468,7 @@ private struct TurnoBoxStrip: View {
                 case .done:
                     Image(systemName: "checkmark").font(.headline.weight(.heavy)).foregroundStyle(.white)
                 case .casco:
-                    Image(systemName: StreakChips.comodinSymbol).font(.subheadline.weight(.bold)).foregroundStyle(Theme.accent)
+                    Image(systemName: ComodinInfo.symbol).font(.subheadline.weight(.bold)).foregroundStyle(Theme.accent)
                 case .pending:
                     Text("\(number)").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                 }

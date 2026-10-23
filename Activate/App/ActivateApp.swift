@@ -14,6 +14,8 @@ struct ActivateApp: App {
         #if DEBUG
         // Argumentos de QA (-qa-seed, -qa-outdoor…): se aplican antes de crear los servicios.
         QALaunch.current.prepare(s)
+        // Escenarios de Hoy (-qaPausaHoy, -qaComodinAyer, -qaSinConsentimiento): después de la semilla.
+        HomeQA.apply(arguments: ProcessInfo.processInfo.arguments, to: s)
         #endif
         let hub = SensorHub()
         let c = CoachService()

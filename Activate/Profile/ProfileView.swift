@@ -3,22 +3,7 @@ import UserNotifications
 
 // Dueño: paquete "profile-onboarding". Perfil: nombre y trato, turno, zona, pantalla, insignias, rango y Demo.
 
-/// Rangos del prototipo, solo como etiqueta en Perfil (sin ligas ni rankings).
-enum ProfileRank {
-    static let xpPerLevel = 150
-    static let names = ["Aprendiz", "Operador", "Operador experto", "Capataz", "Jefe de turno", "Superintendente"]
-
-    static func level(xp: Int) -> Int { max(0, xp) / xpPerLevel + 1 }
-
-    static func title(xp: Int) -> String {
-        names[min(names.count - 1, (level(xp: xp) - 1) / 2)]
-    }
-
-    /// Avance dentro del nivel actual (0...1).
-    static func progress(xp: Int) -> Double {
-        Double(max(0, xp) % xpPerLevel) / Double(xpPerLevel)
-    }
-}
+// `ProfileRank` (nivel y rango por XP) vive en Gamification/ProfileRank.swift: lo comparte con Hoy.
 
 /// Perfil de Marco. Todo cambio pasa por `store.mutate`.
 struct ProfileView: View {
