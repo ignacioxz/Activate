@@ -72,7 +72,7 @@ nonisolated extension ActivityKind {
         case .ojos:
             "Mire el teléfono y parpadee completo: cierre bien los dos ojos y ábralos. Los parpadeos a medias no cuentan, vaya sin apuro."
         case .stroop:
-            "Toque el color en que está escrita la palabra, no lo que dice. Si ve ROJO escrito en azul, toque azul. Responda rápido pero sin adivinar, durante un minuto."
+            "Toque el color en que está escrita la palabra, no lo que dice: si ve ROJO escrito en azul, toque azul. Responda rápido pero sin adivinar, durante un minuto."
         }
     }
 
