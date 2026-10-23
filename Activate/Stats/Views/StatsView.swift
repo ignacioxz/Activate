@@ -1,7 +1,7 @@
 import SwiftUI
 
-// Dueño: agente "stats-ui". Pestaña Estadísticas: "Este turno" arriba, dashboard histórico debajo.
-// Todo el contenido es plano (flatCard); el único vidrio es el CTA "Hoja para el kine".
+// Dueño: agente "stats-ui" (enlace a la hoja del kine: paquete kine-ai). Pestaña Estadísticas:
+// "Este turno" arriba, dashboard histórico debajo. Todo el contenido es plano (flatCard).
 
 struct StatsView: View {
     @Environment(AppStore.self) private var store
@@ -12,7 +12,6 @@ struct StatsView: View {
     @State private var readingLoading = false
     @State private var shownCacheText: String?
     @State private var scope: HistoryScope = .current
-    @State private var showKineSheet = false
 
     /// Selector del dashboard histórico.
     nonisolated enum HistoryScope: String, CaseIterable, Identifiable, Sendable {
@@ -67,7 +66,7 @@ struct StatsView: View {
         summary.currentTurno?.turnoKey ?? store.calendar.turnoKey(for: .now)
     }
 
-    private static func digest(_ session: PauseSession) -> SessionDigest {
+    nonisolated private static func digest(_ session: PauseSession) -> SessionDigest {
         SessionDigest(id: session.id, date: session.startedAt, workDayKey: session.workDayKey,
                       moment: session.moment, recipe: session.recipe, checkInScore: session.checkInScore,
                       post: session.postResponse, counted: session.counted, level: session.level,
@@ -137,9 +136,6 @@ struct StatsView: View {
             }
             .appScreen()
             .navigationTitle("Estadísticas")
-            .navigationDestination(isPresented: $showKineSheet) {
-                KineSheetLauncher(summary: summary, profile: store.profile)
-            }
             .onChange(of: refreshKey, initial: true) { _, key in
                 computed = ComputedSummary(key: key, summary: computeSummary())
             }
@@ -165,9 +161,7 @@ struct StatsView: View {
             sentences: reading ?? StatsCopy.templateSentences(summary, name: store.profile.name, isRestDay: isRestDay),
             isTemplate: reading == nil,
             isLoading: readingLoading)
-        PrimaryButton(title: "Hoja para el kine", systemImage: "doc.text.fill") {
-            showKineSheet = true
-        }
+        KineSheetLink()
     }
 
     @ViewBuilder
@@ -274,29 +268,39 @@ private struct CoachReadingCard: View {
 
 // MARK: - Hoja para el kine
 
-/// Presenta `KineSheetView` con una hoja de plantilla y la reemplaza por la del coach cuando llega.
-/// Si el paquete kine-sheet entrega `KineSheetScreen()`, basta con usarla aquí en vez de este envoltorio.
-private struct KineSheetLauncher: View {
-    let summary: StatsSummary
-    let profile: PlayerProfile
+/// Fila plana que abre `KineSheetScreen` (Apple Intelligence prepara la consulta; PNG o PDF).
+private struct KineSheetLink: View {
     @Environment(CoachService.self) private var coach
-    @State private var sheet: KineSheet?
-
-    private var template: KineSheet {
-        KineSheet(period: summary.currentTurno?.label ?? "Turno actual",
-                  whenItHurts: "",
-                  whatHeDid: "",
-                  whatWorsens: summary.worsensHints.joined(separator: " "),
-                  howItGoes: "",
-                  alerts: "",
-                  backend: .rules)
-    }
 
     var body: some View {
-        KineSheetView(sheet: sheet ?? template, summary: summary, profile: profile)
-            .task {
-                sheet = await coach.kineSheet(summary, profile: profile)
+        NavigationLink {
+            KineSheetScreen()
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "stethoscope")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.accent.opacity(0.12), in: .circle)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Hoja para el kine")
+                        .font(.headline)
+                    Text(coach.kineModelReady ? "Prepare su consulta con Apple Intelligence" : "Sus cifras listas para compartir")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
+            .contentShape(.rect)
+            .flatCard()
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Abre la hoja para llevar a la consulta")
     }
 }
 

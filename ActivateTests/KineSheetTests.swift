@@ -108,72 +108,54 @@ struct KineSheetTests {
         #expect(lines[0].contains(RDQ6.alarmQuestions[1]))
     }
 
-    @Test func plantillaRellenaLosCamposVacios() {
-        let prev = turno("2026-09-28", mean: 4.0), cur = turno("2026-10-12", mean: 2.5, max: 4)
-        let s = summary(turnos: [prev, cur], current: cur, previous: prev, streak: 3, todayRDQ: 2,
-                        hints: ["Le duele más al bajar del camión"])
-        let table = KineSheetTable.build(summary: s, profile: profile(), calendar: santiago)
-        let fallback = KineSheetFallback.sheet(summary: s, profile: profile(), table: table)
+    // MARK: - Hoja exportada (consulta + nota + tabla)
 
-        #expect(fallback.backend == .rules)
-        #expect(fallback.period == table.periodText)
-        #expect(fallback.whenItHurts.contains("2,5 de 6") && fallback.whenItHurts.contains("Hoy: 2 de 6"))
-        #expect(fallback.whatHeDid.contains("10 pausas verificadas en 2 turnos"))
-        #expect(fallback.whatWorsens == "Le duele más al bajar del camión.")
-        #expect(fallback.howItGoes.contains("4,0 en el turno anterior, 2,5 en el actual"))
-        #expect(fallback.howItGoes.contains("Racha actual: 3 días"))
-        #expect(fallback.alerts.isEmpty)
-
-        let coach = KineSheet(period: "", whenItHurts: "  Le duele al bajar.  ", whatHeDid: "", whatWorsens: "",
-                              howItGoes: "", alerts: "Ninguna.", backend: .foundationModels)
-        let merged = KineSheetFallback.merge(coach, fallback: fallback)
-        #expect(merged.whenItHurts == "Le duele al bajar.")
-        #expect(merged.whatHeDid == fallback.whatHeDid)
-        #expect(merged.period == fallback.period)
-        #expect(merged.alerts == "Ninguna.")
-        #expect(merged.backend == .foundationModels)
+    private func facts() -> [KineFact] {
+        [KineFact(id: "rdq_tendencia", title: "Espalda turno a turno (RDQ-6)", value: "4,0 → 2,5",
+                  detail: "RDQ-6 promedio por turno: 4,0 → 2,5.", question: "¿Sigo igual?", focus: "Mantener."),
+         KineFact(id: "contexto_dominante", title: "Dónde le duele más", value: "Al bajar · 2 de 3",
+                  detail: "Registros «Me duele ahora»: al bajar del camión 2, en la cabina 1.",
+                  question: "¿Qué hago cuando me duele al bajar del camión?", focus: "Bajar del camión sin cargar la espalda."),
+         KineFact(id: "mejora_post", title: "Mejor después de la pausa", value: "6 de 9 pausas",
+                  detail: "Mejor 6, Igual 2 y Peor 1 veces.", question: "¿Qué más hago?", focus: "Reforzar las pausas.")]
     }
 
-    @Test func resumenVacioNoRevienta() {
-        let s = summary(turnos: [])
-        let table = KineSheetTable.build(summary: s, profile: profile(), calendar: santiago)
-        #expect(table.columns.isEmpty)
-        #expect(table.periodText == "Sin turnos con registros")
-        #expect(table.items.allSatisfy { $0.current == 0 && $0.total == 0 })
-
-        let fallback = KineSheetFallback.sheet(summary: s, profile: profile(), table: table)
-        #expect(fallback.whenItHurts.contains("Sin cuestionarios"))
-        #expect(fallback.whatHeDid == "Sin pausas verificadas en el período.")
-        #expect(fallback.whatWorsens.hasPrefix("Sin patrones claros"))
-        #expect(fallback.howItGoes.hasPrefix("Sin datos suficientes"))
+    private func content(note: PatientNote? = nil, backend: CoachBackend = .rules, edited: Bool = false) -> KineSheetContent {
+        let prev = turno("2026-09-28"), cur = turno("2026-10-12", max: 5, worse: 1)
+        let s = summary(turnos: [prev, cur], current: cur, previous: prev, streak: 2, todayRDQ: 3)
+        var consult = KineConsultRules.template(facts(), profile: profile())
+        consult.backend = backend
+        let sheet = KineSheet(consult: consult, note: note, factsSignature: KineConsultRules.signature(facts()),
+                              preparedAt: .now, edited: edited)
+        return KineSheetContent(sheet: sheet, facts: facts(), summary: s, profile: profile(),
+                                extraAlerts: ["Alarma de prueba"], generatedAt: .now)
     }
 
-    @Test func ejerciciosRecientesSoloVerificadosYSinStroop() {
-        let cur = turno("2026-10-12")
-        func digest(_ kinds: [ActivityKind], level: VerificationLevel) -> SessionDigest {
-            SessionDigest(id: UUID(), date: .now, workDayKey: "2026-10-13", moment: .colacion, recipe: .colacion3,
-                          checkInScore: 2, post: .mejor, counted: level == .full, level: level, activityKinds: kinds)
-        }
-        let s = summary(turnos: [cur], current: cur, sessions: [
-            digest([.pasos, .cuello, .stroop], level: .full),
-            digest([.pasos, .ojos], level: .reduced),
-            digest([.sentadilla], level: .suspicious),
-        ])
-        let text = KineSheetFallback.whatHeDid(summary: s, table: KineSheetTable.build(summary: s, profile: profile(), calendar: santiago))
-        #expect(text.contains("Caminata ×2"))
-        #expect(text.contains("Movilidad cervical ×1"))
-        #expect(!text.contains("reflejos"))
-        #expect(!text.contains("Sentadilla"))
+    @Test func contenidoUneHallazgosConSusCifras() {
+        var c = content()
+        #expect(c.findings.map(\.fact.value) == ["4,0 → 2,5", "Al bajar · 2 de 3", "6 de 9 pausas"])
+        #expect(c.questions.count == 3 && c.focus == "Mantener.")
+        #expect(c.note == nil)
+        #expect(!c.usedModel)
+        #expect(c.originLine.hasPrefix("Texto de plantilla"))
+        // Un hallazgo cuyo hecho ya no existe no se muestra.
+        c.sheet.consult.findings.append(KineFinding(factID: "alertas", sentence: "x"))
+        #expect(c.findings.count == 3)
+        // Nota vacía no se muestra; con IA el pie lo dice, y si la persona editó, también.
+        let blank = PatientNote(original: "   ", summary: "", zones: [], moments: [], backend: .rules)
+        #expect(content(note: blank).note == nil)
+        let ai = content(backend: .foundationModels, edited: true)
+        #expect(ai.usedModel)
+        #expect(ai.originLine.contains("Apple Intelligence") && ai.originLine.contains("editó"))
     }
 
     @Test @MainActor func exportaPNGaEscala3YPDF() {
-        let prev = turno("2026-09-28"), cur = turno("2026-10-12", max: 5, worse: 1)
-        let s = summary(turnos: [prev, cur], current: cur, previous: prev, streak: 2, todayRDQ: 3,
-                        hints: ["Le duele más al bajar del camión"])
-        let table = KineSheetTable.build(summary: s, profile: profile(), calendar: santiago)
-        let sheet = KineSheetFallback.sheet(summary: s, profile: profile(), table: table)
+        let note = PatientNote(original: "Me duele la espalda al bajar del camión.",
+                               summary: "El paciente cuenta que le duele la espalda al bajar del camión.",
+                               zones: [.lumbar], moments: [.salida], backend: .foundationModels)
+        let c = content(note: note, backend: .foundationModels)
 
-        let png = KineSheetExport.pngData(sheet: sheet, summary: s, profile: profile(), extraAlerts: ["Alarma de prueba"], now: .now)
+        let png = KineSheetExport.pngData(c)
         #expect((png?.count ?? 0) > 10_000)
         if let png, let image = UIImage(data: png) {
             #expect(image.size.width == KineSheetExport.exportWidth * KineSheetExport.pngScale)
@@ -181,19 +163,55 @@ struct KineSheetTests {
         } else {
             Issue.record("El PNG no se pudo decodificar")
         }
+        // Con nota la hoja es más alta que sin nota.
+        let plain = KineSheetExport.pngData(content(backend: .foundationModels)).flatMap(UIImage.init(data:))
+        if let plain, let png, let full = UIImage(data: png) {
+            #expect(full.size.height > plain.size.height)
+        }
 
-        let pdf = KineSheetExport.pdfData(sheet: sheet, summary: s, profile: profile(), extraAlerts: [], now: .now)
+        let pdf = KineSheetExport.pdfData(c)
         #expect((pdf?.count ?? 0) > 1_000)
         #expect(pdf?.prefix(4) == Data("%PDF".utf8))
     }
 
-    @Test func cacheJSONIdaYVuelta() {
-        let sheet = KineSheet(period: "p", whenItHurts: "a", whatHeDid: "b", whatWorsens: "c", howItGoes: "d",
-                              alerts: "", backend: .foundationModels)
+    @Test @MainActor func soloSeGuardaLoPreparadoOEditado() {
+        let store = AppStore(inMemory: true)
+        let template = content().sheet
+        KineSheetScreen.persist(template, noteText: "  ", store: store)
+        #expect(store.data.lastKineSheetJSON == nil)
+
+        // Con nota escrita sí se guarda (texto tal cual, sin resumen).
+        KineSheetScreen.persist(template, noteText: "Me duele el cuello.", store: store)
+        let withNote = KineSheetCache.decode(store.data.lastKineSheetJSON)
+        #expect(withNote?.note?.original == "Me duele el cuello." && withNote?.note?.summary == "")
+
+        // Un resumen que ya no corresponde al texto se cambia por el texto tal cual.
+        var ai = content(backend: .foundationModels).sheet
+        ai.note = PatientNote(original: "Texto viejo", summary: "Resumen viejo", zones: [.cuello], moments: [], backend: .foundationModels)
+        #expect(KineSheetScreen.resolvedNote(ai, noteText: "Texto viejo")?.summary == "Resumen viejo")
+        #expect(KineSheetScreen.resolvedNote(ai, noteText: "Texto nuevo")?.summary == "")
+        KineSheetScreen.persist(ai, noteText: "Texto viejo", store: store)
+        #expect(KineSheetCache.decode(store.data.lastKineSheetJSON)?.consult.backend == .foundationModels)
+    }
+
+    @Test func cacheJSONIdaYVueltaEIgnoraElFormatoAntiguo() {
+        let sheet = KineSheet(consult: KineConsult(findings: [KineFinding(factID: "rdq_tendencia", sentence: "a")],
+                                                   questions: ["¿b?"], focus: "c", backend: .foundationModels),
+                              note: PatientNote(original: "d", summary: "e", zones: [.cuello], moments: [.colacion], backend: .foundationModels),
+                              factsSignature: "rdq_tendencia=4,0", preparedAt: Date(timeIntervalSince1970: 1_800_000_000), edited: true)
         let json = KineSheetCache.encode(sheet)
         #expect(json != nil)
         #expect(KineSheetCache.decode(json) == sheet)
         #expect(KineSheetCache.decode(nil) == nil)
         #expect(KineSheetCache.decode("{no json}") == nil)
+        // Formato 1 (5 bloques en prosa) guardado por versiones anteriores: se ignora.
+        let old = #"{"alerts":"","backend":"foundationModels","howItGoes":"d","period":"p","whatHeDid":"b","whatWorsens":"c","whenItHurts":"a"}"#
+        #expect(KineSheetCache.decode(old) == nil)
+        var future = sheet
+        future.format = 99
+        #expect(KineSheetCache.decode(KineSheetCache.encode(future)) == nil)
+        // Sirve solo si sus hallazgos siguen teniendo hecho.
+        #expect(KineSheetCache.usable(sheet, facts: facts()))
+        #expect(!KineSheetCache.usable(sheet, facts: Array(facts().dropFirst())))
     }
 }

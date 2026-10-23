@@ -6,7 +6,9 @@ import FoundationModels
 
 // Dueño: agente "coach". Gate de disponibilidad + elección de backend + latencia + fallback.
 // Firma pública congelada: Availability, availability, backend, override, lastLatencyMs,
-// refreshAvailability(), prewarm(), plan(_:), statsReading(_:profile:), kineSheet(_:profile:).
+// refreshAvailability(), prewarm(), plan(_:), statsReading(_:profile:).
+// Hoja del kine (paquete kine-ai): kineModelReady, kineUnavailableReason, kineConsult(_:profile:onPartial:),
+// patientNote(_:profile:). La genera la persona con un botón; nunca se dispara sola.
 
 @Observable
 final class CoachService {
@@ -127,18 +129,59 @@ final class CoachService {
         return RuleBasedCoach.makeReading(summary, profile: profile)
     }
 
-    func kineSheet(_ summary: StatsSummary, profile: PlayerProfile) async -> KineSheet {
+    // MARK: - Consulta con el kine
+
+    /// El botón "Preparar con Apple Intelligence" está activo (modelo disponible y sin override de reglas).
+    var kineModelReady: Bool { backend == .foundationModels }
+
+    /// Explicación breve cuando el botón está deshabilitado (nil si está activo).
+    var kineUnavailableReason: String? {
+        guard !kineModelReady else { return nil }
+        if override == .rules && (availability == .available || availability == .localeUnsupported) {
+            return "El coach está en modo reglas. Cámbielo en Perfil para preparar el resumen."
+        }
+        switch availability {
+        case .deviceNotEligible: return "Este iPhone no tiene Apple Intelligence. Puede compartir la hoja igual."
+        case .modelNotReady: return "Apple Intelligence se está preparando. Pruebe en unos minutos."
+        case .localeUnsupported: return "Apple Intelligence no está disponible en este idioma."
+        case .notEnabled, .unknown, .available: return "Active Apple Intelligence en Ajustes para preparar el resumen."
+        }
+    }
+
+    /// Elige y explica 3 hechos, propone 3 preguntas y un foco. Con el modelo, `onPartial` recibe los
+    /// borradores mientras escribe; sin modelo (o ante error) devuelve la plantilla al tiro.
+    func kineConsult(_ facts: [KineFact], profile: PlayerProfile,
+                     onPartial: (@MainActor @Sendable (KineConsultDraft) -> Void)? = nil) async -> KineConsult {
         let start = ContinuousClock.now
         defer { record(start) }
         if backend == .foundationModels {
-            let out = await models.kineSheetResult(summary, profile: profile)
+            var forward: (@Sendable (KineConsultDraft) async -> Void)?
+            if let onPartial {
+                forward = { @Sendable draft in await onPartial(draft) }
+            }
+            let out = await models.kineConsultResult(facts, profile: profile, onPartial: forward)
             lastModelError = out.error
             lastAnsweredBy = out.value.backend
             return out.value
         }
         lastModelError = nil
         lastAnsweredBy = .rules
-        return RuleBasedCoach.makeKineSheet(summary, profile: profile)
+        return KineConsultRules.template(facts, profile: profile)
+    }
+
+    /// Resume "En palabras de Marco". Sin modelo (o ante error) devuelve el texto tal cual.
+    func patientNote(_ text: String, profile: PlayerProfile) async -> PatientNote {
+        let start = ContinuousClock.now
+        defer { record(start) }
+        if backend == .foundationModels {
+            let out = await models.patientNoteResult(text, profile: profile)
+            lastModelError = out.error
+            lastAnsweredBy = out.value.backend
+            return out.value
+        }
+        lastModelError = nil
+        lastAnsweredBy = .rules
+        return KineConsultRules.noteTemplate(text)
     }
 
     private func record(_ start: ContinuousClock.Instant) {

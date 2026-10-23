@@ -3,7 +3,7 @@ import Foundation
 import FoundationModels
 #endif
 
-// Dueño: agente "coach". Coach con el modelo local de Apple. Sesión nueva por petición,
+// Dueño: agente "coach" (consulta con el kine: paquete kine-ai). Coach con el modelo local de Apple. Sesión nueva por petición,
 // timeout propio, validación en Swift y plantilla ante cualquier error.
 
 /// Errores del modelo mapeados a algo que la app entiende (y puede mostrar en Perfil).
@@ -99,10 +99,13 @@ nonisolated struct FoundationModelsCoach: Coach {
     // Presupuestos (segundos y tokens); se calibran en el iPhone de demo.
     static let planTimeoutSeconds: Double = 3.5
     static let statsTimeoutSeconds: Double = 8
-    static let kineTimeoutSeconds: Double = 15
+    /// La consulta se escribe en vivo (streaming): la persona ve el avance, el reloj puede ser más largo.
+    static let kineTimeoutSeconds: Double = 30
+    static let noteTimeoutSeconds: Double = 12
     static let planMaxTokens = 320
     static let statsMaxTokens = 220
-    static let kineMaxTokens = 600
+    static let kineMaxTokens = 700
+    static let noteMaxTokens = 220
     static let planTemperature = 0.5
 
     init() {}
@@ -117,8 +120,12 @@ nonisolated struct FoundationModelsCoach: Coach {
         await statsReadingResult(summary, profile: profile).value
     }
 
-    func kineSheet(_ summary: StatsSummary, profile: PlayerProfile) async throws -> KineSheet {
-        await kineSheetResult(summary, profile: profile).value
+    func kineConsult(_ facts: [KineFact], profile: PlayerProfile) async throws -> KineConsult {
+        await kineConsultResult(facts, profile: profile).value
+    }
+
+    func patientNote(_ text: String, profile: PlayerProfile) async throws -> PatientNote {
+        await patientNoteResult(text, profile: profile).value
     }
 
     /// Resultado + motivo del fallback (si lo hubo), para que el servicio lo registre.
@@ -201,28 +208,71 @@ nonisolated struct FoundationModelsCoach: Coach {
         }
     }
 
-    // MARK: - Hoja para el kine
+    // MARK: - Consulta con el kine (streaming)
 
-    func kineSheetResult(_ summary: StatsSummary, profile: PlayerProfile) async -> Outcome<KineSheet> {
-        let template = RuleBasedCoach.makeKineSheet(summary, profile: profile)
-        let prompt = CoachPrompts.kinePrompt(summary, profile: profile)
+    /// Lo que va llegando se entrega a `onPartial` (borradores); al final se valida en Swift. Ante
+    /// cualquier error o salida inválida devuelve la plantilla con la misma forma.
+    func kineConsultResult(_ facts: [KineFact], profile: PlayerProfile,
+                           onPartial: (@Sendable (KineConsultDraft) async -> Void)? = nil) async -> Outcome<KineConsult> {
+        let template = KineConsultRules.template(facts, profile: profile)
+        guard !facts.isEmpty else { return Outcome(value: template, error: .invalidOutput("sin hechos")) }
+        let prompt = CoachPrompts.kineConsultPrompt(facts, profile: profile)
         let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: Self.kineMaxTokens)
         do {
-            let raw = try await CoachTimeout.race(seconds: Self.kineTimeoutSeconds) {
-                let session = LanguageModelSession(instructions: CoachPrompts.instructions)
-                return try await session.respond(to: prompt, generating: HojaKine.self, options: options, contextOptions: ContextOptions(includeSchemaInPrompt: true)).content
+            let proposal = try await CoachTimeout.race(seconds: Self.kineTimeoutSeconds) {
+                let session = LanguageModelSession(instructions: CoachPrompts.kineInstructions)
+                let stream = session.streamResponse(to: prompt, generating: ConsultaKine.self, options: options,
+                                                    contextOptions: ContextOptions(includeSchemaInPrompt: true))
+                var lastRaw: GeneratedContent?
+                var lastDraft: KineConsultDraft?
+                for try await snapshot in stream {
+                    lastRaw = snapshot.rawContent
+                    let draft = snapshot.content.draft
+                    if draft != lastDraft {
+                        lastDraft = draft
+                        await onPartial?(draft)
+                    }
+                }
+                guard let lastRaw else { throw CoachModelError.invalidOutput("respuesta vacía") }
+                return try ConsultaKine(lastRaw).proposal
             }
-            let max = CoachText.maxBlockWords
-            guard let when = CoachText.clean(raw.cuandoLeDuele, maxWords: max),
-                  let did = CoachText.clean(raw.queHizo, maxWords: max),
-                  let worsens = CoachText.clean(raw.queLoEmpeora, maxWords: max),
-                  let goes = CoachText.clean(raw.comoVa, maxWords: max),
-                  let alerts = CoachText.clean(raw.alertas, maxWords: max) else {
-                return Outcome(value: template, error: .invalidOutput("bloque vacío o con texto prohibido"))
+            switch KineConsultRules.validate(proposal, facts: facts, profile: profile) {
+            case .success(let consult): return Outcome(value: consult, error: nil)
+            case .failure(let f): return Outcome(value: template, error: .invalidOutput(Self.describe(f)))
             }
-            return Outcome(value: KineSheet(period: template.period, whenItHurts: when, whatHeDid: did,
-                                            whatWorsens: worsens, howItGoes: goes, alerts: alerts,
-                                            backend: .foundationModels), error: nil)
+        } catch {
+            return Outcome(value: template, error: Self.map(error))
+        }
+    }
+
+    static func describe(_ f: KineConsultRules.Failure) -> String {
+        switch f {
+        case .noFacts: "sin hechos"
+        case .unknownFact(let id): "hecho desconocido \(id)"
+        case .duplicateFact(let id): "hecho repetido \(id)"
+        case .wrongCount(let n): "se esperaban 3 hallazgos y llegaron \(n)"
+        }
+    }
+
+    // MARK: - Nota del paciente
+
+    func patientNoteResult(_ text: String, profile: PlayerProfile) async -> Outcome<PatientNote> {
+        let template = KineConsultRules.noteTemplate(text)
+        guard !template.original.isEmpty else { return Outcome(value: template, error: nil) }
+        let prompt = CoachPrompts.notePrompt(text)
+        let options = GenerationOptions(samplingMode: .greedy, maximumResponseTokens: Self.noteMaxTokens)
+        do {
+            let raw = try await CoachTimeout.race(seconds: Self.noteTimeoutSeconds) {
+                let session = LanguageModelSession(instructions: CoachPrompts.noteInstructions)
+                return try await session.respond(to: prompt, generating: NotaPaciente.self, options: options,
+                                                 contextOptions: ContextOptions(includeSchemaInPrompt: true)).content
+            }
+            let note = KineConsultRules.validateNote(summary: raw.resumen, zones: raw.zonas, moments: raw.momentos,
+                                                     original: text)
+            guard !note.summary.isEmpty else {
+                return Outcome(value: template, error: .invalidOutput("resumen vacío o con texto prohibido"))
+            }
+            return Outcome(value: note, error: nil)
         } catch {
             return Outcome(value: template, error: Self.map(error))
         }
@@ -263,10 +313,12 @@ nonisolated struct FoundationModelsCoach: Coach {
     init() {}
     func plan(_ input: CoachInput) async throws -> PausePlan { RuleBasedCoach.makePlan(input) }
     func statsReading(_ summary: StatsSummary, profile: PlayerProfile) async throws -> StatsReading { RuleBasedCoach.makeReading(summary, profile: profile) }
-    func kineSheet(_ summary: StatsSummary, profile: PlayerProfile) async throws -> KineSheet { RuleBasedCoach.makeKineSheet(summary, profile: profile) }
+    func kineConsult(_ facts: [KineFact], profile: PlayerProfile) async throws -> KineConsult { KineConsultRules.template(facts, profile: profile) }
+    func patientNote(_ text: String, profile: PlayerProfile) async throws -> PatientNote { KineConsultRules.noteTemplate(text) }
     func planResult(_ input: CoachInput) async -> Outcome<PausePlan> { Outcome(value: RuleBasedCoach.makePlan(input), error: .unavailable) }
     func statsReadingResult(_ summary: StatsSummary, profile: PlayerProfile) async -> Outcome<StatsReading> { Outcome(value: RuleBasedCoach.makeReading(summary, profile: profile), error: .unavailable) }
-    func kineSheetResult(_ summary: StatsSummary, profile: PlayerProfile) async -> Outcome<KineSheet> { Outcome(value: RuleBasedCoach.makeKineSheet(summary, profile: profile), error: .unavailable) }
+    func kineConsultResult(_ facts: [KineFact], profile: PlayerProfile, onPartial: (@Sendable (KineConsultDraft) async -> Void)? = nil) async -> Outcome<KineConsult> { Outcome(value: KineConsultRules.template(facts, profile: profile), error: .unavailable) }
+    func patientNoteResult(_ text: String, profile: PlayerProfile) async -> Outcome<PatientNote> { Outcome(value: KineConsultRules.noteTemplate(text), error: .unavailable) }
 }
 
 #endif

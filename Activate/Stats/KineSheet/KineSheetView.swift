@@ -1,32 +1,69 @@
 import SwiftUI
 
-// Dueño: agente "kine-sheet".
-// Hoja para el kinesiólogo / la mutual. Vista PLANA: sin glassEffect ni materiales, porque
-// ImageRenderer la rasteriza tal cual para PNG/PDF. El texto lo redacta el coach (KineSheet);
-// las cifras las calcula Swift (KineSheetTable) y van siempre debajo: la narrativa nunca es la
-// única fuente. Copy de usted, sin diagnóstico.
+// Dueño: paquete "kine-ai".
+// Hoja para el kinesiólogo / la mutual tal como se comparte (PNG/PDF). Vista PLANA: sin glassEffect ni
+// materiales, porque ImageRenderer la rasteriza tal cual. Arriba "Para la consulta" (3 hallazgos con su
+// cifra de Swift, 3 preguntas y un foco), luego "En palabras de Marco" si escribió algo, y debajo las
+// cifras por turno que calcula Swift: la redacción nunca es la única fuente. Copy sin diagnóstico.
+
+/// Todo lo que necesita la hoja exportada (Sendable: viaja en `Transferable`).
+nonisolated struct KineSheetContent: Sendable, Hashable {
+    var sheet: KineSheet
+    var facts: [KineFact]
+    var summary: StatsSummary
+    var profile: PlayerProfile
+    /// Líneas de alarma calculadas desde los check-ins (vacío si no hay).
+    var extraAlerts: [String] = []
+    var generatedAt: Date = .now
+
+    /// Hallazgos con su hecho (los que perdieron su hecho, p. ej. caché antigua, no se muestran).
+    var findings: [(fact: KineFact, sentence: String)] {
+        sheet.consult.findings.compactMap { f in
+            facts.first { $0.id == f.factID }.map { ($0, f.sentence) }
+        }
+    }
+
+    var questions: [String] {
+        sheet.consult.questions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    var focus: String { sheet.consult.focus.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Nota con texto (nil si la persona no escribió nada).
+    var note: PatientNote? {
+        guard let n = sheet.note, !n.original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return n
+    }
+
+    var usedModel: Bool {
+        sheet.consult.backend == .foundationModels || note?.backend == .foundationModels
+    }
+
+    /// Origen del texto para el pie de la hoja.
+    var originLine: String {
+        var line = usedModel
+            ? "Hallazgos, preguntas y resumen redactados en el iPhone con Apple Intelligence; cifras calculadas por la app."
+            : "Texto de plantilla armado por la app; cifras calculadas por la app."
+        if sheet.edited { line += " La persona revisó y editó el texto antes de compartir." }
+        return line
+    }
+}
 
 struct KineSheetView: View {
-    let sheet: KineSheet
-    let summary: StatsSummary
-    let profile: PlayerProfile
-    /// Líneas de alerta calculadas fuera de la vista (check-ins con respuesta de alarma). Vacío si no hay.
-    var extraAlerts: [String] = []
+    let content: KineSheetContent
     /// Ancho fijo para exportar (390 pt). `nil` en pantalla: ocupa el ancho disponible.
     var width: CGFloat? = nil
-    /// Fecha de generación (cabecera y período).
-    var now: Date = .now
 
     private var isExport: Bool { width != nil }
+    private var profile: PlayerProfile { content.profile }
 
     var body: some View {
-        let table = KineSheetTable.build(summary: summary, profile: profile, extraAlerts: extraAlerts, now: now)
+        let table = KineSheetTable.build(summary: content.summary, profile: profile,
+                                         extraAlerts: content.extraAlerts, now: content.generatedAt)
         VStack(alignment: .leading, spacing: 18) {
             header(table)
-            narrative(title: "Cuándo le duele", symbol: "clock", text: sheet.whenItHurts)
-            narrative(title: "Qué hizo", symbol: "figure.walk", text: sheet.whatHeDid)
-            narrative(title: "Qué lo empeora", symbol: "arrow.down.right.circle", text: sheet.whatWorsens)
-            narrative(title: "Cómo va", symbol: "chart.line.uptrend.xyaxis", text: sheet.howItGoes)
+            consultSection
+            noteSection
             numbersByTurno(table)
             rdqItems(table)
             alerts(table)
@@ -56,7 +93,7 @@ struct KineSheetView: View {
                         .foregroundStyle(Paper.accent)
                     Text(profile.name)
                         .font(.title.weight(.heavy))
-                    Text("Operador CAEX · turno \(profile.roster.rawValue)")
+                    Text("Operador CAEX · \(profile.roster.rawValue) · \(profile.shiftType.title.lowercased())")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Paper.inkSecondary)
                 }
@@ -77,36 +114,118 @@ struct KineSheetView: View {
                     Text(table.periodText).fontWeight(.semibold)
                 }
                 GridRow {
-                    Text("Zona habitual").foregroundStyle(Paper.inkSecondary)
-                    Text(profile.usualZone.title).fontWeight(.semibold)
+                    Text(profile.allUsualZones.count > 1 ? "Zonas habituales" : "Zona habitual").foregroundStyle(Paper.inkSecondary)
+                    Text(PainZone.listTitle(profile.allUsualZones)).fontWeight(.semibold)
                 }
                 GridRow {
                     Text("Generada").foregroundStyle(Paper.inkSecondary)
-                    Text(KineSheetFormat.longDate(now)).fontWeight(.semibold)
+                    Text(KineSheetFormat.longDate(content.generatedAt)).fontWeight(.semibold)
                 }
             }
             .font(.footnote)
         }
     }
 
-    // MARK: Bloques del coach
+    // MARK: Para la consulta
 
-    private func narrative(title: String, symbol: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(Paper.accent)
-                Text(title)
-                    .font(.headline)
+    @ViewBuilder
+    private var consultSection: some View {
+        let findings = content.findings
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("Para la consulta",
+                          subtitle: content.sheet.consult.backend == .foundationModels
+                              ? "Lo más relevante, elegido con Apple Intelligence a partir de las cifras de la app"
+                              : "Lo más relevante según las cifras de la app")
+            if findings.isEmpty {
+                Text("Aún no hay datos suficientes para destacar hallazgos.")
+                    .font(.footnote)
+                    .foregroundStyle(Paper.inkSecondary)
             }
-            Text(text.isEmpty ? "Sin datos para este bloque." : text)
-                .font(.subheadline)
-                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(findings.enumerated()), id: \.offset) { _, item in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(item.fact.title)
+                            .font(.subheadline.weight(.bold))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Text(item.fact.value)
+                            .font(.caption.weight(.bold))
+                            .monospacedDigit()
+                            .foregroundStyle(Paper.accent)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Paper.accentSoft, in: Capsule())
+                            .fixedSize()
+                    }
+                    Text(item.sentence)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !item.fact.detail.isEmpty && item.fact.detail != item.sentence {
+                        Text(item.fact.detail)
+                            .font(.caption2)
+                            .foregroundStyle(Paper.inkSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Paper.card, in: .rect(cornerRadius: 12))
+            }
+
+            let questions = content.questions
+            if !questions.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Preguntas de \(profile.name)").font(.subheadline.weight(.bold))
+                    ForEach(Array(questions.enumerated()), id: \.offset) { index, q in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text("\(index + 1).").monospacedDigit().foregroundStyle(Paper.accent)
+                            Text(q).fixedSize(horizontal: false, vertical: true)
+                        }
+                        .font(.subheadline)
+                    }
+                }
+                .padding(.top, 4)
+            }
+
+            if !content.focus.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Foco sugerido para la próxima sesión").font(.subheadline.weight(.bold))
+                    Text(content.focus)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 4)
+            }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Paper.card, in: .rect(cornerRadius: 14))
+    }
+
+    // MARK: En palabras de Marco
+
+    @ViewBuilder
+    private var noteSection: some View {
+        if let note = content.note {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("En palabras de \(profile.name)")
+                let summary = note.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !summary.isEmpty {
+                    Text(summary)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                let tags = note.zones.map(\.title) + note.moments.map(\.title)
+                if !tags.isEmpty {
+                    PaperTags(tags: tags)
+                }
+                Text("«\(note.original)»")
+                    .font(summary.isEmpty ? .subheadline : .footnote)
+                    .italic()
+                    .foregroundStyle(summary.isEmpty ? Paper.ink : Paper.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Paper.card, in: .rect(cornerRadius: 12))
+        }
     }
 
     // MARK: Tabla por turno (Swift)
@@ -170,7 +289,7 @@ struct KineSheetView: View {
             } else {
                 Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                     GridRow {
-                        Text("Debido a su dolor de espalda:")
+                        Text(RDQ6.stem)
                             .font(.caption.weight(.bold))
                             .foregroundStyle(Paper.inkSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -198,27 +317,22 @@ struct KineSheetView: View {
                 Text("Cantidad de días con la frase marcada «Sí» (turno actual y total del período).")
                     .font(.caption2)
                     .foregroundStyle(Paper.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    // MARK: Alertas
+    // MARK: Alertas (Swift)
 
     @ViewBuilder
     private func alerts(_ table: KineSheetTable) -> some View {
-        let coachText = sheet.alerts.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !coachText.isEmpty || !table.alerts.isEmpty {
+        if !table.alerts.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.subheadline.weight(.bold))
-                        .foregroundStyle(Theme.danger)
+                        .foregroundStyle(Paper.danger)
                     Text("Alertas").font(.headline)
-                }
-                if !coachText.isEmpty {
-                    Text(coachText)
-                        .font(.subheadline)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 ForEach(Array(table.alerts.enumerated()), id: \.offset) { _, line in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -230,8 +344,8 @@ struct KineSheetView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.danger.opacity(0.08), in: .rect(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.danger.opacity(0.35), lineWidth: 1))
+            .background(Paper.danger.opacity(0.07), in: .rect(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Paper.danger.opacity(0.3), lineWidth: 1))
         }
     }
 
@@ -243,20 +357,14 @@ struct KineSheetView: View {
             Text("Datos verificados por sensores y firmados en el teléfono. Nada sale del dispositivo sin que la persona lo comparta.")
                 .font(.caption.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
+            Text(content.originLine)
+                .font(.caption2)
+                .foregroundStyle(Paper.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             Text(RDQ6.citation)
                 .font(.caption2)
                 .foregroundStyle(Paper.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(backendLine)
-                .font(.caption2)
-                .foregroundStyle(Paper.inkSecondary)
-        }
-    }
-
-    private var backendLine: String {
-        switch sheet.backend {
-        case .foundationModels: "Texto redactado por el modelo local del teléfono; cifras calculadas por la app."
-        case .rules: "Texto de plantilla; cifras calculadas por la app."
         }
     }
 
@@ -282,14 +390,71 @@ struct KineSheetView: View {
     }
 }
 
+/// Etiquetas planas (zonas y momentos) en filas que se parten solas.
+private struct PaperTags: View {
+    let tags: [String]
+    var body: some View {
+        FlowRows(spacing: 6) {
+            ForEach(tags, id: \.self) { tag in
+                Text(tag)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Paper.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Paper.accentSoft, in: Capsule())
+            }
+        }
+    }
+}
+
+/// Layout de filas que se parten (chips). Plano: sirve en pantalla y en ImageRenderer.
+struct FlowRows: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, widest: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                y += rowHeight + spacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return CGSize(width: min(widest, maxWidth), height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                y += rowHeight + spacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
 /// Paleta fija de "papel": la hoja se ve igual en pantalla (claro u oscuro) y en el PNG/PDF.
+/// Acento azul fijo (variante clara de `Theme.accent`): sin cobre en la hoja.
 private enum Paper {
     static let background = Color.white
     static let ink = Color(white: 0.10)
-    static let inkSecondary = Color(white: 0.42)
+    static let inkSecondary = Color(white: 0.40)
     static let rule = Color(white: 0.86)
     static let card = Color(white: 0.955)
-    static let accent = Theme.copperDeep
+    static let accent = Color(red: 0.13, green: 0.38, blue: 0.84)
+    static let accentSoft = Color(red: 0.13, green: 0.38, blue: 0.84).opacity(0.10)
+    static let danger = Color(red: 0.78, green: 0.16, blue: 0.14)
 }
 
 // MARK: - Formato (es-CL)
@@ -422,7 +587,10 @@ nonisolated struct KineSheetTable: Sendable, Equatable {
         let periodText: String
         if let first = shown.first, let last = shown.last,
            let start = work.date(forKey: first.turnoKey), let lastStart = work.date(forKey: last.turnoKey) {
-            let end = calendar.date(byAdding: .day, value: max(0, last.workDays - 1), to: lastStart) ?? lastStart
+            let turnoEnd = calendar.date(byAdding: .day, value: max(0, last.workDays - 1), to: lastStart) ?? lastStart
+            // El turno en curso termina "hoy" en la hoja (no en una fecha futura).
+            let today = work.workDate(for: now)
+            let end = last.turnoKey == currentKey && today >= lastStart ? min(turnoEnd, today) : turnoEnd
             let count = shown.count
             periodText = "Del \(KineSheetFormat.dayMonth(start, calendar: calendar)) al \(KineSheetFormat.dayMonthYear(end, calendar: calendar)) · \(count) \(count == 1 ? "turno" : "turnos")"
         } else {
@@ -466,137 +634,36 @@ nonisolated struct KineSheetTable: Sendable, Equatable {
     }
 }
 
-// MARK: - Plantilla (Swift) mientras llega el coach o cuando deja campos vacíos
 
-nonisolated enum KineSheetFallback {
-    /// Hoja completa redactada por reglas con las mismas cifras de la tabla.
-    static func sheet(summary: StatsSummary, profile: PlayerProfile, table: KineSheetTable) -> KineSheet {
-        KineSheet(period: table.periodText,
-                  whenItHurts: whenItHurts(summary: summary, profile: profile, table: table),
-                  whatHeDid: whatHeDid(summary: summary, table: table),
-                  whatWorsens: whatWorsens(summary: summary),
-                  howItGoes: howItGoes(summary: summary, table: table),
-                  alerts: "",
-                  backend: .rules)
-    }
-
-    /// Campo por campo: el texto del coach si trae algo; si no, la plantilla. Conserva el backend del coach.
-    static func merge(_ coach: KineSheet, fallback: KineSheet) -> KineSheet {
-        func pick(_ a: String, _ b: String) -> String {
-            let t = a.trimmingCharacters(in: .whitespacesAndNewlines)
-            return t.isEmpty ? b : t
-        }
-        return KineSheet(period: pick(coach.period, fallback.period),
-                         whenItHurts: pick(coach.whenItHurts, fallback.whenItHurts),
-                         whatHeDid: pick(coach.whatHeDid, fallback.whatHeDid),
-                         whatWorsens: pick(coach.whatWorsens, fallback.whatWorsens),
-                         howItGoes: pick(coach.howItGoes, fallback.howItGoes),
-                         alerts: coach.alerts.trimmingCharacters(in: .whitespacesAndNewlines),
-                         backend: coach.backend)
-    }
-
-    static func whenItHurts(summary: StatsSummary, profile: PlayerProfile, table: KineSheetTable) -> String {
-        var parts: [String] = ["Zona habitual: \(profile.usualZone.title.lowercased())."]
-        var hasData = false
-        if let current = summary.currentTurno, let mean = current.meanRDQ {
-            hasData = true
-            let max = current.maxRDQ.map { " (máximo \($0))" } ?? ""
-            parts.append("RDQ-6 promedio del turno actual: \(KineSheetFormat.decimal(mean)) de \(RDQ6.maxScore)\(max).")
-        }
-        if let today = summary.todayRDQ {
-            hasData = true
-            parts.append("Hoy: \(today) de \(RDQ6.maxScore).")
-        }
-        if let top = table.items.max(by: { $0.total < $1.total }), top.total > 0 {
-            hasData = true
-            parts.append("Frase más marcada: «\(top.text)» (\(top.total) \(top.total == 1 ? "día" : "días")).")
-        }
-        if !hasData {
-            parts.append("Sin cuestionarios RDQ-6 registrados en el período.")
-        }
-        return parts.joined(separator: " ")
-    }
-
-    static func whatHeDid(summary: StatsSummary, table: KineSheetTable) -> String {
-        let pauses = table.turnos.reduce(0) { $0 + $1.countedPauses }
-        let steps = table.turnos.reduce(0) { $0 + $1.verifiedSteps }
-        let reps = table.turnos.reduce(0) { $0 + $1.verifiedReps }
-        guard pauses > 0 || steps > 0 || reps > 0 else {
-            return "Sin pausas verificadas en el período."
-        }
-        let count = table.turnos.count
-        var parts = ["\(KineSheetFormat.int(pauses)) \(pauses == 1 ? "pausa verificada" : "pausas verificadas") en \(count) \(count == 1 ? "turno" : "turnos")."]
-        parts.append("\(KineSheetFormat.int(steps)) pasos y \(KineSheetFormat.int(reps)) repeticiones contadas por sensores.")
-
-        var perKind: [ActivityKind: Int] = [:]
-        for session in summary.recentSessions where session.level >= .reduced {
-            for kind in session.activityKinds where kind != .stroop {
-                perKind[kind, default: 0] += 1
-            }
-        }
-        let top = perKind.sorted { $0.value == $1.value ? $0.key.rawValue < $1.key.rawValue : $0.value > $1.value }.prefix(4)
-        if !top.isEmpty {
-            parts.append("Ejercicios recientes: " + top.map { "\(clinicalName($0.key)) ×\($0.value)" }.joined(separator: ", ") + ".")
-        }
-        return parts.joined(separator: " ")
-    }
-
-    static func whatWorsens(summary: StatsSummary) -> String {
-        let hints = summary.worsensHints.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        guard !hints.isEmpty else { return "Sin patrones claros todavía: faltan registros." }
-        return hints.map { $0.hasSuffix(".") ? $0 : $0 + "." }.joined(separator: " ")
-    }
-
-    static func howItGoes(summary: StatsSummary, table: KineSheetTable) -> String {
-        var parts: [String] = []
-        let better = table.turnos.reduce(0) { $0 + $1.betterCount }
-        let same = table.turnos.reduce(0) { $0 + $1.sameCount }
-        let worse = table.turnos.reduce(0) { $0 + $1.worseCount }
-        let total = better + same + worse
-        if total > 0 {
-            parts.append("Después de la pausa: Mejor \(better), Igual \(same), Peor \(worse) (\(KineSheetFormat.percent(Double(better) / Double(total))) Mejor).")
-        }
-        if let current = summary.currentTurno?.meanRDQ, let previous = summary.previousTurno?.meanRDQ {
-            parts.append("RDQ-6 promedio: \(KineSheetFormat.decimal(previous)) en el turno anterior, \(KineSheetFormat.decimal(current)) en el actual.")
-        }
-        if summary.streak > 0 {
-            parts.append("Racha actual: \(summary.streak) \(summary.streak == 1 ? "día" : "días") con pausa.")
-        }
-        guard !parts.isEmpty else { return "Sin datos suficientes para ver una tendencia." }
-        return parts.joined(separator: " ")
-    }
-
-    /// Nombre clínico para la hoja (el catálogo usa nombres coloquiales de faena).
-    static func clinicalName(_ kind: ActivityKind) -> String {
-        switch kind {
-        case .extensionLumbar: "Extensión lumbar de pie"
-        case .pasos: "Caminata"
-        case .sentadilla: "Sentadilla parcial"
-        case .cuello: "Movilidad cervical"
-        case .respiracion: "Respiración diafragmática"
-        case .ojos: "Descanso visual y parpadeo"
-        case .stroop: "Prueba de reflejos"
-        }
-    }
-}
-
-// MARK: - Caché JSON en SaveData.lastKineSheetJSON
+// MARK: - Caché JSON en SaveData.lastKineSheetJSON (formato 2)
 
 nonisolated enum KineSheetCache {
     static func encode(_ sheet: KineSheet) -> String? {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(sheet) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
+    /// Tolerante: JSON roto, el formato antiguo (5 bloques en prosa) u otra versión → nil (se ignora).
     static func decode(_ json: String?) -> KineSheet? {
         guard let json, let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(KineSheet.self, from: data)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let sheet = try? decoder.decode(KineSheet.self, from: data),
+              sheet.format == KineSheet.currentFormat else { return nil }
+        return sheet
+    }
+
+    /// La hoja cacheada sirve si todos sus hallazgos siguen teniendo su hecho.
+    static func usable(_ sheet: KineSheet, facts: [KineFact]) -> Bool {
+        let ids = Set(facts.map(\.id))
+        return !sheet.consult.findings.isEmpty && sheet.consult.findings.allSatisfy { ids.contains($0.factID) }
     }
 }
 
-// MARK: - Datos de muestra para previews
+// MARK: - Datos de muestra para previews y pruebas de render
 
 #if DEBUG
 enum KineSheetSample {
@@ -613,19 +680,44 @@ enum KineSheetSample {
                               meanRDQ: 2.5, maxRDQ: 4, itemFrequency: [2, 0, 1, 4, 0, 2], betterCount: 5, sameCount: 1, worseCount: 0,
                               verifiedSteps: 1540, verifiedReps: 40, maxStreak: 4, stroopMedianRTms: nil, blinksPerMinute: nil, neckMaxYaw: nil)
         return StatsSummary(currentTurno: t3, previousTurno: t2, turnos: [t1, t2, t3], streak: 4, totalCountedPauses: 17, todayRDQ: 2,
-                            recentSessions: [], worsensHints: ["Le duele más al bajar del camión", "El día 1 del turno es el más cargado"],
+                            recentSessions: [], worsensHints: ["Le duele más al bajar del camión"],
                             historyLines: [], currentTurnoDays: [])
     }()
 
-    static var fallback: KineSheet {
-        KineSheetFallback.sheet(summary: summary, profile: profile,
-                                table: KineSheetTable.build(summary: summary, profile: profile))
+    static let facts: [KineFact] = [
+        KineFact(id: "rdq_tendencia", title: "Espalda turno a turno (RDQ-6)", value: "4,2 → 3,4 → 2,5",
+                 detail: "RDQ-6 promedio por turno (0 a 6, menos es mejor): 4,2 → 3,4 → 2,5. Este turno bajó 0,9 puntos frente al anterior.",
+                 gist: "El puntaje de dolor de espalda viene bajando de un turno a otro.",
+                 question: "Mi espalda viene mejor, ¿sigo con los mismos ejercicios o subo la carga?",
+                 focus: "Revisar los ejercicios que le están ayudando y ver si conviene subir la carga."),
+        KineFact(id: "contexto_dominante", title: "Dónde le duele más", value: "Al bajar · 3 de 5",
+                 detail: "Registros «Me duele ahora»: al bajar del camión 3, en la cabina 1, en el bus 1. Zonas: espalda baja.",
+                 gist: "Le duele más al bajar del camión que en otros momentos.",
+                 question: "¿Qué hago cuando me duele al bajar del camión?",
+                 focus: "Trabajar cómo bajar del camión sin cargar la espalda."),
+        KineFact(id: "mejora_post", title: "Mejor después de la pausa", value: "12 de 16 pausas",
+                 detail: "Después de la pausa respondió Mejor 12, Igual 4 y Peor 0 veces (75 % Mejor).",
+                 gist: "Después de la pausa casi siempre dice sentirse mejor.",
+                 question: "La pausa me ayuda, ¿qué más puedo hacer en los turnos de 12 horas?",
+                 focus: "Reforzar las pausas que le funcionan durante el turno."),
+    ]
+
+    static var sheet: KineSheet {
+        KineSheet(consult: KineConsultRules.template(facts, profile: profile),
+                  note: PatientNote(original: "Me duele la espalda al bajar del camión y en la noche me cuesta dormir.",
+                                    summary: "El paciente cuenta que le duele la espalda al bajar del camión y que de noche le cuesta dormir.",
+                                    zones: [.lumbar], moments: [.salida, .campamento], backend: .foundationModels),
+                  factsSignature: KineConsultRules.signature(facts), preparedAt: .now)
+    }
+
+    static var content: KineSheetContent {
+        KineSheetContent(sheet: sheet, facts: facts, summary: summary, profile: profile)
     }
 }
 
 #Preview("Hoja (plantilla)") {
     ScrollView {
-        KineSheetView(sheet: KineSheetSample.fallback, summary: KineSheetSample.summary, profile: KineSheetSample.profile)
+        KineSheetView(content: KineSheetSample.content)
             .padding(16)
     }
     .background(Color(.systemBackground))
