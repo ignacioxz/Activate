@@ -119,7 +119,7 @@ struct StatsView: View {
         if isRestDay { return "Bajada · racha a salvo" }
         let day = store.calendar.dayInBlock(for: .now)
         var text = "Día \(day) de \(store.profile.roster.workDays)"
-        if summary.streak > 0 { text += " · racha \(summary.streak) días" }
+        if summary.streak > 0 { text += " · racha \(summary.streak) \(summary.streak == 1 ? "día" : "días")" }
         return text
     }
 

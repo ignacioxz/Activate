@@ -105,6 +105,8 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
     @ObservationIgnored private var verifierStarted = false
     @ObservationIgnored private var lastSampleT: Double = 0
     @ObservationIgnored private var waiters: [CheckedContinuation<Void, Never>] = []
+    /// Grabación de diagnóstico (solo DEBUG y fuente en vivo).
+    @ObservationIgnored private var recording: SampleRecording? = nil
 
     /// - Parameters:
     ///   - assignment: actividad y meta.
@@ -136,7 +138,12 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
             startError = (error as? VerificationError) ?? .sensorUnavailable(String(describing: error))
             progress.gate = .blocked(reason: Self.blockedReason(for: startError))
             cue = Cue(text: "No pude usar el sensor.", symbol: "exclamationmark.triangle")
+            Diagnostics.log("runner \(assignment.kind.rawValue) no arrancó: \(String(describing: startError))")
             return
+        }
+        Diagnostics.log("runner \(assignment.kind.rawValue) arranca fuente=\(source.level.rawValue) meta=\(assignment.target)")
+        if source.level == .live {
+            recording = SampleRecording(kindID: assignment.kind.rawValue, target: assignment.target)
         }
 
         streamTask = Task { [weak self] in
@@ -196,6 +203,7 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
         let t = timeOf?(sample) ?? (sample as? any TimedSample)?.t ?? wallElapsed
         lastSampleT = max(lastSampleT, t)
         sampleCount += 1
+        recording?.sample(sample, t: t)
 
         let events = verifier.ingest(sample, at: t)
         syncProgress(at: t)
@@ -220,6 +228,9 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
         case .cue(let c): cue = c
         case .anomaly(let a): anomalies.append(a)
         case .completed: break
+        }
+        if let recording {
+            if case .progress = event {} else { recording.event(String(describing: event), t: t) }
         }
         recentEvents.append(event)
         if recentEvents.count > Self.recentEventsLimit {
@@ -273,6 +284,10 @@ final class ActivityRunner<V: ActivityVerifier, S: SampleSource>: ActivityRunnin
         outcome = out
         level = lvl
         result = ActivityResult(outcome: out, level: lvl, witness: Verified())
+        let summary = "fin \(assignment.kind.rawValue) motivo=\(reason) logrado=\(out.achieved)/\(assignment.target) completo=\(out.completed) nivel=\(lvl) muestras=\(sampleCount) anomalías=\(out.anomalies.map { "\($0.kind)" }.joined(separator: ","))"
+        Diagnostics.log("runner " + summary)
+        recording?.close(summary, t: t)
+        recording = nil
 
         let pending = waiters
         waiters = []

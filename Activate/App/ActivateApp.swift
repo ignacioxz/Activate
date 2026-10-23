@@ -9,6 +9,7 @@ struct ActivateApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        Diagnostics.log("app arranca build=\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")")
         let s = AppStore()
         #if DEBUG
         // Argumentos de QA (-qa-seed, -qa-outdoor…): se aplican antes de crear los servicios.
@@ -41,7 +42,16 @@ struct ActivateApp: App {
                 // La pantalla no se bloquea mientras la app está abierta (pedido del usuario): las pausas
                 // se hacen con el teléfono en la mano o apoyado y sin tocarlo. Al salir se restaura.
                 .onAppear { ScreenAwake.update(for: .active) }
-                .onChange(of: scenePhase) { _, phase in ScreenAwake.update(for: phase) }
+                .onChange(of: scenePhase) { _, phase in
+                    ScreenAwake.update(for: phase)
+                    Diagnostics.log("app escena=\(phase)")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                    Diagnostics.log("app aviso de memoria")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+                    Diagnostics.log("app temperatura=\(ProcessInfo.processInfo.thermalState.rawValue)")
+                }
         }
     }
 

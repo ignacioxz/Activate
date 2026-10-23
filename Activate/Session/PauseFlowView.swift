@@ -27,17 +27,22 @@ struct PauseFlowView: View {
         .tint(Theme.accent)
         .onAppear {
             if coordinator == nil {
+                Diagnostics.log("pausa abierta momento=\(moment) rápida=\(quick)")
                 coordinator = PauseCoordinator(moment: moment, quick: quick, store: store, game: game, coach: coach)
             }
         }
         .onChange(of: scenePhase) { _, phase in
+            Diagnostics.log("pausa escena=\(phase) etapa=\(String(describing: coordinator?.stage))")
             switch phase {
             case .background: coordinator?.appWentToBackground()
             case .active: coordinator?.appBecameActive()
             default: break
             }
         }
-        .onDisappear { coordinator?.cancel() }
+        .onDisappear {
+            Diagnostics.log("pausa desaparece etapa=\(String(describing: coordinator?.stage))")
+            coordinator?.cancel()
+        }
         .interactiveDismissDisabled()
     }
 
@@ -53,6 +58,25 @@ private struct PauseFlowContent: View {
     let onClose: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// La X durante los ejercicios pide confirmación: con el teléfono en las manos o en el bolsillo
+    /// es fácil tocarla sin querer, y salir pierde lo que lleva la pausa.
+    @State private var confirmingClose = false
+
+    /// Etapas en que salir pierde ejercicios ya hechos.
+    static func closeNeedsConfirmation(_ stage: PauseCoordinator.Stage) -> Bool {
+        switch stage {
+        case .activity, .postCheck: true
+        case .checkIn, .alarm, .stopped, .planning, .reward: false
+        }
+    }
+
+    /// Cierre con origen anotado en el registro de diagnóstico.
+    private func closing(_ origin: String) -> () -> Void {
+        { [coordinator, onClose] in
+            Diagnostics.log("cerrar desde \(origin) etapa=\(coordinator.stage)")
+            onClose()
+        }
+    }
 
     private var name: String { coordinator.profileName }
 
@@ -66,13 +90,30 @@ private struct PauseFlowContent: View {
         }
         // Reduce Motion: sin deslizamientos ni animación entre etapas (solo aparece la nueva).
         .animation(reduceMotion ? nil : .smooth, value: coordinator.stage)
+        .onChange(of: coordinator.stage) { old, new in
+            Diagnostics.log("etapa \(old) → \(new)")
+            if !Self.closeNeedsConfirmation(new) { confirmingClose = false }
+        }
+        .confirmationDialog("¿Salir de la pausa?", isPresented: $confirmingClose, titleVisibility: .visible) {
+            Button("Salir", role: .destructive) { closing("X confirmada")() }
+            Button("Seguir con la pausa", role: .cancel) { Diagnostics.log("X: siguió con la pausa") }
+        } message: {
+            Text("Lo que lleva de esta pausa no se guarda.")
+        }
     }
 
     // MARK: Encabezado: cerrar + barra de avance
 
     private var header: some View {
         HStack(spacing: 14) {
-            Button("Cerrar", systemImage: "xmark") { onClose() }
+            Button("Cerrar", systemImage: "xmark") {
+                if Self.closeNeedsConfirmation(coordinator.stage) {
+                    Diagnostics.log("X tocada etapa=\(coordinator.stage): pide confirmación")
+                    confirmingClose = true
+                } else {
+                    closing("X")()
+                }
+            }
                 .labelStyle(.iconOnly)
                 .font(.headline)
                 .foregroundStyle(.primary)
@@ -130,7 +171,7 @@ private struct PauseFlowContent: View {
                 .transition(stageTransition)
 
         case .stopped:
-            StopCardView(name: name, reason: coordinator.decision?.reason, onClose: onClose)
+            StopCardView(name: name, reason: coordinator.decision?.reason, onClose: closing("tarjeta de alto"))
                 .transition(stageTransition)
 
         case .planning:
@@ -143,7 +184,7 @@ private struct PauseFlowContent: View {
                      cameraBlocked: coordinator.cameraBlocked,
                      excluded: coordinator.excluded,
                      onStart: { coordinator.startActivities() },
-                     onClose: onClose)
+                     onClose: closing("plan"))
                 .transition(stageTransition)
 
         case .activity(let index):
@@ -193,7 +234,7 @@ private struct PauseFlowContent: View {
 
         case .reward:
             if let reward = coordinator.reward {
-                CelebrationView(reward: reward, post: coordinator.post, onClose: onClose)
+                CelebrationView(reward: reward, post: coordinator.post, onClose: closing("celebración"))
                     .safeAreaInset(edge: .top, spacing: 0) {
                         // Simulador: la pausa no usó sensores reales y no suma.
                         if coordinator.session?.simulated == true {

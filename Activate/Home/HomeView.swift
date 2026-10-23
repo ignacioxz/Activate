@@ -22,7 +22,10 @@ struct HomeView: View {
             content(now: context.date)
         }
         .appScreen()
-        .fullScreenCover(item: $activeMoment, onDismiss: { DailyNotice.refresh(store: store) }) { moment in
+        .fullScreenCover(item: $activeMoment, onDismiss: {
+            Diagnostics.log("Hoy: la pausa se cerró")
+            DailyNotice.refresh(store: store)
+        }) { moment in
             PauseFlowView(moment: moment, quick: quickPause)
         }
         .sheet(isPresented: $showPainSheet) {
