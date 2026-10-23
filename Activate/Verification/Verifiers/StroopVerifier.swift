@@ -248,7 +248,7 @@ nonisolated struct StroopVerifier: ActivityVerifier {
         phase = .running
         testStartT = t
         current = 0
-        progress.hint = "Toque el color de la tinta"
+        progress.hint = "Toque el color, no lo que dice"
         guard let cue = currentCue else {
             phase = .done
             return [.completed]

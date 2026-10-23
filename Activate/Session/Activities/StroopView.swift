@@ -78,7 +78,7 @@ struct StroopView: View {
             switch stage {
             case .intro:
                 VStack(spacing: 14) {
-                    Text("Toque el color de la tinta")
+                    Text("Toque el color, no lo que dice")
                         .font(.title2.weight(.bold))
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -104,7 +104,7 @@ struct StroopView: View {
                         .lineLimit(1)
                         .foregroundStyle(Self.inkColor(cue.ink))
                         .padding(.horizontal, 12)
-                        .accessibilityLabel("Palabra \(cue.wordText), tinta \(cue.inkText)")
+                        .accessibilityLabel("Palabra \(cue.wordText), escrita en color \(cue.inkText)")
                 }
             case .done:
                 darkCard {

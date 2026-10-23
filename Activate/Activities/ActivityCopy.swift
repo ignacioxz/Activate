@@ -72,7 +72,7 @@ nonisolated extension ActivityKind {
         case .ojos:
             "Mire el teléfono y parpadee completo: cierre bien los dos ojos y ábralos. Los parpadeos a medias no cuentan, vaya sin apuro."
         case .stroop:
-            "Toque el color de la tinta, no la palabra escrita. Responda rápido pero sin adivinar, durante un minuto."
+            "Toque el color en que está escrita la palabra, no lo que dice. Si ve ROJO escrito en azul, toque azul. Responda rápido pero sin adivinar, durante un minuto."
         }
     }
 
@@ -88,7 +88,7 @@ nonisolated extension ActivityKind {
     /// Pasos del gating en vivo; las actividades de pantalla afinan el del bloque.
     var gatingCopy: [String] {
         switch self {
-        case .stroop: ["Pantalla en la mano.", "Toque el color, no la palabra.", "3 · 2 · 1"]
+        case .stroop: ["Pantalla en la mano.", "Toque el color, no lo que dice.", "3 · 2 · 1"]
         case .sentadilla: ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Baje como si se sentara."]
         case .pararseSentarse: ["Siéntese con el teléfono frente al pecho.", "Quieto un segundo.", "Párese sin usar las manos."]
         case .extensionLumbar: ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Inclínese hacia atrás."]
