@@ -241,17 +241,25 @@ nonisolated enum ReplayFixtures {
 
     // MARK: Cuello
 
-    /// Segundos de cara neutra antes del primer movimiento: calibración (0,5 s) + retardo máximo de consigna (2,5 s) + margen.
-    static let neckLeadInSeconds: Double = NeckVerifier.calibrationSeconds + NeckVerifier.cueDelayRange.upperBound + 1
-    /// Pausa en el centro entre movimientos: mayor que el retardo máximo de la siguiente consigna.
-    static let neckPauseSeconds: Double = NeckVerifier.cueDelayRange.upperBound + 0.6
+    /// Segundos de cara quieta antes del primer movimiento: la calibración necesita 0,8 s de cabeza
+    /// quieta (más la ventana de velocidad); el resto es margen para leer la primera consigna.
+    static let neckLeadInSeconds: Double = NeckVerifier.calibrationStableSeconds + 1.7
+    /// Pausa en el centro entre movimientos: mayor que la pausa máxima antes de la siguiente consigna.
+    static let neckPauseSeconds: Double = NeckVerifier.cuePauseRange.upperBound + 0.5
+    /// Amplitud de cada movimiento sobre su umbral (un operador real pasa holgado la meta).
+    static let neckMarginDegrees: Double = 8
 
-    /// Secuencia que sigue el plan de consignas del verificador (misma semilla), con pausas que dejan
-    /// llegar cada consigna antes del movimiento.
+    /// Secuencia que sigue el plan de consignas del verificador (misma semilla): cara quieta para
+    /// calibrar y, por cada consigna, ida lenta, pausa, vuelta al centro y descanso.
     static func neck(plan: [NeckVerifier.Direction]) -> [FaceSample] {
         var options = FixtureSynth.NeckOptions()
         options.leadInSeconds = neckLeadInSeconds
         options.pauseSeconds = neckPauseSeconds
+        options.yawDegrees = NeckVerifier.turnThreshold + neckMarginDegrees
+        options.pitchDegrees = max(NeckVerifier.upThreshold, NeckVerifier.downThreshold) + neckMarginDegrees
+        options.rollDegrees = NeckVerifier.tiltThreshold + neckMarginDegrees
+        options.rampSeconds = 0.6
+        options.holdSeconds = 0.35
         options.trailSeconds = 1
         return FixtureSynth.neckSequence(plan.map(neckMove), options: options)
     }
@@ -271,27 +279,14 @@ nonisolated enum ReplayFixtures {
 
     // MARK: Ojos
 
-    /// Grados de desvío de la mirada en el descanso visual (≥ θ₀ + 12°).
-    static let eyesAwayDegrees: Double = 25
-
-    /// Parpadeos completos hasta la meta, cara neutra para calibrar la mirada y luego mirada lejos
-    /// hasta cubrir la meta de descanso (20 s reales / 8 s demo).
+    /// Parpadeos completos hasta la meta sobre una cara que mira al teléfono (sin fase de mirar lejos).
     static func eyes(verifier: EyeRestVerifier) -> [FaceSample] {
-        eyes(target: verifier.spec.target, farGazeSeconds: verifier.farGazeGoal)
+        eyes(target: verifier.spec.target)
     }
 
-    static func eyes(target: Int, farGazeSeconds: Double) -> [FaceSample] {
-        var blinkOptions = FixtureSynth.BlinkOptions()
-        blinkOptions.trailSeconds = EyeRestVerifier.gazeCalibrationSeconds + 1.5
-        let blinks = FixtureSynth.blinks(count: target, options: blinkOptions)
-        let dt = 1 / blinkOptions.face.fps
-        let offset = (blinks.last?.t ?? 0) + dt
-        let gaze = FixtureSynth.gaze(seconds: farGazeSeconds + EyeRestVerifier.graceSeconds + 2,
-                                     awayDegrees: eyesAwayDegrees).map { sample in
-            var s = sample
-            s.t += offset
-            return s
-        }
-        return blinks + gaze
+    static func eyes(target: Int) -> [FaceSample] {
+        var options = FixtureSynth.BlinkOptions()
+        options.trailSeconds = 1.5
+        return FixtureSynth.blinks(count: target, options: options)
     }
 }

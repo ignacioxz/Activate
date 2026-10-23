@@ -10,17 +10,19 @@ import simd
 
 nonisolated enum FaceSampleMath {
     /// Ángulos de Tait-Bryan (grados) de la rotación `R = Ry(yaw) · Rx(−pitch) · Rz(roll)` de una transform de cara.
-    /// Convención: yaw > 0 = la nariz gira hacia +X (la izquierda del usuario con la cámara al frente);
-    /// pitch > 0 = la nariz sube (mira arriba); roll > 0 = el lado izquierdo de la cara sube (oreja derecha al hombro).
+    /// Sistema de la cara de ARKit: +X = izquierda de la propia cara (derecha de quien la mira), +Y = arriba,
+    /// +Z = sale de la cara por la nariz (hacia la cámara). Columnas de la transform = ejes de la cara en el mundo.
+    /// - yaw > 0: la nariz gira hacia +X → la persona gira hacia SU izquierda.
+    /// - pitch > 0: la nariz sube → mira arriba.
+    /// - roll > 0: el lado izquierdo de la cara sube → oreja derecha al hombro derecho.
+    /// La descomposición la hace `HeadPose` (fuente única, verificada con rotaciones puras de 30° en los tests);
+    /// si el dispositivo invierte algún eje, `NeckVerifier` lo autocorrige.
     static func angles(from transform: simd_float4x4) -> (yaw: Double, pitch: Double, roll: Double) {
-        let x = transform.columns.0
-        let y = transform.columns.1
-        let z = transform.columns.2
-        let yaw = atan2(Double(z.x), Double(z.z))
-        let pitch = asin(max(-1, min(1, Double(z.y))))
-        let roll = atan2(Double(x.y), Double(y.y))
-        let k = 180 / Double.pi
-        return (yaw * k, pitch * k, roll * k)
+        let c0 = transform.columns.0, c1 = transform.columns.1, c2 = transform.columns.2
+        let m = simd_double3x3(columns: (SIMD3(Double(c0.x), Double(c0.y), Double(c0.z)),
+                                         SIMD3(Double(c1.x), Double(c1.y), Double(c1.z)),
+                                         SIMD3(Double(c2.x), Double(c2.y), Double(c2.z))))
+        return HeadPose.angles(from: m)
     }
 
     /// Posición de la cámara expresada en el espacio de la cara: `(face⁻¹ · camera).columns.3`.

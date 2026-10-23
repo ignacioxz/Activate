@@ -21,17 +21,24 @@ struct ActivityRunView: View {
     @State private var delivered = false
     @ScaledMetric(relativeTo: .largeTitle) private var counterSize: CGFloat = 84
     @ScaledMetric(relativeTo: .largeTitle) private var ringSize: CGFloat = 236
+    @ScaledMetric(relativeTo: .largeTitle) private var compactCounterSize: CGFloat = 52
+    @ScaledMetric(relativeTo: .largeTitle) private var compactRingSize: CGFloat = 136
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Opcional: previews y tests no lo inyectan.
+    @Environment(AppStore.self) private var store: AppStore?
 
     private var progress: VerifierProgress { runner.progress }
+    /// Cuello: la consigna manda; el contador va compacto y hay barra de avance en vivo.
+    private var isNeck: Bool { assignment.kind == .cuello }
+    private var showsDebug: Bool { store?.data.demo.enabled == true }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 18) {
-                    Text("ACTIVIDAD \(position) DE \(total)")
-                        .font(.caption.weight(.heavy))
-                        .foregroundStyle(Theme.copper)
+                    Text("Actividad \(position) de \(total)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
                     Text(assignment.kind.name)
                         .font(.largeTitle.weight(.heavy))
                         .multilineTextAlignment(.center)
@@ -45,8 +52,17 @@ struct ActivityRunView: View {
                         }
                     }
 
-                    hud
-                    gateCopy
+                    if isNeck {
+                        hud(compact: true)
+                        NeckCuePanel(gate: progress.gate,
+                                     cue: runner.cue,
+                                     live: progress.live,
+                                     hint: progress.hint,
+                                     debug: showsDebug ? progress.debug : nil)
+                    } else {
+                        hud(compact: false)
+                        gateCopy
+                    }
                 }
                 .padding()
             }
@@ -69,27 +85,29 @@ struct ActivityRunView: View {
 
     // MARK: HUD (vidrio funcional)
 
-    private var hud: some View {
+    private func hud(compact: Bool) -> some View {
         ZStack {
-            ProgressRing(progress: progress.fraction, lineWidth: 18)
+            ProgressRing(progress: progress.fraction, color: Theme.accent, lineWidth: compact ? 12 : 18)
             VStack(spacing: 2) {
-                Image(systemName: assignment.kind.symbol)
-                    .font(.title)
-                    .foregroundStyle(Theme.copper)
-                    .symbolEffect(.bounce, value: progress.count)
+                if !compact {
+                    Image(systemName: assignment.kind.symbol)
+                        .font(.title)
+                        .foregroundStyle(Theme.accent)
+                        .symbolEffect(.bounce, value: progress.count)
+                }
                 Text("\(progress.count)")
-                    .font(.system(size: counterSize, weight: .heavy, design: .rounded))
+                    .font(.system(size: compact ? compactCounterSize : counterSize, weight: .heavy, design: .rounded))
                     .monospacedDigit()
                     .contentTransition(.numericText())
                     .animation(reduceMotion ? nil : .snappy, value: progress.count)
-                Text("de \(assignment.target) \(assignment.kind.unit)")
-                    .font(.subheadline)
+                Text("de \(assignment.target)\(compact ? "" : " \(assignment.kind.unit)")")
+                    .font(compact ? .footnote : .subheadline)
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: ringSize, height: ringSize)
-        .padding(22)
-        .functionalGlass(cornerRadius: 40)
+        .frame(width: compact ? compactRingSize : ringSize, height: compact ? compactRingSize : ringSize)
+        .padding(compact ? 16 : 22)
+        .functionalGlass(cornerRadius: compact ? 32 : 40)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(progress.count) de \(assignment.target) \(assignment.kind.unit)")
     }
@@ -198,6 +216,96 @@ struct ActivityRunView: View {
         } else {
             onFinish(outcome)
         }
+    }
+}
+
+/// Cuello: consigna grande con su flecha, barra que se llena mientras gira y "Vuelva al centro" claro.
+/// El texto de depuración (ángulos en vivo) solo aparece en modo demo.
+struct NeckCuePanel: View {
+    let gate: GateState
+    let cue: Cue?
+    let live: Double?
+    let hint: String
+    var debug: String? = nil
+
+    @ScaledMetric(relativeTo: .largeTitle) private var arrowSize: CGFloat = 64
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var isReturn: Bool { cue?.text == NeckVerifier.cueReturn.text }
+    private var fill: Double { min(1, max(0, live ?? 0)) }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            switch gate {
+            case .calibrating:
+                Image(systemName: "face.smiling")
+                    .font(.system(size: arrowSize, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .symbolEffect(.pulse, isActive: !reduceMotion)
+                Text(hint.isEmpty ? ActivityRunView.calibratingCopy : hint)
+                    .font(.title2.weight(.bold))
+            case .blocked(let reason):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: arrowSize * 0.8, weight: .bold))
+                    .foregroundStyle(Theme.danger)
+                Text(reason)
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(Theme.danger)
+            case .ready:
+                if let cue {
+                    Image(systemName: cue.symbol ?? "arrow.right")
+                        .font(.system(size: arrowSize, weight: .bold))
+                        .foregroundStyle(isReturn ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.accent))
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(height: arrowSize * 1.15)
+                    Text(cue.text)
+                        .font(.title.weight(.heavy))
+                    LiveBar(fraction: fill, tint: isReturn ? Color.secondary : Theme.accent)
+                    Text(isReturn ? "Cabeza al frente, mirando al teléfono" : "Lento, hasta llenar la barra")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if !hint.isEmpty {
+                    Text(hint).font(.title2.weight(.bold))
+                }
+            }
+            if let debug, !debug.isEmpty {
+                Text(debug)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: cue)
+        .animation(.smooth, value: gate)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Barra plana de avance en vivo (se llena con el ángulo, no con el tiempo).
+private struct LiveBar: View {
+    let fraction: Double
+    let tint: Color
+    @ScaledMetric(relativeTo: .body) private var height: CGFloat = 14
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color(.tertiarySystemFill))
+                Capsule()
+                    .fill(tint)
+                    .frame(width: max(height, geo.size.width * fraction))
+                    .opacity(fraction > 0.01 ? 1 : 0)
+            }
+        }
+        .frame(height: height)
+        .padding(.horizontal, 8)
+        .animation(.linear(duration: 0.08), value: fraction)
+        .accessibilityElement()
+        .accessibilityLabel("Avance del movimiento")
+        .accessibilityValue("\(Int((fraction * 100).rounded())) %")
     }
 }
 

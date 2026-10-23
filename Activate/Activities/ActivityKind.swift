@@ -18,12 +18,12 @@ nonisolated enum ActivityKind: String, Codable, CaseIterable, Sendable, Identifi
 
     var name: String {
         switch self {
-        case .extensionLumbar: "Párate y estírate pa' atrás"
-        case .pasos: "Camina"
+        case .extensionLumbar: "Párese y estírese hacia atrás"
+        case .pasos: "Camine"
         case .sentadilla: "Sentadilla minera"
         case .cuello: "Cuello: sí, no, quizás"
-        case .respiracion: "Respira con la guata"
-        case .ojos: "Mira lejos y pestañea"
+        case .respiracion: "Respire con la guata"
+        case .ojos: "Pestañeo completo"
         case .stroop: "Reflejos 60"
         }
     }
