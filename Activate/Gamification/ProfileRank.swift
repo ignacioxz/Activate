@@ -8,7 +8,12 @@ nonisolated enum ProfileRank {
 
     static func level(xp: Int) -> Int { max(0, xp) / xpPerLevel + 1 }
 
-    /// Nombre del rango (solo en Perfil).
+    /// Nombre del rango según el nivel por día (Perfil): cada 2 niveles sube de rango.
+    static func title(level: Int) -> String {
+        names[min(names.count - 1, max(0, level - 1) / 2)]
+    }
+
+    /// Nombre del rango por XP (versión anterior; se mantiene para datos y pruebas antiguas).
     static func title(xp: Int) -> String {
         names[min(names.count - 1, (level(xp: xp) - 1) / 2)]
     }
@@ -25,46 +30,50 @@ nonisolated enum ProfileRank {
     static func xpToNextLevel(xp: Int) -> Int { xpPerLevel - xpIntoLevel(xp: xp) }
 }
 
-/// Resumen de la tarjeta "Nivel" de Hoy: barra con el tramo que puede sumar la próxima pausa.
+/// Resumen de la tarjeta "Nivel" de Hoy, con la regla por día (`LevelProgress`): la pausa completa de un día
+/// sube 1 nivel; una parcial suma su porcentaje (5 de 7 = 71 %), que se acumula con los días siguientes.
 nonisolated struct LevelSummary: Sendable, Equatable {
     var level: Int
-    var xp: Int
-    /// Avance real dentro del nivel (0...1).
+    /// Avance hacia el nivel siguiente en porcentaje entero (0…99).
+    var percentToNext: Int
+    /// Avance real hacia el nivel siguiente (0…<1).
     var progress: Double
-    /// Hasta dónde llegaría la barra con la próxima pausa ("hasta"), tope 1.
+    /// Hasta dónde llegaría la barra con la pausa completa de hoy (tope 1).
     var ghostProgress: Double
-    /// La próxima pausa puede cruzar al nivel siguiente.
+    /// Completar la pausa de hoy cruza al nivel siguiente.
     var nextPauseCrossesLevel: Bool
-    /// Subió de nivel con lo ganado hoy.
+    /// Subió de nivel con la pausa de hoy.
     var leveledUpToday: Bool
     var note: String
 
     /// - Parameters:
-    ///   - xp: XP total del perfil.
-    ///   - xpToday: XP de las pausas de hoy (ya incluidos en `xp`).
-    ///   - nextPausePreview: máximo que puede sumar la próxima pausa ("hasta").
-    ///   - optional: la próxima pausa es opcional (bajada).
-    static func make(xp: Int, xpToday: Int, nextPausePreview: Int, optional: Bool = false) -> LevelSummary {
-        let level = ProfileRank.level(xp: xp)
-        let into = ProfileRank.xpIntoLevel(xp: xp)
-        let toNext = ProfileRank.xpToNextLevel(xp: xp)
-        let preview = max(0, nextPausePreview)
-        let progress = ProfileRank.progress(xp: xp)
-        let ghost = min(1, Double(into + preview) / Double(ProfileRank.xpPerLevel))
-        let leveledUp = xpToday > 0 && ProfileRank.level(xp: xp - xpToday) < level
-        let missing = "Faltan \(toNext) XP para el nivel \(level + 1)."
+    ///   - levels: nivel derivado del historial (`LevelProgress.compute`).
+    ///   - optional: la pausa de hoy es opcional (bajada).
+    static func make(levels: LevelProgress, optional: Bool = false) -> LevelSummary {
+        let fraction = levels.fractionToNext
+        let todayCredit = levels.todayCredit
+        // Lo que todavía puede sumar hoy: vale la mejor pausa del día, nunca más de 1 nivel.
+        let remainingToday = max(0, 1 - todayCredit)
+        let ghost = min(1, fraction + remainingToday)
+        let before = LevelProgress.level(forCredits: levels.totalCredits - todayCredit)
+        let leveledUp = todayCredit > 0 && levels.level > before
+        let toward = "\(LevelProgress.percentText(levels.percentToNext)) hacia el nivel \(levels.nextLevel)"
         let note: String
         if leveledUp {
-            note = "Subió al nivel \(level) hoy. \(missing)"
-        } else if xpToday > 0 {
-            note = "Hoy sumó +\(xpToday) XP. \(missing)"
+            note = "Subió al nivel \(levels.level) hoy. Lleva \(toward)."
+        } else if let line = levels.todayLine {
+            note = "\(line). Lleva \(toward)."
+        } else if optional {
+            note = "Pausa opcional: completa, también sube 1 nivel."
         } else {
-            note = "\(missing) La pausa \(optional ? "opcional" : "de hoy") da hasta +\(preview) XP."
+            note = "La pausa completa de hoy sube 1 nivel."
         }
-        return LevelSummary(level: level, xp: max(0, xp), progress: progress, ghostProgress: max(progress, ghost),
-                            nextPauseCrossesLevel: preview >= toNext, leveledUpToday: leveledUp, note: note)
+        return LevelSummary(level: levels.level, percentToNext: levels.percentToNext, progress: fraction,
+                            ghostProgress: max(fraction, ghost),
+                            nextPauseCrossesLevel: remainingToday > 0 && fraction + remainingToday >= 1 - LevelProgress.epsilon,
+                            leveledUpToday: leveledUp, note: note)
     }
 
-    /// "Nivel 3, 375 XP. Faltan 75 XP para el nivel 4. …"
-    var spoken: String { "Nivel \(level), \(xp) XP. \(note)" }
+    /// "Nivel 4, 71 por ciento hacia el nivel 5. …"
+    var spoken: String { "Nivel \(level), \(percentToNext) por ciento hacia el nivel \(level + 1). \(note)" }
 }

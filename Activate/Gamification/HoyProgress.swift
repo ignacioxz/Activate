@@ -281,7 +281,7 @@ nonisolated enum HoyProgress {
             routeMinutes: route.minutes,
             moments: isRest ? nil : moments(data: data, facts: facts, calendar: calendar),
             path: path(data: data, calendar: calendar, facts: facts),
-            level: LevelSummary.make(xp: data.profile.xp, xpToday: facts.xpToday, nextPausePreview: previews.full,
+            level: LevelSummary.make(levels: LevelProgress.compute(sessions: data.sessions, calendar: calendar, now: now),
                                      optional: isRest),
             badges: badges,
             earnedBadges: badges.filter(\.earned).count,

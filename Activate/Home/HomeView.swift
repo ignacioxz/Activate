@@ -89,7 +89,7 @@ struct HomeView: View {
             .padding(.bottom, 24)
             // Al volver de la pausa: el anillo se cierra, la racha y el XP cuentan; sin confeti (ya lo hizo la celebración).
             .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.5), value: snapshot.goal.done)
-            .animation(reduceMotion ? nil : .snappy, value: snapshot.level.xp)
+            .animation(reduceMotion ? nil : .snappy, value: snapshot.level.progress)
         }
         .defaultScrollAnchor(Self.initialAnchor)
         .sheet(item: $consentFor, onDismiss: startPendingPause) { moment in

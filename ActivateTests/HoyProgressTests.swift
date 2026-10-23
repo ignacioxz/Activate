@@ -225,34 +225,38 @@ struct HoyProgressTests {
 
     // MARK: - Nivel (compartido con Perfil)
 
-    @Test func nivelConTramoDeLaProximaPausa() {
-        #expect(ProfileRank.xpIntoLevel(xp: 375) == 75)
-        #expect(ProfileRank.xpToNextLevel(xp: 375) == 75)
-        #expect(ProfileRank.xpToNextLevel(xp: 300) == 150)
-
-        let before = LevelSummary.make(xp: 375, xpToday: 0, nextPausePreview: 218)
+    @Test func nivelPorDiaConTramoDeLaPausaDeHoy() {
+        func day(_ key: String, _ done: Int, _ planned: Int) -> LevelProgress.Day {
+            LevelProgress.Day(dayKey: key, turnoKey: "t", completed: done, planned: planned, sessionID: UUID(), startedAt: .now)
+        }
+        // Sin pausa hoy: 2 días completos y uno de 5 de 7 → nivel 3 y 71 %; la pausa completa de hoy cruza.
+        let before = LevelSummary.make(levels: LevelProgress(days: [day("a", 7, 7), day("b", 7, 7), day("c", 5, 7)], todayKey: "d"))
         #expect(before.level == 3)
-        #expect(before.progress == 0.5)
+        #expect(before.percentToNext == 71)
         #expect(before.ghostProgress == 1)
         #expect(before.nextPauseCrossesLevel)
         #expect(!before.leveledUpToday)
-        #expect(before.note == "Faltan 75 XP para el nivel 4. La pausa de hoy da hasta +218 XP.")
+        #expect(before.note == "La pausa completa de hoy sube 1 nivel.")
 
-        let short = LevelSummary.make(xp: 310, xpToday: 0, nextPausePreview: 109)
-        #expect(!short.nextPauseCrossesLevel)
-        #expect(abs(short.ghostProgress - Double(10 + 109) / 150) < 0.0001)
+        // Hoy hizo 5 de 7: suma 71 % (3,71 + 0,71 = 4,43): sube al 4 con 43 %.
+        let partial = LevelSummary.make(levels: LevelProgress(days: [day("a", 7, 7), day("b", 7, 7), day("c", 5, 7), day("d", 5, 7)], todayKey: "d"))
+        #expect(partial.level == 4)
+        #expect(partial.percentToNext == 43)
+        #expect(partial.leveledUpToday)
+        #expect(partial.note.hasPrefix("Subió al nivel 4 hoy."))
 
-        let after = LevelSummary.make(xp: 593, xpToday: 218, nextPausePreview: 99)
-        #expect(after.level == 4)
-        #expect(after.leveledUpToday)
-        #expect(after.note == "Subió al nivel 4 hoy. Faltan 7 XP para el nivel 5.")
+        // Hoy 3 de 7 sin cruzar: muestra lo de hoy y cuánto lleva.
+        let small = LevelSummary.make(levels: LevelProgress(days: [day("a", 7, 7), day("d", 3, 7)], todayKey: "d"))
+        #expect(small.level == 2)
+        #expect(small.note == "Hoy: 3 de 7 ejercicios (+43\u{00A0}%). Lleva 43\u{00A0}% hacia el nivel 3.")
+        // Completar hoy (vale la mejor pausa del día) deja el día en 7 de 7: 1 + 1 = nivel 3.
+        #expect(small.nextPauseCrossesLevel)
 
-        let sameLevel = LevelSummary.make(xp: 470, xpToday: 20, nextPausePreview: 99)
-        #expect(sameLevel.note == "Hoy sumó +20 XP. Faltan 130 XP para el nivel 5.")
-
-        let rest = LevelSummary.make(xp: 0, xpToday: 0, nextPausePreview: 109, optional: true)
-        #expect(rest.note == "Faltan 150 XP para el nivel 2. La pausa opcional da hasta +109 XP.")
-        #expect(rest.spoken.hasPrefix("Nivel 1, 0 XP."))
+        // Bajada sin pausa.
+        let rest = LevelSummary.make(levels: LevelProgress(days: [], todayKey: "d"), optional: true)
+        #expect(rest.level == 1)
+        #expect(rest.note == "Pausa opcional: completa, también sube 1 nivel.")
+        #expect(rest.spoken.hasPrefix("Nivel 1, 0 por ciento hacia el nivel 2."))
     }
 
     // MARK: - XP de hoy
@@ -295,8 +299,7 @@ struct HoyProgressTests {
         #expect(snap.moments?.line == "La pausa calza ahora, en el relevo de salida.")
         #expect(snap.moments?.trailing == "Turno de día")
         // Nivel con datos reales de la demo (no fijos en la vista).
-        #expect(snap.level.xp == data.profile.xp)
-        #expect(snap.level.level == ProfileRank.level(xp: data.profile.xp))
+        #expect(snap.level.level == LevelProgress.compute(sessions: data.sessions, calendar: WorkCalendar(profile: data.profile, calendar: Self.santiago), now: date(23, 15, 14)).level)
     }
 
     @Test func demoCaminoDelTurno() {
@@ -354,7 +357,7 @@ struct HoyProgressTests {
         #expect(snap.goal.quickTitle == "Solo tengo 1 minuto · hasta +24 XP")
         #expect(!snap.goal.showsRoute)
         #expect(data.profile.xp == before.profile.xp + 218)
-        #expect(snap.level.xp == before.profile.xp + 218)
+        #expect(snap.level.leveledUpToday)
         // Camino: hoy lleno y la línea azul une D1 y D2.
         #expect(snap.path.trailing == "2 de 7 con pausa")
         #expect(snap.path.segments.first == true)
@@ -511,7 +514,7 @@ struct HoyProgressTests {
         #expect(snap.path.comodinLine == nil)
         #expect(snap.path.dateLine == "Próximo turno: lunes 26 de octubre.")
         #expect(snap.path.nodes.allSatisfy { !$0.isToday })
-        #expect(snap.level.note.hasSuffix("La pausa opcional da hasta +109 XP."))
+        #expect(snap.level.note == "Pausa opcional: completa, también sube 1 nivel.")
     }
 
     @Test func pausaNoVerificadaNoEsCastigo() {

@@ -57,10 +57,12 @@ struct ProfileView: View {
     private var rankCard: some View {
         let xp = store.profile.xp
         let cascos = store.profile.cascos
+        // Nivel por día (pausa completa = +1 nivel); el XP sigue para los premios.
+        let levels = game.levelProgress
         return HStack(spacing: 16) {
             ZStack {
-                ProgressRing(progress: ProfileRank.progress(xp: xp), color: Theme.gold, lineWidth: 8)
-                Text("\(ProfileRank.level(xp: xp))")
+                ProgressRing(progress: levels.fractionToNext, color: Theme.accent, lineWidth: 8)
+                Text("\(levels.level)")
                     .font(.title2.weight(.bold))
                     .contentTransition(.numericText())
             }
@@ -71,7 +73,7 @@ struct ProfileView: View {
                     .font(.title.weight(.bold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                Text(ProfileRank.title(xp: xp))
+                Text(ProfileRank.title(level: levels.level))
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(Theme.accent)
                 Text("\(xp) XP · \(game.streak == 1 ? "1 día seguido" : "\(game.streak) días seguidos") · \(cascos) \(cascos == 1 ? "comodín" : "comodines")")
@@ -82,7 +84,7 @@ struct ProfileView: View {
         }
         .flatCard()
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(store.profile.name), nivel \(ProfileRank.level(xp: xp)), \(ProfileRank.title(xp: xp)), \(xp) XP")
+        .accessibilityLabel("\(store.profile.name), nivel \(levels.level), \(ProfileRank.title(level: levels.level)), \(levels.percentToNext) por ciento hacia el nivel \(levels.nextLevel), \(xp) XP")
     }
 
     // MARK: - Nombre y trato

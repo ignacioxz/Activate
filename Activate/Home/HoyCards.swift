@@ -337,7 +337,8 @@ struct ColumnConnectors: View {
 
 // MARK: - Nivel
 
-/// Nivel con barra azul: tramo sólido = XP del nivel; tramo claro = lo que puede sumar la próxima pausa.
+/// Nivel con barra azul: tramo sólido = avance hacia el siguiente nivel; tramo claro = lo que suma la pausa
+/// completa de hoy (la pausa completa de un día sube 1 nivel; una parcial, su porcentaje).
 struct LevelCard: View {
     let level: LevelSummary
 
@@ -353,7 +354,7 @@ struct LevelCard: View {
                         .foregroundStyle(Theme.gold)
                 }
                 Spacer(minLength: 8)
-                Text("\(level.xp) XP")
+                Text(LevelProgress.percentText(level.percentToNext))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
