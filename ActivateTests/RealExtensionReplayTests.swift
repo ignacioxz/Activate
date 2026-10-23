@@ -13,6 +13,9 @@ struct RealExtensionReplayTests {
 
     private struct Line: Decodable { let t: Double?; let s: HandheldSquatSample? }
 
+    nonisolated static let secondSession = folder.appending(path: "20261023-160129-A1.jsonl")
+    nonisolated static var hasSecondRecording: Bool { FileManager.default.fileExists(atPath: secondSession.path) }
+
     static func samples(_ url: URL) throws -> [HandheldSquatSample] {
         let text = try String(contentsOf: url, encoding: .utf8)
         let decoder = JSONDecoder()
@@ -41,5 +44,17 @@ struct RealExtensionReplayTests {
         let outcome = verifier.finish(at: (samples.last?.t ?? 0) + 0.1, reason: .userStopped)
         #expect(reps >= 2, "extensiones reales rechazadas: \(rejections)")
         #expect(outcome.anomalies.allSatisfy { $0.severity != .hard })
+    }
+
+    /// 16:01: dos extensiones de 22-23° con la cara 31-34 cm atrás. Antes: 1 de 2 ("solo muñecas").
+    @Test(.enabled(if: RealExtensionReplayTests.hasSecondRecording))
+    func segundaSerieRealCuenta() throws {
+        let samples = try Self.samples(Self.secondSession)
+        var verifier = HandheldExtensionVerifier(target: 5, demo: true)
+        verifier.start(at: 0)
+        var reps = 0
+        for s in samples { for event in verifier.ingest(s, at: s.t) { if case .rep = event { reps += 1 } } }
+        let detail = verifier.diagnostics.map { "\(String(format: "%.0f", $0.peakTilt))° tang \(String(format: "%.3f", $0.tangentialChange)) \($0.rejection.map { "\($0)" } ?? "ok")" }
+        #expect(reps >= 2, "intentos: \(detail)")
     }
 }

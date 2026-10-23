@@ -96,6 +96,12 @@ nonisolated enum HandheldExtensionTuning {
     /// adelante: el teléfono se aleja de la cara hasta esto por radián de inclinación (dato real: 28° con la cara
     /// 44 cm atrás y el teléfono 26 cm → 15 cm de separación).
     static let faceRadialRetreatPerRadian = 0.5
+    /// Con el tronco claramente atrás, la cara también puede correrse de lado en el encuadre esto por radián
+    /// (dato real: 23° con la cara 34 cm atrás y 6,9 cm de lado).
+    static let faceTangentialPerRadian = 0.2
+    /// "Tronco claramente atrás" para dar esos márgenes: la cara se fue atrás en el mundo al menos esto por radián
+    /// (reales: 0,8-0,9 m/rad; las mímicas con cuello y mentón no pasan de 0,35 m/rad).
+    static let trunkClearlyBackPerRadian = 0.5
     /// Cambio máximo de la dirección de la cara vista desde el teléfono (°): con las muñecas gira lo mismo
     /// que el teléfono; con el tronco no cambia (cuerpo rígido).
     static let faceDirectionMaxChangeDegrees = 10.0
@@ -117,6 +123,9 @@ nonisolated enum HandheldExtensionTuning {
     // La cabeza gira con el tronco (cabeceo de la cara respecto del teléfono, media en la zona atrás)
     /// Cuánto más puede echarse atrás la cabeza que el teléfono (°): más es mover la cara con el cuello.
     static let headMaxExtraDegrees = 15.0
+    /// Con el tronco claramente atrás (cara ≥ `trunkClearlyBackPerRadian`), mirar hacia arriba al inclinarse es
+    /// natural: la cabeza puede ir esto más atrás que el teléfono (dato real: +16° con la cara 34 cm atrás).
+    static let headMaxExtraDegreesTrunkBack = 30.0
     /// Sin el mundo: la cabeza no puede quedarse atrás del teléfono más que esta fracción de la inclinación
     /// (Δ ≥ −0,7 × inclinación). Subir el teléfono a los ojos da −1; quien deja la cabeza algo más derecha que
     /// el tronco, −0,3 a −0,5. Con el mundo no se exige: lo cubre el teléfono que va hacia atrás.
@@ -779,10 +788,11 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
         let rad = w.worldPeakTilt * .pi / 180
         let direction = w.maxDirectionChange <= K.faceDirectionMaxChangeDegrees
         let faceBack = w.maxFaceBackward ?? 0
-        let trunkWentBack = world && faceBack >= max(K.faceMinBackward, K.faceMinBackPerRadian * rad)
-        let retreatLimit = trunkWentBack ? max(K.faceRadialMaxRetreat, K.faceRadialRetreatPerRadian * rad) : K.faceRadialMaxRetreat
+        let trunkClearlyBack = world && faceBack >= max(K.faceMinBackward, K.trunkClearlyBackPerRadian * rad)
+        let retreatLimit = trunkClearlyBack ? max(K.faceRadialMaxRetreat, K.faceRadialRetreatPerRadian * rad) : K.faceRadialMaxRetreat
+        let tangentialLimit = trunkClearlyBack ? max(K.faceGeometryMaxChange, K.faceTangentialPerRadian * rad) : K.faceGeometryMaxChange
         j.faceStayedInFrame = direction
-            && w.maxTangentialChange <= K.faceGeometryMaxChange
+            && w.maxTangentialChange <= tangentialLimit
             && w.maxRadialApproach <= K.faceGeometryMaxChange
             && w.maxRadialRetreat <= retreatLimit
         if world {
@@ -794,7 +804,7 @@ nonisolated struct HandheldExtensionVerifier: ActivityVerifier, SourceLevelLimit
             let ratio = w.headSum / w.headTiltSum
             j.headTurn = turn
             j.headRatio = ratio
-            j.headStayed = turn <= K.headMaxExtraDegrees
+            j.headStayed = turn <= (trunkClearlyBack ? K.headMaxExtraDegreesTrunkBack : K.headMaxExtraDegrees)
             if !world { j.headFollowed = ratio >= -K.headMinTurnRatio }
         }
         j.strongWrists = !direction || (world && faceBack < K.faceMinBackward)
