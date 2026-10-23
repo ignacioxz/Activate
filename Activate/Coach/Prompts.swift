@@ -205,9 +205,9 @@ nonisolated enum CoachPhrases {
             return pick(["Hoy suave: la espalda manda.", "Menos carga hoy, mismo hábito.", "Pausa corta y suave hoy."], seed)
         }
         switch moment {
-        case .entrada: return pick(["Un minuto antes de subir.", "Cuello y vista antes del turno.", "Soltar antes de la cabina."], seed)
+        case .entrada: return pick(["Moverse antes de subir.", "Cuello y vista antes del turno.", "Soltar antes de la cabina."], seed)
         case .colacion: return pick(["Caminar corta la vibración.", "Mitad de turno: moverse ayuda.", "Pasos y cuello en la colación."], seed)
-        case .salida: return pick(["Soltar la espalda al bajar.", "Un minuto antes del bus.", "Cuello y vista al salir."], seed)
+        case .salida: return pick(["Soltar la espalda al bajar.", "Moverse antes del bus.", "Cuello y vista al salir."], seed)
         case .campamento: return pick(["Pausa completa: cinco minutos.", "Con tiempo: la pausa entera.", "Campamento: espalda y reflejos."], seed)
         }
     }
@@ -221,13 +221,13 @@ nonisolated enum CoachPhrases {
         switch treatment {
         case .usted:
             switch moment {
-            case .entrada, .salida: return pick(["Vamos, \(n). Un minuto.", "\(n), un minuto y listo.", "Ahora, \(n). Es corto."], seed)
+            case .entrada, .salida: return pick(["Vamos, \(n). La ruta completa.", "\(n), aproveche el relevo.", "Ahora, \(n). Antes del relevo."], seed)
             case .colacion: return pick(["Vamos, \(n). Tres minutos.", "\(n), aproveche la colación.", "Ahora, \(n). Tres minutos."], seed)
             case .campamento: return pick(["Vamos, \(n). Cinco minutos.", "\(n), la pausa completa.", "Ahora, \(n). Con tiempo."], seed)
             }
         case .tu:
             switch moment {
-            case .entrada, .salida: return pick(["Vamos, \(n). Un minuto.", "\(n), un minuto y listo.", "Dale, \(n). Es corto."], seed)
+            case .entrada, .salida: return pick(["Vamos, \(n). La ruta completa.", "\(n), aprovecha el relevo.", "Dale, \(n). Antes del relevo."], seed)
             case .colacion: return pick(["Vamos, \(n). Tres minutos.", "\(n), aprovecha la colación.", "Dale, \(n). Tres minutos."], seed)
             case .campamento: return pick(["Vamos, \(n). Cinco minutos.", "\(n), la pausa completa.", "Dale, \(n). Con tiempo."], seed)
             }

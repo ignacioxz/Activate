@@ -305,18 +305,20 @@ struct DemoPreflightView: View {
         pedometer.stopUpdates()
     }
 
-    /// Generación de prueba con la receta corta; mide el tiempo total y lee `coach.lastLatencyMs` (TTFT).
+    /// Generación de prueba con la ruta completa del momento (metas de demo); mide el tiempo total y lee
+    /// `coach.lastLatencyMs` (TTFT).
     private func testCoach() async {
         busy = true
         defer { busy = false }
         let profile = store.profile
+        let moment = Moment.infer(date: .now, shift: profile.shiftType)
         let input = CoachInput(
             profileName: profile.name,
             treatment: profile.treatment,
             checkIn: nil,
-            moment: Moment.infer(date: .now, shift: profile.shiftType),
-            minutesAvailable: RecipeKind.relevo60.minutes,
-            baseRecipe: Recipes.base(.relevo60, demo: true),
+            moment: moment,
+            minutesAvailable: moment.minutes,
+            baseRecipe: Recipes.base(moment.recipe, demo: true),
             allowedKinds: ActivityKind.sessionOrder,
             historyLines: [],
             gentle: false)

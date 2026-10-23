@@ -24,7 +24,7 @@ nonisolated struct PausaDelDia {
     var ejercicios: [EjercicioAsignado]
     @Guide(description: "Máximo 8 palabras, de usted. Ejemplo: Hoy sin sentadilla: espalda cargada.")
     var porQue: String
-    @Guide(description: "Máximo 8 palabras, con el nombre de pila. Ejemplo: Vamos, Marco. Un minuto.")
+    @Guide(description: "Máximo 8 palabras, con el nombre de pila. Ejemplo: Vamos, Marco. La ruta completa.")
     var mensajeInicio: String
 }
 

@@ -28,11 +28,11 @@ struct StreakTests {
                               completed: completed, level: level, metrics: metrics, anomalies: [])
     }
 
-    private func session(at date: Date, store: AppStore, recipe: RecipeKind = .relevo60,
+    private func session(at date: Date, store: AppStore, recipe: RecipeKind = .campamento5, moment: Moment = .entrada,
                          activities: [ActivityResult]? = nil, counted: Bool = true,
                          level: VerificationLevel = .full, simulated: Bool = false) -> PauseSession {
         let c = store.calendar
-        var s = PauseSession(workDayKey: c.key(for: date), turnoKey: c.turnoKey(for: date), recipe: recipe, moment: .entrada, startedAt: date)
+        var s = PauseSession(workDayKey: c.key(for: date), turnoKey: c.turnoKey(for: date), recipe: recipe, moment: moment, startedAt: date)
         s.endedAt = date.addingTimeInterval(60)
         s.activities = activities ?? [result(.cuello), result(.ojos)]
         s.counted = counted
@@ -288,11 +288,23 @@ struct StreakTests {
 
     @Test func insigniasRelevoRajoYCaminante() {
         let (store, game) = makeGame()
-        // Relevo cumplido: 5 pausas contadas de relevo.
+        // Relevo cumplido: 5 pausas contadas de ruta completa en un relevo (entrada o salida).
+        // No suman: la colación ni el campamento, las no contadas, las simuladas ni las antiguas pausas rápidas.
+        game.record(session(at: date(12, hour: 13), store: store, moment: .colacion))
+        game.record(session(at: date(12, hour: 21), store: store, moment: .campamento))
+        game.record(session(at: date(13, hour: 13), store: store, moment: .salida, counted: false))
+        game.record(session(at: date(13, hour: 19), store: store, moment: .salida, simulated: true))
+        game.record(session(at: date(13, hour: 20), store: store, recipe: .relevo60, moment: .salida))
+        #expect(GameStore.relevoPauses(in: store.data.sessions) == 0)
         var relevo: [SessionReward] = []
-        for day in 12...16 { relevo.append(game.record(session(at: date(day), store: store))) }
+        for day in 14...18 {
+            let moment: Moment = day.isMultiple(of: 2) ? .entrada : .salida
+            relevo.append(game.record(session(at: date(day, hour: moment == .entrada ? 8 : 19), store: store, moment: moment)))
+        }
+        #expect(GameStore.relevoPauses(in: store.data.sessions) == 5)
         #expect(!relevo[3].newBadges.contains(.relevoCumplido))
         #expect(relevo[4].newBadges.contains(.relevoCumplido))
+        #expect(Badge.relevoCumplido.detail == "Cinco pausas verificadas en el relevo de entrada o de salida.")
 
         // Rajo completo: campamento con todo verificado (respiración contada basta).
         let full = Recipes.base(.campamento5, demo: false).activities.map { a -> ActivityResult in

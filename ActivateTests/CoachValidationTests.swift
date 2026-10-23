@@ -5,13 +5,9 @@ import Foundation
 struct CoachValidationTests {
     // MARK: - Fixtures
 
-    private func recipe(_ kind: RecipeKind = .campamento5) -> Recipe {
+    private func recipe() -> Recipe {
         func a(_ k: ActivityKind) -> ActivityAssignment { ActivityAssignment(kind: k, target: k.defaultTarget) }
-        switch kind {
-        case .relevo60: return Recipe(kind: kind, activities: [a(.cuello), a(.ojos)])
-        case .colacion3: return Recipe(kind: kind, activities: [a(.pasos), a(.cuello), a(.ojos)])
-        case .campamento5: return Recipe(kind: kind, activities: [a(.pasos), a(.sentadilla), a(.cuello), a(.stroop), a(.ojos), a(.extensionLumbar)])
-        }
+        return Recipe(kind: .campamento5, activities: [a(.pasos), a(.sentadilla), a(.cuello), a(.stroop), a(.ojos), a(.extensionLumbar)])
     }
 
     private func checkIn(score: Int, bending: Bool = false) -> DailyCheckIn {
@@ -24,7 +20,7 @@ struct CoachValidationTests {
 
     private func input(moment: Moment = .campamento, allowed: [ActivityKind] = ActivityKind.sessionOrder,
                        gentle: Bool = false, score: Int = 2, treatment: Treatment = .usted) -> CoachInput {
-        let r = recipe(moment.recipe)
+        let r = recipe()
         return CoachInput(profileName: "Marco", treatment: treatment, checkIn: checkIn(score: score), moment: moment,
                           minutesAvailable: moment.minutes, baseRecipe: r, allowedKinds: allowed,
                           historyLines: ["Ayer: Mejor", "Antes de ayer: Igual"], gentle: gentle)
@@ -88,11 +84,15 @@ struct CoachValidationTests {
     }
 
     @Test func durationExceededFails() {
-        // Pausa rápida de 1 minuto: 15 cuello + 15 ojos + Stroop (60 s) = 90 s > 60 s.
+        // Con 2 minutos disponibles: 15 cuello + 15 ojos + Stroop (60 s) + 100 pasos (50 s) = 140 s > 120 s.
         var i = input(moment: .entrada)
-        i.minutesAvailable = RecipeKind.relevo60.minutes
-        let r = PlanValidator.validate([.init(id: "A5", reps: 15), .init(id: "A9", reps: 15), .init(id: "A10", reps: 40)], input: i)
-        #expect(r == .failure(.durationExceeded(estimatedSeconds: 90, limitSeconds: 60)))
+        i.minutesAvailable = 2
+        let proposal: [ProposedExercise] = [.init(id: "A2", reps: 100), .init(id: "A5", reps: 15), .init(id: "A9", reps: 15),
+                                            .init(id: "A10", reps: 40)]
+        let r = PlanValidator.validate(proposal, input: i)
+        #expect(r == .failure(.durationExceeded(estimatedSeconds: 140, limitSeconds: 120)))
+        // El mismo plan cabe en la ruta completa del momento.
+        #expect((try? PlanValidator.validate(proposal, input: input(moment: .entrada)).get())?.count == 4)
     }
 
     @Test func emptyAndTooManyFail() {
@@ -103,8 +103,11 @@ struct CoachValidationTests {
 
     @Test func baseRecipesAlwaysFitTheirMinutes() {
         for kind in RecipeKind.allCases {
-            let r = recipe(kind)
-            #expect(PlanValidator.estimatedSeconds(r.activities) <= kind.minutes * 60, "\(kind)")
+            let r = Recipes.base(kind, demo: false)
+            #expect(PlanValidator.estimatedSeconds(r.activities) <= r.minutes * 60, "\(kind)")
+        }
+        for moment in Moment.allCases {
+            #expect(PlanValidator.estimatedSeconds(Recipes.base(moment.recipe, demo: false).activities) <= moment.minutes * 60)
         }
     }
 
@@ -122,7 +125,7 @@ struct CoachValidationTests {
     // MARK: - Texto
 
     @Test func textCleaningClampsAndBans() {
-        #expect(CoachText.clean("  Vamos, Marco. Un minuto.  ", maxWords: 8) == "Vamos, Marco. Un minuto.")
+        #expect(CoachText.clean("  Vamos, Marco. La ruta completa.  ", maxWords: 8) == "Vamos, Marco. La ruta completa.")
         #expect(CoachText.clean("", maxWords: 8) == nil)
         #expect(CoachText.clean("Eso es trampa", maxWords: 8) == nil)
         #expect(CoachText.clean("Usted está apto para la pausa", maxWords: 8) == nil)

@@ -46,8 +46,11 @@ nonisolated enum Moment: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 
     /// Cualquier momento hace la ruta completa (pedido del usuario: sin molestias, ruta completa).
-    /// La pausa rápida de 1 minuto es una elección explícita ("Solo tengo 1 minuto"), no del momento.
+    /// No hay pausa rápida: es la única receta que se arma.
     var recipe: RecipeKind { .campamento5 }
+
+    /// Relevo de entrada o de salida (cambio de turno): cuenta para la insignia "Relevo cumplido".
+    var isRelevo: Bool { self == .entrada || self == .salida }
 
     var minutes: Int { recipe.minutes }
 

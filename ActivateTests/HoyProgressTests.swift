@@ -148,14 +148,14 @@ struct HoyProgressTests {
 
     @Test func vistaPreviaDelXPConLasReglasDePuntaje() {
         let full = Recipes.base(.campamento5, demo: false).activities.map(\.kind)
-        let quick = Recipes.base(.relevo60, demo: false).activities.map(\.kind)
+        let gentle = Recipes.gentle(.campamento5, demo: false).activities.map(\.kind)
         #expect(GameStore.previewXP(kinds: full, firstCountedToday: true, doblete: false) == 109)
         #expect(GameStore.previewXP(kinds: full, firstCountedToday: true, doblete: true) == 218)
-        #expect(GameStore.previewXP(kinds: quick, firstCountedToday: true, doblete: false) == 34)
-        #expect(GameStore.previewXP(kinds: quick, firstCountedToday: true, doblete: true) == 68)
+        #expect(GameStore.previewXP(kinds: gentle, firstCountedToday: true, doblete: false) == 54)
+        #expect(GameStore.previewXP(kinds: gentle, firstCountedToday: true, doblete: true) == 108)
         // Segunda pausa del día: sin bono ni Doblete.
         #expect(GameStore.previewXP(kinds: full, firstCountedToday: false, doblete: true) == 99)
-        #expect(GameStore.previewXP(kinds: quick, firstCountedToday: false, doblete: false) == 24)
+        #expect(GameStore.previewXP(kinds: gentle, firstCountedToday: false, doblete: false) == 44)
         // La respiración (débil por naturaleza) llega a `reduced`: paga la mitad, como en `xp(for:)`.
         #expect(GameStore.maxXP(for: .respiracion) == 4)
         #expect(GameStore.maxXP(for: .pasos) == ActivityKind.pasos.baseXP)
@@ -291,7 +291,7 @@ struct HoyProgressTests {
         #expect(snap.goal.chipsTitle == "Gana hoy")
         #expect(snap.goal.chips.map(\.text) == ["Doblete x2", "Hasta +218 XP", "Insignia Doblete"])
         #expect(snap.goal.action == .primary(title: "Hacer la pausa", symbol: "play.fill"))
-        #expect(snap.goal.quickTitle == "Solo tengo 1 minuto · hasta +68 XP")
+        #expect(snap.previews == XPPreviews(full: 218))
         #expect(snap.goal.showsRoute)
         #expect(snap.route.map(\.kind) == ActivityKind.sessionOrder)
         #expect(snap.goal.spoken == "Racha de 1 día. Meta de hoy: pausa pendiente. Vamos por el Doblete.")
@@ -336,7 +336,11 @@ struct HoyProgressTests {
         let walker = snap.badges.first { $0.badge == .caminanteDelRajo }
         #expect(walker?.status == "\(SpanishDate.thousands(steps)) de 2.500 pasos")
         let relevo = snap.badges.first { $0.badge == .relevoCumplido }
-        #expect(relevo?.status == "\(GameStore.relevoPauses(in: data.sessions)) de 5 pausas de 1 minuto")
+        // Relevo cumplido: las dos rutas completas sembradas en un relevo (entrada del día 5, salida del día 7).
+        #expect(GameStore.relevoPauses(in: data.sessions) == 2)
+        #expect(relevo?.status == "2 de 5 pausas en un relevo")
+        #expect(relevo?.progress == 0.4)
+        #expect(steps < GameStore.caminanteDelRajoSteps)
         let tiro = snap.badges.first { $0.badge == .tiroLimpio }
         #expect(tiro?.status == "1 de 7 días")
         let earnedStatuses = snap.badges.filter { $0.earned }
@@ -354,7 +358,7 @@ struct HoyProgressTests {
         #expect(snap.goal.chipsTitle == "Ganó hoy")
         #expect(snap.goal.chips.map(\.text) == ["Doblete", "+218 XP", "Insignia Doblete"])
         #expect(snap.goal.action == .secondary(title: "Hacer otra pausa · hasta +99 XP", symbol: "arrow.clockwise"))
-        #expect(snap.goal.quickTitle == "Solo tengo 1 minuto · hasta +24 XP")
+        #expect(snap.previews == XPPreviews(full: 99))
         #expect(!snap.goal.showsRoute)
         #expect(data.profile.xp == before.profile.xp + 218)
         #expect(snap.level.leveledUpToday)
@@ -552,13 +556,15 @@ struct HoyProgressTests {
         for (day, hour) in [(12, 10), (13, 10), (14, 10), (16, 10), (18, 10), (21, 10), (26, 10)] {
             let snap = snapshot(data, now: date(day, hour))
             var texts = [snap.title, snap.subtitle, snap.goal.title, snap.goal.subtitle, snap.goal.eyebrow,
-                         snap.goal.quickTitle, snap.goal.action.title, snap.path.trailing, snap.path.dateLine, snap.level.note]
+                         snap.goal.action.title, snap.path.trailing, snap.path.dateLine, snap.level.note]
             texts += snap.goal.chips.map(\.text) + snap.badges.map(\.status)
             texts += [snap.path.comodinLine, snap.moments?.line, snap.goal.unverifiedLine].compactMap { $0 }
             for text in texts {
                 #expect(!text.lowercased().contains("rota"), "\(text)")
                 #expect(!text.lowercased().contains("casco"), "\(text)")
                 #expect(!CelebrationCopy.containsBannedFragment(text), "\(text)")
+                // No hay pausa rápida: nada ofrece "1 minuto".
+                #expect(!text.lowercased().contains("minuto") && !text.lowercased().contains("rápida"), "\(text)")
             }
             // Toda vista previa de XP dice "hasta".
             if !snap.goal.done {
@@ -566,7 +572,9 @@ struct HoyProgressTests {
                     #expect(chip.text.lowercased().contains("hasta"), "\(chip.text)")
                 }
             }
-            #expect(snap.goal.quickTitle.contains("hasta +"))
+            if snap.goal.action.title.contains("XP") {
+                #expect(snap.goal.action.title.contains("hasta +"), "\(snap.goal.action.title)")
+            }
             #expect(!snap.subtitle.contains(","))
         }
     }

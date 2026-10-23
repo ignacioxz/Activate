@@ -132,7 +132,7 @@ nonisolated enum BadgeProgress {
             let n = GameStore.relevoPauses(in: data.sessions)
             let goal = GameStore.relevoCumplidoPauses
             let fraction = Double(n) / Double(goal)
-            return status("\(n) de \(goal) pausas de 1 minuto", progress: n > 0 ? fraction : nil, closeness: fraction)
+            return status("\(n) de \(goal) pausas en un relevo", progress: n > 0 ? fraction : nil, closeness: fraction)
         case .rajoCompleto:
             let best = bestRajoCount(sessions: data.sessions)
             let total = GameStore.rajoCompletoKinds.count

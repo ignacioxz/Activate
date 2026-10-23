@@ -212,7 +212,7 @@ struct HomeTests {
     // MARK: - MomentCard
 
     @Test func lineaDeLoQueIncluye() {
-        let recipe = Recipe(kind: .relevo60, activities: [
+        let recipe = Recipe(kind: .campamento5, activities: [
             ActivityAssignment(kind: .cuello, target: 15),
             ActivityAssignment(kind: .ojos, target: 15),
         ])

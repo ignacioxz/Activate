@@ -10,6 +10,9 @@ import Foundation
 ///   la pausa en vivo y 2 con el Doblete;
 /// - el turno actual con AYER contado y HOY sin pausa, para que la pausa en vivo dispare el Doblete.
 ///
+/// Toda pausa sembrada es la ruta completa (o su versión recortada por las reglas); no hay pausas rápidas.
+/// En los dos relevos sembrados Marco saltó la caminata ("Saltar (no suma)"): no suma pasos ni XP.
+///
 /// Todas las sesiones son `.full` (salvo la respiración, `.reduced` por naturaleza) y `counted`
 /// se calcula con `VerificationPolicy`, igual que en vivo. `countedPauses` de cada `WorkDay`
 /// coincide con las sesiones contadas de ese día. Las cifras de los sensores vienen de un
@@ -95,27 +98,27 @@ nonisolated enum DemoSeed {
     }
 
     /// Receta base por momento (misma composición que `Recipes.base`, sin depender de él).
-    /// Historia sembrada: en los relevos Marco hizo la pausa rápida y en la colación una parcial
-    /// (no depende de `Moment.recipe`, que hoy es siempre la ruta completa).
+    /// Historia sembrada: en los relevos y el campamento Marco hizo la ruta completa y en la colación una
+    /// parcial (no depende de `Moment.recipe`, que hoy es siempre la ruta completa).
     static func baseActivities(for moment: Moment) -> [ActivityKind] {
         switch moment {
-        case .entrada, .salida: [.cuello, .ojos]
+        case .entrada, .salida, .campamento: [.pasos, .pararseSentarse, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
         case .colacion: [.pasos, .cuello, .ojos]
-        case .campamento: [.pasos, .pararseSentarse, .sentadilla, .cuello, .stroop, .ojos, .extensionLumbar]
         }
     }
 
     /// Receta registrada en la historia sembrada.
     static func seededRecipe(for moment: Moment) -> RecipeKind {
         switch moment {
-        case .entrada, .salida: .relevo60
+        case .entrada, .salida, .campamento: .campamento5
         case .colacion: .colacion3
-        case .campamento: .campamento5
         }
     }
 
-    /// Campamento sin agacharse (RDQ ≥ 4 con "no agacharse" o plan suave).
+    /// Ruta completa sin agacharse (RDQ ≥ 4 con "no agacharse" o plan suave).
     static let gentleCampamento: [ActivityKind] = [.pasos, .cuello, .stroop, .ojos]
+    /// Plan suave (RDQ ≥ 5), como `Recipes.gentle`: caminata corta, cuello y pestañeo.
+    static let gentleRoute: [ActivityKind] = [.pasos, .cuello, .ojos]
 
     /// Lectura del coach pregenerada para hoy (una frase por línea).
     static let pregeneratedReading = """
@@ -149,6 +152,8 @@ nonisolated enum DemoSeed {
         var activities: [ActivityKind]? = nil
         /// Actividad que quedó incompleta (la sesión igual cuenta si otra es `.full`).
         var incomplete: ActivityKind? = nil
+        /// Actividades saltadas ("Saltar (no suma)"): quedan registradas sin cifras ni XP.
+        var skipped: [ActivityKind] = []
         var post: PostResponse? = nil
         var casco: Bool = false
         var pain: PainLog? = nil
@@ -166,10 +171,11 @@ nonisolated enum DemoSeed {
         DayScript(day: 3, rdq: [T, F, T, T, T, F], pause: .campamento, activities: gentleCampamento,
                   post: .mejor, coachNote: "Hoy sin sentadilla: espalda cargada."),
         DayScript(day: 4, pain: PainLog(moment: .colacion, context: .enCabina, zones: lumbarYCuello)),
-        DayScript(day: 5, rdq: [T, T, T, T, T, T], pause: .entrada, post: .igual,
+        // Relevos: ruta completa (suave el día 5) en el paradero, sin espacio para caminar: saltó la caminata.
+        DayScript(day: 5, rdq: [T, T, T, T, T, T], pause: .entrada, activities: gentleRoute, skipped: [.pasos], post: .igual,
                   coachNote: "Plan suave: dolor alto hoy.", zones: lumbarYCuello),
         DayScript(day: 6, rdq: [T, T, T, F, T, F], checkInMoment: .colacion),
-        DayScript(day: 7, rdq: [T, F, T, F, T, F], pause: .salida, incomplete: .ojos, post: .mejor),
+        DayScript(day: 7, rdq: [T, F, T, F, T, F], pause: .salida, incomplete: .ojos, skipped: [.pasos], post: .mejor),
     ]
 
     /// Turno anterior.
@@ -197,7 +203,7 @@ nonisolated enum DemoSeed {
         var badges: Set<Badge> = []
         let counted = sessions.filter(\.counted)
         if !counted.isEmpty { badges.insert(.primeraPausa) }
-        if counted.filter({ $0.recipe == .relevo60 }).count >= 5 { badges.insert(.relevoCumplido) }
+        if GameStore.relevoPauses(in: counted) >= GameStore.relevoCumplidoPauses { badges.insert(.relevoCumplido) }
         if counted.contains(where: { $0.recipe == .campamento5 && $0.activities.allSatisfy { $0.completed && !$0.skipped } }) {
             badges.insert(.rajoCompleto)
         }
@@ -286,6 +292,10 @@ nonisolated enum DemoSeed {
             var results: [ActivityResult] = []
             var seconds = rng.double(DemoSeed.checkInSeconds)
             for kind in kinds {
+                if day.skipped.contains(kind) {
+                    results.append(DemoSeed.skippedResult(kind))
+                    continue
+                }
                 let (result, duration) = DemoSeed.result(kind, incomplete: day.incomplete == kind, rng: &rng)
                 results.append(result)
                 seconds += duration + rng.double(DemoSeed.transitionSeconds)
@@ -322,6 +332,13 @@ nonisolated enum DemoSeed {
     }
 
     // MARK: - Resultados verificados plausibles
+
+    /// Actividad saltada antes de empezar, como la deja el runner en vivo: sin cifras, `skipped` y fuera de la
+    /// sesión (no suma pasos, XP ni verificación).
+    static func skippedResult(_ kind: ActivityKind) -> ActivityResult {
+        ActivityResult(kind: kind, target: kind.defaultTarget, achieved: 0, durationSeconds: 0, completed: false,
+                       level: kind.weakByNature ? .reduced : .full, metrics: .none, anomalies: [], skipped: true)
+    }
 
     /// Resultado `.full` (o `.reduced` para la respiración) con métricas plausibles y su duración en segundos.
     static func result(_ kind: ActivityKind, incomplete: Bool, rng: inout SeedRNG) -> (ActivityResult, Double) {

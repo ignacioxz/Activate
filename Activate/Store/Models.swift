@@ -135,6 +135,8 @@ nonisolated struct ActivityResult: Codable, Identifiable, Sendable, Hashable {
 
 nonisolated enum KeyBacking: String, Codable, Sendable { case secureEnclave, software }
 
+/// Toda pausa nueva es la ruta completa (`Moment.recipe`). `relevo60` es la antigua pausa rápida: ya no
+/// se ofrece ni se crea, pero se conserva para leer las sesiones guardadas (historial y estadísticas).
 nonisolated enum RecipeKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case relevo60, colacion3, campamento5
     var id: String { rawValue }
@@ -198,7 +200,7 @@ nonisolated enum Badge: String, Codable, CaseIterable, Sendable, Identifiable {
         switch self {
         case .primeraPausa: "Hizo su primera pausa verificada."
         case .doblete: "Dos días seguidos con pausa."
-        case .relevoCumplido: "Cinco pausas de 1 minuto verificadas."
+        case .relevoCumplido: "Cinco pausas verificadas en el relevo de entrada o de salida."
         case .rajoCompleto: "Ruta completa con todo verificado."
         case .tiroLimpio: "Los 7 días del turno con pausa."
         case .caminanteDelRajo: "2.500 pasos verificados en pausas."

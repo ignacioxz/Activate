@@ -33,7 +33,7 @@ final class GameStore {
     nonisolated static let dobleteMultiplier = 2
     /// Fracción del XP base que entrega una actividad `reduced`.
     nonisolated static let reducedXPFraction = 0.5
-    /// Pausas contadas de receta Relevo para "Relevo cumplido".
+    /// Pausas contadas de ruta completa en un relevo (entrada o salida) para "Relevo cumplido".
     nonisolated static let relevoCumplidoPauses = 5
     /// Pasos verificados acumulados para "Caminante del rajo".
     nonisolated static let caminanteDelRajoSteps = 2_500
@@ -266,9 +266,10 @@ final class GameStore {
         return rajoCompletoKinds.isSubset(of: done)
     }
 
-    /// Pausas de 1 minuto (receta Relevo) contadas: el avance de "Relevo cumplido".
+    /// Pausas contadas de ruta completa hechas en un relevo (entrada o salida): el avance de "Relevo cumplido".
+    /// Las antiguas pausas rápidas (`relevo60`) no son ruta completa y no suman.
     nonisolated static func relevoPauses(in sessions: [PauseSession]) -> Int {
-        sessions.filter { counts($0) && $0.recipe == .relevo60 }.count
+        sessions.filter { counts($0) && $0.moment.isRelevo && $0.recipe != .relevo60 }.count
     }
 
     // MARK: Vista previa del XP ("hasta")

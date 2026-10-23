@@ -76,9 +76,8 @@ final class PauseCoordinator {
     @ObservationIgnored private var finishedIndex = -1
     @ObservationIgnored private var restartAfterBackground = false
 
-    init(moment: Moment, quick: Bool = false, store: AppStore, game: GameStore, coach: CoachService) {
+    init(moment: Moment, store: AppStore, game: GameStore, coach: CoachService) {
         self.moment = moment
-        self.quick = quick
         self.store = store
         self.game = game
         self.coach = coach
@@ -97,9 +96,8 @@ final class PauseCoordinator {
     /// Momento vigente: el que se eligió en el check-in de esta pausa o, si no, el de apertura.
     /// Manda en la receta, en el `CoachInput` y en la sesión guardada.
     var effectiveMoment: Moment { selectedMoment ?? moment }
-    /// "Solo tengo 1 minuto" → pausa rápida; si no, la ruta completa.
-    let quick: Bool
-    var recipeKind: RecipeKind { quick ? .relevo60 : effectiveMoment.recipe }
+    /// Siempre la ruta completa (no hay pausa rápida).
+    var recipeKind: RecipeKind { effectiveMoment.recipe }
 
     var currentIndex: Int? {
         if case .activity(let i) = stage { return i }
@@ -241,8 +239,8 @@ final class PauseCoordinator {
         consentGiven ? allowed : allowed.filter { !usesCamera($0) }
     }
 
-    /// Quita las actividades de cámara sin consentimiento. Si la receta queda vacía (relevo: cuello + ojos)
-    /// y las reglas lo permiten, deja el Stroop, que solo usa la pantalla.
+    /// Quita las actividades de cámara sin consentimiento. Si la receta queda vacía (p. ej. un plan de solo
+    /// cuello y pestañeo) y las reglas lo permiten, deja el Stroop, que solo usa la pantalla.
     nonisolated static func consentFiltered(_ recipe: Recipe, consentGiven: Bool, allowed: [ActivityKind], demo: Bool) -> Recipe {
         guard !consentGiven, !recipe.activities.isEmpty else { return recipe }
         var activities = recipe.activities.filter { !usesCamera($0.kind) }
@@ -492,8 +490,8 @@ final class PauseCoordinator {
         var level = VerificationPolicy.sessionLevel(results)
         if hardIntegrity { level = min(level, .suspicious) }
         let counted = VerificationPolicy.counts(results) && !simulated && !hardIntegrity && checkIn != nil && post != nil
-        // El momento del chip del check-in manda (si se respondió en esta pausa); la receta es la de la
-        // pausa hecha (rápida si eligió "Solo tengo 1 minuto", si no la ruta completa).
+        // El momento del chip del check-in manda (si se respondió en esta pausa); la receta es siempre la
+        // ruta completa.
         let m = effectiveMoment
         var s = PauseSession(workDayKey: cal.key(for: startedAt), turnoKey: cal.turnoKey(for: startedAt),
                              recipe: recipeKind, moment: m, startedAt: startedAt, endedAt: .now,
