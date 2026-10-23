@@ -304,7 +304,7 @@ struct StatsEngineTests {
         #expect(s.historyLines.contains("Ayer colación: RDQ 3, pausa verificada, después mejor"))
         #expect(s.historyLines.contains("Hace 2 días campamento: RDQ 4, pausa contada, después igual"))
         #expect(s.historyLines.contains("Hace 3 días entrada: RDQ 2, pausa verificada, después mejor"))
-        #expect(s.historyLines.contains("Ejercicio que más ayudó: cuello"))
+        #expect(s.historyLines.contains("Ejercicio que más ayudó: movilidad cervical"))
     }
 
     @Test func historialNuncaPasaDeDiezLineas() {
@@ -356,7 +356,7 @@ struct StatsEngineTests {
         #expect(StatsFormatting.dayInBlockLabel(2, of: 7) == "Día 2 de 7")
         #expect(StatsFormatting.streakLabel(1) == "1 día seguido" && StatsFormatting.streakLabel(3) == "3 días seguidos")
         #expect(StatsFormatting.pausesLabel(1) == "1 pausa" && StatsFormatting.pausesLabel(8) == "8 pausas")
-        #expect(StatsFormatting.activityList([.pasos, .cuello, .ojos]) == "caminata, cuello y ojos")
+        #expect(StatsFormatting.activityList([.pasos, .cuello, .ojos]) == "caminata, movilidad cervical y ojos")
         #expect(StatsFormatting.activityList([.sentadilla]) == "sentadilla")
         #expect(StatsFormatting.comparisonWithPrevious(4.0) == "vs turno pasado 4")
         #expect(StatsFormatting.comparisonWithPrevious(2.5) == "vs turno pasado 2,5")

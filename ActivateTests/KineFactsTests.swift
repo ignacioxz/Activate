@@ -29,10 +29,10 @@ struct KineFactsTests {
         #expect(value(f, .peorFaseTurno) == "Día 5: 6,0 de 6")
         #expect(value(f, .contextoDominante) == "Al bajar · 2 de 4")
         #expect(value(f, .itemFrecuente) == "11 de 11 días")
-        #expect(value(f, .mejoraPost) == "7 de 9 pausas")
+        #expect(value(f, .mejoraPost) == "6 de 8 pausas")  // el día 7 del turno B es check-in sin pausa
         #expect(value(f, .ejercicioQueAyuda) == "Caminata · 5 de 6")
         #expect(value(f, .alertas) == "2 días con RDQ 5 o más")
-        #expect(value(f, .adherencia) == "9 de 16 días")
+        #expect(value(f, .adherencia) == "8 de 16 días")
         // Ids estables y conocidos; cada hecho trae frase sin cifras, pregunta en primera persona y foco.
         #expect(Set(f.map(\.id)).isSubset(of: Set(KineFactID.all)))
         for fact in f {

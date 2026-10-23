@@ -36,7 +36,11 @@ nonisolated enum CoachPrompts {
         lines.append("Momento: \(input.moment.title). Minutos disponibles: \(input.minutesAvailable).")
         lines.append(rdqBlock(input.checkIn))
         if let zones = input.checkIn?.allZones {
-            lines.append("\(zones.count > 1 ? "Zonas que duelen" : "Zona que duele") hoy: \(PainZone.listTitle(zones).lowercased()).")
+            if zones.isEmpty {
+                lines.append("Hoy no reporta dolor en ninguna zona. No mencione dolor ni zonas.")
+            } else {
+                lines.append("\(zones.count > 1 ? "Zonas que duelen" : "Zona que duele") hoy: \(PainZone.listTitle(zones).lowercased()).")
+            }
         }
         lines.append("Plan suave hoy: \(input.gentle ? "sí (menos carga, más corto)" : "no").")
         lines.append("Receta base (id · ejercicio · meta):")

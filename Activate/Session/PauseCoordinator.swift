@@ -205,7 +205,8 @@ final class PauseCoordinator {
         let allowed = Self.consentAllowed(d.allowed, consentGiven: consent)
         cameraBlocked = !consent
         plan = SensorBlockPlanner.ordered(filtered.activities)
-        coachWhy = nil
+        // El "por qué" lo compone Swift con lo que la persona respondió (nunca la IA).
+        coachWhy = PlanWhy.compose(decision: d, checkIn: checkIn, cameraBlocked: !consent)
         coachStartMessage = nil
         coachBackend = nil
         stage = .planning
@@ -249,9 +250,14 @@ final class PauseCoordinator {
             guard !Task.isCancelled, self.stage == .planning else { return }
             guard let adoption = Self.adopt(proposal, current: self.plan, input: input, base: base, minutes: minutes,
                                             demo: demo, reducedTargets: reducedTargets) else { return }
+            let adjusted = adoption.plan != self.plan
             self.plan = adoption.plan
-            self.coachWhy = adoption.why
-            self.coachStartMessage = adoption.startMessage
+            self.coachWhy = PlanWhy.compose(decision: self.decision ?? SafetyRules.evaluate(checkIn: self.checkIn),
+                                            checkIn: self.checkIn, cameraBlocked: self.cameraBlocked,
+                                            coachAdjustedTargets: adjusted && proposal.backend == .foundationModels)
+            self.coachStartMessage = proposal.backend == .foundationModels
+                ? PlanWhy.sanitizedStartMessage(adoption.startMessage)
+                : adoption.startMessage
             self.coachBackend = proposal.backend
         }
     }
