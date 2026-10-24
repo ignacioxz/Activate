@@ -58,7 +58,7 @@ enum VerifierWiring {
             return SquatWiring.builder(hub: sensors, store: store, speed: speed)
 
         case .pararseSentarse:
-            // Teléfono en las dos manos: la fuente en vivo es la de la sentadilla en las manos (ARKit cara + mundo).
+            // Teléfono en el bolsillo delantero del pantalón: movimiento, barómetro y proximidad (sin cámara).
             return SitStandWiring.builder(hub: sensors, store: store, speed: speed)
 
         case .extensionLumbar:

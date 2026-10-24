@@ -277,14 +277,15 @@ struct SafetyRulesTests {
         #expect(ActivityKind.cuello.placement == "Teléfono en la mano a distancia selfie")
         #expect(ActivityKind.ojos.placement == ActivityKind.cuello.placement)
         #expect(ActivityKind.pasos.placement == "Guarde el teléfono en el bolsillo del pecho y camine")
-        // Sentadilla, pararse y sentarse y extensión lumbar: en las manos, nunca apoyado con la cámara en pantalla.
+        // Sentadilla y extensión lumbar: en las manos, nunca apoyado con la cámara en pantalla; pararse y
+        // sentarse, en el bolsillo delantero del pantalón.
         #expect(ActivityKind.sentadilla.placement == "Teléfono en las dos manos, frente al pecho")
         #expect(ActivityKind.extensionLumbar.placement == ActivityKind.sentadilla.placement)
-        #expect(ActivityKind.pararseSentarse.placement == ActivityKind.sentadilla.placement)
+        #expect(ActivityKind.pararseSentarse.placement == "Teléfono en el bolsillo delantero del pantalón")
         #expect(ActivityKind.stroop.placement == "Pantalla en la mano" && ActivityKind.respiracion.placement == "Pantalla en la mano")
         #expect(ActivityKind.cuello.gatingCopy == ["Sáquese casco y lentes.", "Mire al teléfono.", "Quieto un segundo."])
         #expect(ActivityKind.sentadilla.gatingCopy == ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Baje como si se sentara."])
-        #expect(ActivityKind.pararseSentarse.gatingCopy == ["Siéntese con el teléfono frente al pecho.", "Quieto un segundo.", "Párese sin usar las manos."])
+        #expect(ActivityKind.pararseSentarse.gatingCopy == ["Guarde el teléfono en el bolsillo delantero del pantalón.", "Siéntese quieto un segundo.", "Párese y siéntese sin usar las manos."])
         #expect(ActivityKind.extensionLumbar.gatingCopy == ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Inclínese hacia atrás."])
         #expect(ActivityKind.pasos.gatingCopy == ["Guarde el teléfono. Camine.", "No lo bloquee."])
     }
@@ -296,10 +297,10 @@ struct SensorBlockPlannerTests {
     private func a(_ k: ActivityKind) -> ActivityAssignment { ActivityAssignment(kind: k, target: k.defaultTarget) }
 
     @Test func campamentoSigueElOrdenFijoEnTramosDeSensor() {
-        // Pararse y sentarse, sentadilla y extensión en las manos usan ARKit sin vista: mismo bloque que
-        // cuello y pestañeo, así que comparten tramo (sin relevo de cámara).
+        // Pararse y sentarse va en el bolsillo, en el tramo de la caminata; sentadilla y extensión en las manos
+        // usan ARKit sin vista: mismo bloque que cuello y pestañeo (sin relevo de cámara).
         let groups = SensorBlockPlanner.order(Recipes.base(.campamento5, demo: false).activities)
-        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.pararseSentarse, .sentadilla, .cuello], [.stroop], [.ojos, .extensionLumbar]])
+        #expect(groups.map { $0.map(\.kind) } == [[.pasos, .pararseSentarse], [.sentadilla, .cuello], [.stroop], [.ojos, .extensionLumbar]])
         #expect(groups.compactMap(SensorBlockPlanner.block(of:)) == [.pedometer, .face, .screen, .face])
         #expect(SensorBlockPlanner.blocks(Recipes.base(.campamento5, demo: false).activities)
                 == [.pedometer, .face, .screen, .face])
@@ -308,7 +309,7 @@ struct SensorBlockPlannerTests {
     @Test func desordenadoSeOrdenaPorLaSesionYDescartaRetiradas() {
         let input = [a(.ojos), a(.stroop), a(.sentadilla), a(.pasos), a(.cuello), a(.pararseSentarse), a(.respiracion), a(.extensionLumbar)]
         let groups = SensorBlockPlanner.order(input)
-        #expect(groups.map { $0.map(\.kind) } == [[.pasos], [.pararseSentarse, .sentadilla, .cuello], [.stroop], [.ojos, .extensionLumbar]])
+        #expect(groups.map { $0.map(\.kind) } == [[.pasos, .pararseSentarse], [.sentadilla, .cuello], [.stroop], [.ojos, .extensionLumbar]])
         #expect(SensorBlockPlanner.ordered(input).map(\.kind) == ActivityKind.sessionOrder)
         #expect(SensorBlockPlanner.ordered([a(.respiracion)]).isEmpty)
     }
@@ -374,10 +375,10 @@ struct SensorBlockPlannerTests {
         #expect(SensorBlockPlanner.cameraHandoffs([a(.pasos), a(.cuello), a(.ojos), a(.extensionLumbar)]).isEmpty)
         // Cara → pantalla → cara no suelta la cámara entre medio.
         #expect(SensorBlockPlanner.cameraHandoffs([a(.cuello), a(.stroop), a(.ojos)]).isEmpty)
-        // Pararse y sentarse → sentadilla: mismo bloque, sin relevo entre ellas.
-        #expect(ActivityKind.pararseSentarse.sensorBlock == ActivityKind.sentadilla.sensorBlock)
+        // Caminata → pararse y sentarse (mismo bloque, bolsillo) → sentadilla: sin relevo de cámara.
+        #expect(ActivityKind.pararseSentarse.sensorBlock == ActivityKind.pasos.sensorBlock)
         #expect(SensorBlockPlanner.cameraHandoffs([a(.pasos), a(.pararseSentarse), a(.sentadilla)]).isEmpty)
-        // Sin sentadilla: pararse y sentarse → cervical tampoco (mismo bloque `face`).
+        // Sin sentadilla: pararse y sentarse → cervical tampoco (el bolsillo no usa cámara).
         #expect(SensorBlockPlanner.cameraHandoffs([a(.pararseSentarse), a(.cuello)]).isEmpty)
     }
 }

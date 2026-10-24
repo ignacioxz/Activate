@@ -72,10 +72,12 @@ struct SessionFlowTests {
         #expect(!PauseCoordinator.needsCameraHandoff(from: .sentadilla, to: .cuello))
         #expect(!PauseCoordinator.needsCameraHandoff(from: .ojos, to: .extensionLumbar))
         #expect(!PauseCoordinator.needsCameraHandoff(from: .cuello, to: .stroop))
-        for kind in [ActivityKind.pararseSentarse, .sentadilla, .extensionLumbar] {
+        for kind in [ActivityKind.sentadilla, .extensionLumbar] {
             #expect(kind.sensorBlock == .face, "\(kind)")
         }
-        #expect(PauseCoordinator.usesCamera(.pararseSentarse))
+        // Pararse y sentarse va en el bolsillo: sin cámara (no pide consentimiento de cámara).
+        #expect(ActivityKind.pararseSentarse.sensorBlock == .pedometer)
+        #expect(!PauseCoordinator.usesCamera(.pararseSentarse))
     }
 
     // MARK: Receta suave (Recipes.gentle vía SafetyRules.apply)
@@ -285,7 +287,7 @@ struct SessionFlowTests {
         #expect(c.cameraBlocked)
         #expect(!c.plan.isEmpty)
         #expect(c.plan.allSatisfy { !PauseCoordinator.usesCamera($0.kind) })
-        #expect(c.plan.map(\.kind) == [.pasos, .stroop])
+        #expect(c.plan.map(\.kind) == [.pasos, .pararseSentarse, .stroop])
     }
 
     @Test func sinConsentimientoElRespaldoEsStroopSoloSiLasReglasLoPermiten() {
@@ -299,10 +301,10 @@ struct SessionFlowTests {
         #expect(sinStroop.activities.isEmpty)
         // Con consentimiento no se toca.
         #expect(PauseCoordinator.consentFiltered(caraSola, consentGiven: true, allowed: ActivityKind.sessionOrder, demo: true) == caraSola)
-        // Ruta completa sin consentimiento: quedan la caminata y el Stroop (sin cámara).
+        // Ruta completa sin consentimiento: quedan la caminata, pararse y sentarse (bolsillo) y el Stroop (sin cámara).
         let ruta = Recipes.base(.campamento5, demo: true)
         #expect(PauseCoordinator.consentFiltered(ruta, consentGiven: false, allowed: ActivityKind.sessionOrder, demo: true).kinds
-                == [.pasos, .stroop])
+                == [.pasos, .pararseSentarse, .stroop])
     }
 
     @MainActor
@@ -315,7 +317,7 @@ struct SessionFlowTests {
 
     @Test func consentimientoFiltraTiposPermitidos() {
         let allowed = PauseCoordinator.consentAllowed(ActivityKind.sessionOrder, consentGiven: false)
-        #expect(allowed == [.pasos, .stroop])
+        #expect(allowed == [.pasos, .pararseSentarse, .stroop])
         #expect(PauseCoordinator.consentAllowed(ActivityKind.sessionOrder, consentGiven: true) == ActivityKind.sessionOrder)
     }
 

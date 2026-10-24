@@ -2,9 +2,10 @@ import SwiftUI
 
 // Dueño: agente "sit-to-stand".
 
-/// "Pararse y sentarse" (A4): sentado en una silla con el teléfono en las dos manos frente al pecho,
-/// mirando la pantalla. Instrucción breve, consigna grande (la del verificador), contador con anillo azul,
-/// gate visible, tick háptico por rep y "Saltar (no suma)". No hay botón "hecho": solo el runner cierra.
+/// "Pararse y sentarse" (A4) con el teléfono en el bolsillo delantero del pantalón. Sin cámara ni cara: la
+/// pantalla se apaga sola por el sensor de proximidad y todo se siente en la vibración. Contador grande con
+/// anillo, instrucción breve, tick háptico por rep, vibración fuerte al cumplir la meta (la misma de la
+/// caminata) y "Saltar (no suma)". No hay botón "hecho": solo el runner cierra.
 struct SitToStandActivityView: View {
     let runner: any ActivityRunning
     let assignment: ActivityAssignment
@@ -16,6 +17,7 @@ struct SitToStandActivityView: View {
     static let title = ActivityKind.pararseSentarse.name
     static let instruction = ActivityKind.pararseSentarse.instructions
     static let placement = ActivityKind.pararseSentarse.placement
+    static let pocketCopy = PocketSitStandCopy.pocket
     static let unit = ActivityKind.pararseSentarse.unit
     /// Segundos que se muestra un aviso del verificador antes de desaparecer.
     static let feedbackSeconds: Double = 3
@@ -56,15 +58,20 @@ struct SitToStandActivityView: View {
         .onChange(of: runner.cue) { _, cue in
             withAnimation(.smooth) { feedback = cue }
         }
+        // En el bolsillo la pantalla está apagada: la vibración es la confirmación.
+        .onChange(of: progress.count) { old, new in
+            if new > old, new < assignment.target { Haptics.shared.pocketTick() }
+        }
+        .onChange(of: progress.gate) { old, new in
+            if new == .ready, old == .calibrating { Haptics.shared.success() }
+            if case .blocked = new { Haptics.shared.warning() }
+        }
         .task(id: feedback) {
             guard feedback != nil else { return }
             try? await Task.sleep(for: .seconds(Self.feedbackSeconds))
             guard !Task.isCancelled else { return }
             withAnimation(.smooth) { feedback = nil }
         }
-        .sensoryFeedback(.increase, trigger: progress.count) { old, new in new > old }
-        .sensoryFeedback(.success, trigger: showDone) { _, new in new }
-        .sensoryFeedback(.warning, trigger: isBlocked) { _, new in new }
     }
 
     // MARK: Encabezado e instrucción
@@ -83,17 +90,20 @@ struct SitToStandActivityView: View {
 
     private var instructionCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(Self.instruction)
-                .font(.title3.weight(.semibold))
+            Label(Self.pocketCopy, systemImage: "iphone.gen3")
+                .font(.title3.weight(.bold))
                 .fixedSize(horizontal: false, vertical: true)
-            Label(Self.placement, systemImage: "iphone")
+            Text(Self.instruction)
+                .font(.body)
+                .fixedSize(horizontal: false, vertical: true)
+            Label("Vibra en cada vez y vibra fuerte al terminar.", systemImage: "iphone.radiowaves.left.and.right")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
         .flatCard()
     }
 
-    // MARK: HUD (vidrio funcional)
+    // MARK: HUD
 
     private var hud: some View {
         ZStack {
@@ -122,17 +132,12 @@ struct SitToStandActivityView: View {
 
     // MARK: Consigna y gate
 
-    private var isBlocked: Bool {
-        if case .blocked = progress.gate { return true }
-        return false
-    }
-
     @ViewBuilder
     private var command: some View {
         Group {
             switch progress.gate {
             case .calibrating:
-                Label(progress.hint.isEmpty ? SitStandCopy.calibrate : progress.hint, systemImage: "hourglass")
+                Label(progress.hint.isEmpty ? Self.pocketCopy : progress.hint, systemImage: "hourglass")
                     .font(.title2.weight(.bold))
                     .foregroundStyle(.secondary)
             case .blocked(let reason):
@@ -140,13 +145,9 @@ struct SitToStandActivityView: View {
                     .font(.title2.weight(.bold))
                     .foregroundStyle(Theme.danger)
             case .ready:
-                HStack(spacing: 12) {
-                    Image(systemName: SitStandCopy.symbol(for: progress.hint))
-                        .font(.largeTitle)
-                        .foregroundStyle(Theme.accent)
-                    Text(progress.hint)
-                        .font(.largeTitle.weight(.heavy))
-                }
+                Label(progress.hint, systemImage: "arrow.up.and.down")
+                    .font(.title.weight(.heavy))
+                    .foregroundStyle(.primary)
             }
         }
         .multilineTextAlignment(.center)
@@ -158,7 +159,7 @@ struct SitToStandActivityView: View {
         .accessibilityAddTraits(.updatesFrequently)
     }
 
-    /// Aviso transitorio del verificador ("Más lento", "Párese con las piernas…").
+    /// Aviso transitorio del verificador ("Más lento", "Párese del todo…").
     @ViewBuilder
     private var feedbackLine: some View {
         if let feedback, feedback.text != progress.hint {
@@ -185,6 +186,8 @@ struct SitToStandActivityView: View {
         guard let outcome, !delivered else { return }
         delivered = true
         if outcome.completed {
+            // Vibración fuerte (la de la meta de pasos): se siente con el teléfono en el bolsillo.
+            Haptics.shared.goalReached()
             withAnimation(.snappy) { showDone = true }
             Task {
                 try? await Task.sleep(for: .seconds(ActivityRunView.handoffSeconds))

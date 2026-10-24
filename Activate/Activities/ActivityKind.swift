@@ -1,8 +1,9 @@
 import Foundation
 
 /// Bloque de sensor que necesita una actividad. Todo lo que usa cámara va por ARKit sin vista (`face`):
-/// cuello y pestañeo con la cara; sentadilla, pararse y sentarse y extensión lumbar con la cara + la pose
-/// del teléfono en el mundo, con el teléfono en las manos. Ninguna actividad muestra la imagen de la cámara.
+/// cuello y pestañeo con la cara; sentadilla y extensión lumbar con la cara + la pose del teléfono en el
+/// mundo, con el teléfono en las manos. Pararse y sentarse va con el teléfono en el bolsillo (movimiento,
+/// barómetro y proximidad, sin cámara), en el bloque de la caminata. Ninguna actividad muestra la cámara.
 nonisolated enum SensorBlock: String, Codable, Sendable { case pedometer, face, screen }
 
 /// Catálogo del pitch (8 actividades, la respiración retirada). Contrato congelado: el agente de Activities agrega copy e
@@ -63,14 +64,15 @@ nonisolated enum ActivityKind: String, Codable, CaseIterable, Sendable, Identifi
         }
     }
 
-    /// Pararse y sentarse, la sentadilla y la extensión lumbar comparten la misma ARSession de cara + mundo
-    /// en las manos (bloque `face`): van seguidas sin relevo de cámara entre ellas.
+    /// La sentadilla y la extensión lumbar comparten la misma ARSession de cara + mundo en las manos (bloque
+    /// `face`). Pararse y sentarse va con el teléfono en el bolsillo, en el bloque de la caminata
+    /// (`pedometer`): caminata → pararse y sentarse → sentadilla no espera relevo de cámara.
     var sensorBlock: SensorBlock {
         switch self {
-        case .pasos: .pedometer
-        // ARSession sin vista con la cara (TrueDepth); sentadilla, pararse y sentarse y extensión, en las
-        // manos, además siguen la pose del teléfono con la cámara trasera.
-        case .extensionLumbar, .sentadilla, .pararseSentarse, .cuello, .ojos: .face
+        case .pasos, .pararseSentarse: .pedometer
+        // ARSession sin vista con la cara (TrueDepth); sentadilla y extensión, en las manos, además siguen
+        // la pose del teléfono con la cámara trasera.
+        case .extensionLumbar, .sentadilla, .cuello, .ojos: .face
         case .respiracion, .stroop: .screen
         }
     }
@@ -157,7 +159,7 @@ nonisolated struct VerificationSpec: Sendable, Hashable, Codable {
         switch kind {
         case .pasos: minDur = demo ? 10 : 100; maxDur = 600
         case .sentadilla, .extensionLumbar: minDur = Double(t) * 0.6; maxDur = 240
-        // Una rep puede durar hasta 15 s (`SitToStandVerifier.maxRepSeconds`): con meta 8 cabe en 240 s.
+        // Cada transición puede durar hasta 8 s (`PocketSitStandVerifier.K.maxStrokeSeconds`): con meta 8 cabe en 240 s.
         case .pararseSentarse: minDur = Double(t) * 1.2; maxDur = 240
         case .cuello: minDur = Double(t) * 0.8; maxDur = 180
         case .ojos: minDur = demo ? 8 : 20; maxDur = 180

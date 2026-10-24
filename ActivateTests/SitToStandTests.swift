@@ -1599,17 +1599,35 @@ private nonisolated struct FNOperator {
 /// primero que falló, avisos que no deberían aparecerle a una persona honesta).
 private nonisolated func fnSweep(_ seeds: ClosedRange<UInt64>, target: Int = 4, maxAttempts: Int = 8, style: FNStyle,
                      body: SitStandSynth.Body = SitStandSynth.Body(), noise: SitStandSynth.Noise = SitStandSynth.Noise(),
-                     sensors: FNSensors = FNSensors()) -> (ok: Int, n: Int, fail: String?, badCues: [String]) {
+                     sensors: FNSensors = FNSensors()) -> (ok: Int, n: Int, fail: String?, badCues: [String], margins: String) {
     var ok = 0
     var fail: String? = nil
     var bad: [String] = []
+    // Márgenes honestos de los umbrales de tronco en las reps contadas (avance al subir, de lado, alabeo, subida
+    // relativa a la mediana de la persona).
+    var maxForward = -Double.infinity, maxLateral = 0.0, maxRoll = 0.0, minRatio = Double.infinity
     for seed in seeds {
         var op = FNOperator(seed: seed, target: target, style: style, body: body, noise: noise, sensors: sensors)
         op.session(maxAttempts: maxAttempts)
+        let counted = op.verifier.attempts.filter { $0.rep != nil }
+        let rises = counted.map(\.faceRise).sorted()
+        for a in counted {
+            maxForward = max(maxForward, a.riseForward ?? -1)
+            maxLateral = max(maxLateral, a.peakLateral)
+            maxRoll = max(maxRoll, a.peakRollDelta)
+            if let median = rises.isEmpty ? nil : rises[rises.count / 2] { minRatio = min(minRatio, a.faceRise / median) }
+        }
+        if !op.badCues.isEmpty, bad.isEmpty {
+            // Las medidas de cada intento del primer operador con avisos falsos.
+            print("RT|   avisos falsos, semilla \(seed): \(op.badCues)")
+            for i in 0..<op.verifier.attemptCount { print("RT|     \(op.verifier.attemptLine(i))") }
+        }
         bad += op.badCues
         if op.verifier.count >= target && op.level == .full { ok += 1 } else if fail == nil { fail = "seed \(seed): " + op.diag() }
     }
-    return (ok, seeds.count, fail, bad)
+    let margins = String(format: "avance al subir ≤ %.2f m, de lado ≤ %.2f m, alabeo ≤ %.0f°, subida ≥ %.2f × mediana",
+                         maxForward, maxLateral, maxRoll, minRatio)
+    return (ok, seeds.count, fail, bad, margins)
 }
 
 /// Red team de falsos negativos convertido en regresión. Persona: operador de camión, 52 años, dolor lumbar.
@@ -1639,6 +1657,7 @@ struct SitToStandHonestOperatorTests {
         let r = fnSweep(Self.seeds, style: style, body: body, sensors: sensors)
         print("RT| \(name): \(r.ok)/\(r.n) completan con nivel full, \(r.badCues.count) avisos falsos"
               + (r.fail.map { " | primer fallo: \($0)" } ?? ""))
+        print("RT|   márgenes \(name): \(r.margins)")
         #expect(r.ok == r.n, "\(name): \(r.fail ?? "")", sourceLocation: sourceLocation)
         #expect(r.badCues.isEmpty, "\(name): \(Set(r.badCues).sorted())", sourceLocation: sourceLocation)
     }
@@ -1790,5 +1809,763 @@ struct SitToStandHonestOperatorTests {
                      sensors: sensors { $0.faceDropEvery = 1.0; $0.faceDropFrames = 1 })
         let op = one(style: FNStyle(), sensors: sensors { $0.faceDropEvery = 1.0; $0.faceDropFrames = 1 })
         #expect(op.verifier.reference != nil)
+    }
+}
+
+// MARK: - Máquina de estados v2 (grabaciones reales del iPhone)
+
+/// Escenarios sacados de dos grabaciones reales (iPhone 17 Pro Max, 23-10-2026) en las que la persona hizo
+/// 5 + 6 ciclos honestos y el verificador anterior contó 1 + 0: calibración de 6-15 s (pedía el teléfono quieto
+/// en 3D mientras el VIO se asentaba o la persona se mecía), referencias de la calibración que quedaban viejas al
+/// cambiar el agarre sentado (`armsOnly` y `torsoOnly` falsos), "sentado" medido con el teléfono (regazo vs pecho)
+/// y la primera postura de pie tomada como asiento. Más los casos de Marco (52 años, dolor lumbar): lento, muy
+/// inclinado, con el teléfono en el regazo y sentándose cada vez distinto. Y dos ataques que la v2 podría abrir.
+struct SitToStandStateMachineTests {
+    typealias Kind = SitToStandVerifier.HoldChallenge.Kind
+
+    private static let badCueTexts = [SitStandCopy.torsoOnly, SitStandCopy.partial, SitStandCopy.notSeated,
+                                      SitStandCopy.sitUpright, SitStandCopy.armsOnly, SitStandCopy.tooSlow,
+                                      SitStandCopy.noTravel, SitStandCopy.phoneTilted]
+
+    private struct Run {
+        var v: SitToStandVerifier
+        var events: [(t: Double, e: VerifierEvent)] = []
+        var cues: [String] { events.compactMap { if case .cue(let c) = $0.e { c.text } else { nil } } }
+        var badCues: [String] { cues.filter { SitToStandStateMachineTests.badCueTexts.contains($0) } }
+        var readyAt: Double? { events.first { $0.e == .gate(.ready) }?.t }
+        func log(_ name: String) -> String {
+            let rej = v.rejections.map(\.reason.rawValue).joined(separator: ",")
+            let an = v.anomalies.map { "\($0.kind)/\($0.severity.rawValue)" }.joined(separator: ",")
+            var s = "SM| \(name): count=\(v.count)/\(v.spec.target) rej=[\(rej)] anom=[\(an)] bad=\(badCues)"
+            for i in 0..<v.attemptCount { s += "\nSM|   \(v.attemptLine(i))" }
+            return s
+        }
+    }
+
+    private func verifier(target: Int, seed: UInt64 = 42) -> SitToStandVerifier {
+        var v = SitToStandVerifier(spec: sitStandSpec(target), kind: sitStandKind, seed: seed)
+        v.start(at: 0)
+        return v
+    }
+
+    private func run(_ v: SitToStandVerifier, _ samples: [SitStandSample],
+                     transform: (SitStandSample) -> SitStandSample = { $0 }) -> Run {
+        var r = Run(v: v)
+        for s in samples {
+            let x = transform(s)
+            for e in r.v.ingest(x, at: x.t) { r.events.append((x.t, e)) }
+        }
+        return r
+    }
+
+    /// Rep `i` (1-based) de una serie: cumple el desafío del verificador si le toca.
+    private func rep(_ base: SitStandSynth.Rep, _ i: Int, _ challenge: SitToStandVerifier.HoldChallenge) -> SitStandSynth.Rep {
+        var r = base
+        if challenge.repIndex == i {
+            switch challenge.kind {
+            case .stand: r.standSeconds = max(r.standSeconds, SitStandSynth.challengeHoldSeconds)
+            case .sit: r.seatedSeconds = max(r.seatedSeconds, SitStandSynth.challengeHoldSeconds)
+            }
+        }
+        return r
+    }
+
+    // MARK: Postura inicial
+
+    @Test func empiezaDePieYCuentaCadaCicloConPausasSentadoCortas() {
+        // Grabación 2: empezó DE PIE y se sentó 1-1,5 s meciéndose entre cada parada. La calibración vieja esperó
+        // 14,6 s y tomó como asiento la postura de pie: 0 de 6 ciclos. Ahora: lista en ≤ 0,7 s, el primer
+        // sentarse fija el asiento ("Ahora sí…") y cuenta cada ciclo siguiente.
+        var notFull = 0
+        for seed in UInt64(1)...UInt64(6) {
+            let v = verifier(target: 4, seed: seed)
+            var synth = SitStandSynth(seed: seed + 100)
+            synth.startStanding()
+            synth.hold(1.0)
+            synth.sitDown(seconds: 1.4, leanDeg: 28)
+            synth.rock(seconds: 1.2, amplitudeDeg: 4, hz: 0.9)
+            var base = SitStandSynth.Rep()
+            base.seatedSeconds = 0.3
+            for i in 1...4 {
+                let r = rep(synth.naturalRep(base, jitter: 0.5), i, v.challenge)
+                synth.standUp(seconds: r.riseSeconds, rise: r.rise, forward: r.forward, leanDeg: r.leanDeg)
+                synth.hold(r.standSeconds)
+                synth.sitDown(seconds: r.sitSeconds, leanDeg: r.sitLeanDeg)
+                synth.rock(seconds: 1.1, amplitudeDeg: 4, hz: 0.9)
+                synth.hold(r.seatedSeconds)
+            }
+            synth.hold(0.5)
+            var r = run(v, synth.samples)
+            let outcome = r.v.finish(at: synth.t, reason: .completed)
+            #expect((r.readyAt ?? 99) <= 0.7, "semilla \(seed): lista a los \(r.readyAt ?? -1) s")
+            #expect(r.cues.contains(SitStandCopy.reseated), "semilla \(seed)")
+            #expect(r.badCues.isEmpty, "semilla \(seed): \(r.badCues)")
+            if r.v.count < 4 || sitStandLevel(outcome) != .full {
+                notFull += 1
+                print(r.log("de pie, semilla \(seed)"))
+            }
+        }
+        #expect(notFull == 0)
+    }
+
+    @Test func arranqueDeARKitNoBloqueaNiAtrasaLaCalibracion() {
+        // Grabación 1: world tracking limitado los primeros 0,9 s ("Mueva el teléfono más despacio" sin que la
+        // persona se moviera) y entre 1,4 y 3,4 s el teléfono recorrió 62 cm en horizontal y la cara 23 cm (gira en
+        // la silla, o el VIO asentándose): calibró a los 7,7 s y perdió la rep que hizo a los 4 s. Aquí: 40° de giro
+        // en 2 s sobre un eje 30 cm detrás de la cara, más 2 cm/s de deriva del VIO durante toda la serie. Ahora:
+        // sin bloqueo, lista ≤ 0,8 s después de ver la cara, y las reps cuentan.
+        var lost = 0
+        for seed in UInt64(1)...UInt64(6) {
+            let v = verifier(target: 4, seed: seed)
+            var synth = SitStandSynth(seed: seed + 200)
+            synth.hold(3.4)
+            synth.series(count: 4, challenge: v.challenge)
+            synth.hold(0.5)
+            var axis: SIMD3<Float>? = nil
+            var r = run(v, synth.samples) { s in
+                var s = s
+                if axis == nil {
+                    let d = SIMD3<Float>(s.phonePos.x - s.facePos.x, 0, s.phonePos.z - s.facePos.z)
+                    axis = s.facePos - 0.3 * d / (d * d).sum().squareRoot()
+                }
+                let theta = Float(40 * Double.pi / 180 * min(1, max(0, (s.t - 1.0) / 2.0)))
+                let drift = Float(0.02 * max(0, s.t - 3.0))
+                func turn(_ p: SIMD3<Float>) -> SIMD3<Float> {
+                    let q = p - axis!
+                    return axis! + SIMD3(q.x * cos(theta) + q.z * sin(theta), q.y, -q.x * sin(theta) + q.z * cos(theta))
+                        + SIMD3(drift, 0, 0.5 * drift)
+                }
+                s.phonePos = turn(s.phonePos)
+                s.facePos = turn(s.facePos)
+                if s.t < 1.0 { s.worldTrackingNormal = false }
+                if s.t < 1.3 {
+                    s.faceTracked = false
+                    s.facePos = .zero
+                    s.faceInPhone = .zero
+                    s.shapeEnergy = 0
+                }
+                return s
+            }
+            let outcome = r.v.finish(at: synth.t, reason: .completed)
+            #expect(!r.events.contains { $0.e == .gate(.blocked(reason: SitStandCopy.trackingLimited)) }, "semilla \(seed)")
+            #expect((r.readyAt ?? 99) <= 2.1, "semilla \(seed): lista a los \(r.readyAt ?? -1) s")
+            #expect(r.badCues.isEmpty, "semilla \(seed): \(r.badCues)")
+            if r.v.count < 4 || sitStandLevel(outcome) != .full {
+                lost += 4 - r.v.count
+                print(r.log("arranque ARKit, semilla \(seed)"))
+            }
+        }
+        #expect(lost == 0)
+    }
+
+    @Test func trackingQueNuncaArrancaBloqueaDespuesDelArranque() {
+        var v = verifier(target: 4)
+        var synth = SitStandSynth(seed: 3)
+        synth.worldTrackingNormal = false
+        synth.hold(5)
+        var blockedAt: Double? = nil
+        for s in synth.samples {
+            for e in v.ingest(s, at: s.t) where e == .gate(.blocked(reason: SitStandCopy.trackingLimited)) {
+                blockedAt = blockedAt ?? s.t
+            }
+        }
+        #expect(blockedAt.map { $0 >= SitToStandVerifier.trackingWarmupSeconds && $0 < 4.6 } ?? false, "\(String(describing: blockedAt))")
+    }
+
+    @Test func repQueEmpiezaAntesDeCalibrarNoSePierde() {
+        // Se para a los 0,3 s, antes de que la primera postura (0,5 s quieto) se tome: la historia previa tiene
+        // la meseta sentada y la rep se repasa con las mismas reglas.
+        var lost = 0
+        for seed in UInt64(1)...UInt64(6) {
+            let v = verifier(target: 4, seed: seed)
+            var synth = SitStandSynth(seed: seed + 300)
+            synth.hold(0.3)
+            synth.series(count: 4, challenge: v.challenge)
+            synth.hold(0.5)
+            var r = run(v, synth.samples)
+            let outcome = r.v.finish(at: synth.t, reason: .completed)
+            // La rep 1 empezó antes de que el verificador estuviera listo.
+            #expect(r.v.attempts.first.map { $0.rep == 1 && $0.start < (r.readyAt ?? 0) } ?? false,
+                    "semilla \(seed): lista \(r.readyAt ?? -1), \(r.v.attempts.first.map(String.init(describing:)) ?? "-")")
+            if r.v.count < 4 || sitStandLevel(outcome) != .full {
+                lost += 4 - r.v.count
+                print(r.log("rep antes de calibrar, semilla \(seed)"))
+            }
+        }
+        #expect(lost == 0)
+    }
+
+    // MARK: Referencias por rep
+
+    @Test func cambiarElAgarreSentadoNoEsBrazosNiTronco() {
+        // Grabación 1: calibró con el teléfono a 34° y sentado lo subió 8 cm a 13° (la cara 10 cm más lejos en su
+        // espacio): la rep siguiente fue `armsOnly` ("cara-teléfono 10 cm") y otra `torsoOnly` (cabeceo 30°
+        // contra la calibración). Después lo bajó al regazo (19 cm): "Siéntese derecho" y "Siéntese del todo".
+        var bad = 0
+        for seed in UInt64(1)...UInt64(6) {
+            let v = verifier(target: 4, seed: seed)
+            var synth = SitStandSynth(seed: seed + 400)
+            synth.hold(1.2)
+            synth.series(count: 1, challenge: v.challenge)
+            synth.shift(seconds: 0.6, arms: 0.08, reach: 0.10, gripPitchDeg: -21)
+            synth.hold(1.5)
+            synth.rep(rep(synth.naturalRep(), 2, v.challenge))
+            synth.shift(seconds: 0.6, arms: -0.11, gripPitchDeg: -24)
+            synth.hold(1.5)
+            for i in 3...4 { synth.rep(rep(synth.naturalRep(), i, v.challenge)) }
+            synth.hold(0.5)
+            var r = run(v, synth.samples)
+            let outcome = r.v.finish(at: synth.t, reason: .completed)
+            if r.v.count < 4 || sitStandLevel(outcome) != .full || !r.v.rejections.isEmpty || !r.badCues.isEmpty {
+                bad += 1
+                print(r.log("agarre, semilla \(seed)"))
+            }
+        }
+        #expect(bad == 0)
+    }
+
+    @Test(arguments: [false, true])
+    func telefonoEnElRegazoSentadoCuenta(liftsToChest: Bool) {
+        // Marco apoya las manos con el teléfono en el regazo (22 cm bajo el pecho, 15° más inclinado) mientras
+        // está sentado. Antes "sentado" era el teléfono a ±8 cm de la calibración: nunca volvía a estar sentado.
+        // Al pararse lo lleva al pecho (o no) y al sentarse lo vuelve a dejar en el regazo.
+        var bad = 0
+        for seed in UInt64(1)...UInt64(6) {
+            let v = verifier(target: 4, seed: seed)
+            var synth = SitStandSynth(seed: seed + 500)
+            synth.shift(seconds: 0.4, arms: -0.22, gripPitchDeg: 15)
+            synth.hold(1.2)
+            for i in 1...4 {
+                let r = rep(synth.naturalRep(), i, v.challenge)
+                synth.standUp(seconds: r.riseSeconds, rise: r.rise, forward: r.forward, leanDeg: r.leanDeg,
+                              armsTo: liftsToChest ? -0.04 : nil)
+                synth.hold(r.standSeconds)
+                synth.sitDown(seconds: r.sitSeconds, leanDeg: r.sitLeanDeg, armsTo: -0.22)
+                synth.hold(r.seatedSeconds)
+            }
+            synth.hold(0.5)
+            var r = run(v, synth.samples)
+            let outcome = r.v.finish(at: synth.t, reason: .completed)
+            if r.v.count < 4 || sitStandLevel(outcome) != .full || !r.badCues.isEmpty {
+                bad += 1
+                print(r.log("regazo (al pecho: \(liftsToChest)), semilla \(seed)"))
+            }
+        }
+        #expect(bad == 0)
+    }
+
+    @Test func profundidadYCojinDistintosEnCadaRepCuentan() {
+        // Se sienta cada vez distinto: el cojín cede 2-3 cm, más adelante en la silla (hasta 12 cm) o más atrás.
+        let hips = [0.0, -0.025, 0.03, -0.03, 0.015, 0.0, -0.02, 0.025]
+        let forwards = [0.0, 0.08, -0.04, 0.12, 0.02, -0.03, 0.10, 0.05]
+        var bad = 0
+        for seed in UInt64(1)...UInt64(4) {
+            let v = verifier(target: 8, seed: seed)
+            var synth = SitStandSynth(seed: seed + 600)
+            synth.hold(1.2)
+            for i in 1...8 {
+                let r = rep(synth.naturalRep(), i, v.challenge)
+                synth.standUp(seconds: r.riseSeconds, rise: r.rise, forward: r.forward, leanDeg: r.leanDeg)
+                synth.hold(r.standSeconds)
+                synth.sitDown(seconds: r.sitSeconds, leanDeg: r.sitLeanDeg, toHip: hips[i - 1], toForward: forwards[i - 1])
+                synth.shift(seconds: 0.4, hip: hips[i - 1] - 0.015) // el cojín sigue cediendo
+                synth.hold(r.seatedSeconds)
+            }
+            synth.hold(0.5)
+            var r = run(v, synth.samples)
+            let outcome = r.v.finish(at: synth.t, reason: .completed)
+            if r.v.count < 8 || sitStandLevel(outcome) != .full || !r.badCues.isEmpty {
+                bad += 1
+                print(r.log("profundidad y cojín, semilla \(seed)"))
+            }
+        }
+        #expect(bad == 0)
+    }
+
+    @Test func marcoLentoMuyInclinadoConElTelefonoEnElRegazo() {
+        // Todo junto: se para en 2,5-5,5 s inclinando el tronco 50-55°, se sienta en 4-5 s, deja el teléfono en
+        // el regazo sentado y lo sube al pecho al pararse, se sienta cada vez a otra profundidad.
+        var bad = 0, lost = 0
+        for seed in UInt64(1)...UInt64(6) {
+            let v = verifier(target: 8, seed: seed)
+            var synth = SitStandSynth(seed: seed + 700)
+            var rng = FixtureRandom(seed: seed + 7000)
+            synth.shift(seconds: 0.4, arms: -0.20, gripPitchDeg: 12)
+            synth.hold(1.5)
+            for i in 1...8 {
+                var base = SitStandSynth.Rep()
+                base.riseSeconds = 2.5 + 3 * rng.unit()
+                base.sitSeconds = 4 + rng.unit()
+                base.leanDeg = 50 + 5 * rng.unit()
+                base.sitLeanDeg = 40
+                base.standSeconds = 1
+                base.seatedSeconds = 1.5
+                let r = rep(base, i, v.challenge)
+                synth.standUp(seconds: r.riseSeconds, rise: r.rise, forward: r.forward, leanDeg: r.leanDeg, armsTo: -0.03)
+                synth.hold(r.standSeconds)
+                synth.sitDown(seconds: r.sitSeconds, leanDeg: r.sitLeanDeg, toHip: rng.symmetric(0.025),
+                              toForward: rng.symmetric(0.08), armsTo: -0.20)
+                synth.hold(r.seatedSeconds)
+            }
+            synth.hold(0.5)
+            var r = run(v, synth.samples)
+            let outcome = r.v.finish(at: synth.t, reason: .completed)
+            if r.v.count < 8 || sitStandLevel(outcome) != .full || !r.badCues.isEmpty {
+                bad += 1
+                lost += 8 - r.v.count
+                print(r.log("Marco, semilla \(seed)"))
+            }
+        }
+        print("SM| Marco (6 semillas × 8 reps): \(lost) perdidas, \(bad) sesiones no full o con avisos falsos")
+        #expect(bad == 0)
+    }
+
+    // MARK: Lo que la v2 no debe abrir
+
+    @Test func sentarseCadaVezMasAltoNoCorreElAsiento() {
+        // Se para entero, pero cada vez "se sienta" 6 cm más arriba (sin tocar la silla, 0,7 s). El asiento sube
+        // como mucho `seatCreepMax` por rep: desde la segunda, ya no está sentado.
+        let v = verifier(target: 8)
+        var synth = SitStandSynth(seed: 9)
+        synth.hold(1.2)
+        for k in 1...8 {
+            synth.standUp(seconds: 1.3, rise: 0.42, forward: 0.30, leanDeg: 38)
+            synth.hold(0.6)
+            synth.sitDown(seconds: 1.4, leanDeg: 28, toHip: 0.06 * Double(k))
+            synth.hold(0.7)
+        }
+        var r = run(v, synth.samples)
+        _ = r.v.finish(at: synth.t, reason: .timeout)
+        print(r.log("cada vez más alto"))
+        #expect(r.v.count <= 2)
+        let seats = r.v.attempts.filter { $0.rep != nil }.map(\.seatFaceY)
+        for (a, b) in zip(seats, seats.dropFirst()) { #expect(b - a <= SitToStandVerifier.seatCreepMax + 0.005) }
+    }
+
+    @Test func empezarDePieYAgacharseNoTomaUnAsiento() {
+        // Empieza de pie y en vez de sentarse se agacha inclinado (la cara baja 40 cm pero se va 40 cm adelante).
+        // No es una silla: no hay "Ahora sí" ni reps.
+        let v = verifier(target: 4)
+        var synth = SitStandSynth(seed: 10)
+        synth.startStanding()
+        synth.hold(1.2)
+        for _ in 0..<4 {
+            let n = Int((1.0 * synth.fps).rounded())
+            for i in 1...n {
+                let u = SitStandSynth.smoothstep(Double(i) / Double(n))
+                synth.hipRise = 0.42 - 0.25 * u
+                synth.lean = 35 * u
+                synth.emit()
+            }
+            synth.hold(1.2)
+            for i in 1...n {
+                let u = SitStandSynth.smoothstep(Double(i) / Double(n))
+                synth.hipRise = 0.17 + 0.25 * u
+                synth.lean = 35 * (1 - u)
+                synth.emit()
+            }
+            synth.hold(1.0)
+        }
+        let r = run(v, synth.samples)
+        print(r.log("de pie y agacharse"))
+        #expect(r.v.count == 0)
+        #expect(!r.cues.contains(SitStandCopy.reseated))
+        #expect(!r.v.seatKnown)
+    }
+
+    // MARK: Diagnóstico por intento
+
+    @Test func cadaIntentoQuedaEnElRegistroConSusMedidas() {
+        let v = verifier(target: 4, seed: 3)
+        var synth = SitStandSynth(seed: 11)
+        synth.hold(1.2)
+        synth.armsRaise(seconds: 0.9, lift: 0.32, holdSeconds: 0.6)
+        synth.hold(1.0)
+        synth.leanForward(seconds: 1.2, leanDeg: 40, holdSeconds: 0.6)
+        synth.hold(1.0)
+        synth.series(count: 2, challenge: nil)
+        synth.hold(0.5)
+        let r = run(v, synth.samples)
+        print(r.log("diagnóstico"))
+        let provider: any AttemptDiagnosticsProviding = r.v
+        let lines = (0..<provider.attemptCount).map { provider.attemptLine($0) }
+        #expect(provider.attemptCount == r.v.attempts.count)
+        #expect(lines.contains { $0.contains("armsOnly") })
+        #expect(lines.contains { $0.contains("torsoOnly") })
+        #expect(lines.contains { $0.contains("rep 1") } && lines.contains { $0.contains("rep 2") })
+        #expect(lines.allSatisfy { $0.contains("asiento cara") && $0.contains("sube cara") && $0.contains("cabeceo") })
+        let counted = r.v.attempts.filter { $0.rep != nil }
+        #expect(counted.count == 2)
+        #expect(counted.allSatisfy { $0.faceRise > 0.38 && $0.phoneRise > 0.38 && $0.faceTravel > 0.2 && $0.liveFraction > 0.9 })
+        #expect(counted.allSatisfy { abs($0.seatFaceY - counted[0].seatFaceY) < 0.03 })
+    }
+}
+
+// Las pruebas de escenarios de la versión en las manos (cara) se retiraron: "Pararse y sentarse" ahora va en
+// el bolsillo (PocketSitStandVerifier, con su propio replay real).
+
+
+// MARK: - Auditoría anti-fraude: tronco de lado, medias paradas y suspendido
+
+private nonisolated struct AFBody {
+    var seatHipY = 0.50
+    var trunkToFace = 0.70
+    var faceAhead = 0.08
+    var trunkToPhone = 0.40
+    var phoneAhead = 0.30
+    var pitch0 = 35.0
+    var roll0 = 2.0
+    /// Fracción del cabeceo / alabeo del tronco que sigue el teléfono (0: las muñecas lo compensan).
+    var pitchFollow = 0.8
+    var rollFollow = 1.0
+    var headingDeg = 30.0
+}
+
+/// Postura destino (nil = la deja como está): cadera arriba y adelante, tronco adelante (`lean`) y de lado
+/// (`side`), brazos arriba y adelante.
+private nonisolated struct AFPose {
+    var hip: Double? = nil
+    var fwd: Double? = nil
+    var lean: Double? = nil
+    var side: Double? = nil
+    var arms: Double? = nil
+    var reach: Double? = nil
+}
+
+/// Generador con el tronco que también se inclina DE LADO (el `SitStandSynth` solo lo inclina adelante), con el
+/// verificador en lazo cerrado.
+private final class AFGen {
+    var body: AFBody
+    var hip = 0.0, fwd = 0.0, lean = 0.0, side = 0.0, arms = 0.0, reach = 0.0
+    var t = 0.0
+    let fps = 60.0
+    var samples: [SitStandSample] = []
+    var live = true
+    var depth = true
+    /// false = la cámara frontal no ve la cara (tapada): bloquea el verificador y sus intentos.
+    var faceVisible = true
+    private var rng: FixtureRandom
+    private var timing: FixtureRandom
+    private var origin: SIMD3<Double>? = nil
+    var v: SitToStandVerifier
+    private var fed = 0
+
+    init(seed: UInt64 = 1, vseed: UInt64 = 42, target: Int = 8, body: AFBody = AFBody()) {
+        self.body = body
+        rng = FixtureRandom(seed: seed)
+        timing = FixtureRandom(seed: seed &+ 99)
+        v = SitToStandVerifier(spec: sitStandSpec(target), kind: sitStandKind, seed: vseed)
+        v.start(at: 0)
+    }
+
+    private func jitter(_ a: Double) -> SIMD3<Double> { SIMD3(rng.symmetric(a), rng.symmetric(a), rng.symmetric(a)) }
+
+    private func world(_ v: SIMD3<Double>) -> SIMD3<Double> {
+        let h = body.headingDeg * .pi / 180
+        return SIMD3(v.x * cos(h) + v.z * sin(h), v.y, -v.x * sin(h) + v.z * cos(h))
+    }
+
+    func emit() {
+        let th = lean * .pi / 180, ph = side * .pi / 180
+        let u = SIMD3<Double>(sin(ph), cos(ph) * cos(th), cos(ph) * sin(th))
+        let a = SIMD3<Double>(0, -sin(th), cos(th))
+        let hipP = SIMD3<Double>(0, body.seatHipY + hip, fwd)
+        let sw = 0.004 * sin(2 * .pi * 0.3 * t)
+        let swayV = SIMD3<Double>(sw, 0.4 * sw, sw)
+        let face = hipP + body.trunkToFace * u + body.faceAhead * a + swayV
+        let phone = hipP + body.trunkToPhone * u + body.phoneAhead * a + SIMD3(0, arms, reach) + swayV
+            + SIMD3(repeating: 0.001 * sin(2 * .pi * 8 * t))
+        let pitch = body.pitch0 + body.pitchFollow * lean + rng.symmetric(1.5)
+        let roll = body.roll0 - body.rollFollow * side + rng.symmetric(1.5)
+        let d = face - phone
+        let r = roll * .pi / 180, p = pitch * .pi / 180
+        let d1 = SIMD3<Double>(d.x * cos(r) + d.y * sin(r), -d.x * sin(r) + d.y * cos(r), d.z)
+        let fip = SIMD3<Double>(d1.x, d1.y * cos(p) + d1.z * sin(p), -d1.y * sin(p) + d1.z * cos(p)) + jitter(0.004)
+        let o = origin ?? phone
+        origin = o
+        let pw = world(phone - o) + jitter(0.0015)
+        let fw = world(face - o) + jitter(0.003)
+        let energy: Float = live ? Float(0.008 + rng.unit() * 0.052) : 0
+        var relief: Float? = nil
+        if depth, samples.count % 4 == 0 {
+            relief = live ? Float(0.009 + rng.unit() * 0.004) : Float(0.0015 + rng.unit() * 0.001)
+        }
+        func f(_ v: SIMD3<Double>) -> SIMD3<Float> { SIMD3(Float(v.x), Float(v.y), Float(v.z)) }
+        samples.append(SitStandSample(t: t, phonePos: f(pw), phonePitchDeg: pitch, phoneRollDeg: roll,
+                                      faceTracked: faceVisible, facePos: faceVisible ? f(fw) : .zero,
+                                      faceInPhone: faceVisible ? f(fip) : .zero, shapeEnergy: faceVisible ? energy : 0,
+                                      worldTrackingNormal: true, altitude: nil, steps: nil,
+                                      faceRelief: faceVisible ? relief : nil))
+        t += 1 / fps
+    }
+
+    func flush() {
+        while fed < samples.count {
+            let s = samples[fed]
+            fed += 1
+            _ = v.ingest(s, at: s.t)
+        }
+    }
+
+    func move(_ target: AFPose, _ seconds: Double) {
+        let h0 = hip, f0 = fwd, l0 = lean, s0 = side, a0 = arms, r0 = reach
+        let n = max(1, Int((seconds * (1 + timing.symmetric(0.12)) * fps).rounded()))
+        for i in 1...n {
+            let u = (1 - cos(.pi * Double(i) / Double(n))) / 2
+            hip = h0 + ((target.hip ?? h0) - h0) * u
+            fwd = f0 + ((target.fwd ?? f0) - f0) * u
+            lean = l0 + ((target.lean ?? l0) - l0) * u
+            side = s0 + ((target.side ?? s0) - s0) * u
+            arms = a0 + ((target.arms ?? a0) - a0) * u
+            reach = r0 + ((target.reach ?? r0) - r0) * u
+            emit()
+        }
+        flush()
+    }
+
+    func hold(_ seconds: Double) {
+        for _ in 0..<max(1, Int((seconds * (1 + timing.symmetric(0.12)) * fps).rounded())) { emit() }
+        flush()
+    }
+
+    /// Imprime el resultado (con las medidas de cada intento) y devuelve las reps contadas.
+    func report(_ name: String) -> Int {
+        let outcome = v.finish(at: t, reason: .completed)
+        let rej = Dictionary(grouping: v.rejections, by: \.reason).map { "\($0.key.rawValue)×\($0.value.count)" }.sorted()
+        print("AF| \(name): count=\(v.count)/\(v.spec.target) level=\(sitStandLevel(outcome)) rej=\(rej) "
+              + "anom=\(outcome.anomalies.map { "\($0.kind)/\($0.severity.rawValue)" }) reanclajes=\(v.reanchorCount)")
+        for i in 0..<v.attemptCount { print("AF|   \(v.attemptLine(i))") }
+        return v.count
+    }
+}
+
+/// Ataques de la auditoría anti-fraude: inclinar el tronco de lado (la cara sube 20-25 cm al enderezarse), medias
+/// paradas tras reps enteras, rebotar suspendido sobre la silla, inclinaciones adelante con las muñecas compensando,
+/// y los brazos con la cara quieta (que con "sentado" medido por la cara debe seguir dejando rastro).
+struct SitToStandAuditAttackTests {
+    /// Ciclos de ataque: `low` (la meseta "sentado" del tramposo) ↔ `high`, 2,3 s en cada una (cumple cualquier desafío).
+    private func cycles(_ g: AFGen, n: Int = 10, low: AFPose, high: AFPose, up: Double = 1.0, down: Double = 1.0,
+                        lowHold: Double = 2.3, highHold: Double = 2.3) {
+        for _ in 0..<n where g.v.phase != .done {
+            g.move(high, up)
+            g.hold(highHold)
+            g.move(low, down)
+            g.hold(lowHold)
+        }
+    }
+
+    /// Una parada entera y honesta: inclinarse, despegar, extender, quedarse y volver a sentarse.
+    private func honestRep(_ g: AFGen) {
+        g.move(AFPose(fwd: 0.10, lean: 35), 0.6)
+        g.move(AFPose(hip: 0.42, fwd: 0.30, lean: 0), 0.9)
+        g.hold(2.3)
+        g.move(AFPose(hip: 0, fwd: 0, lean: 0), 1.4)
+        g.hold(2.3)
+    }
+
+    @Test func ladoSentadoInclinado45ConCalibracionDerecha() {
+        let g = AFGen()
+        g.hold(1.6)
+        g.move(AFPose(side: 45), 1.0)
+        g.hold(2.6)
+        cycles(g, low: AFPose(side: 45, arms: 0), high: AFPose(side: 0, arms: 0.07))
+        #expect(g.report("lado 45° ↔ derecho (+7 cm brazos), calibra derecho") == 0)
+    }
+
+    @Test func ladoSentadoInclinado50CalibraInclinado() {
+        let g = AFGen()
+        g.side = 50
+        g.hold(1.6)
+        cycles(g, low: AFPose(side: 50, arms: 0), high: AFPose(side: 0, arms: 0.05))
+        #expect(g.report("lado 50° ↔ derecho, calibra inclinado") == 0)
+    }
+
+    @Test func ladoConMunecasCompensandoElAlabeo() {
+        var b = AFBody()
+        b.rollFollow = 0
+        let g = AFGen(body: b)
+        g.side = 50
+        g.hold(1.6)
+        cycles(g, low: AFPose(side: 50, arms: 0), high: AFPose(side: 0, arms: 0.05))
+        #expect(g.report("lado 50° con las muñecas compensando el alabeo") == 0)
+    }
+
+    @Test func dePieInclinacionLateral() {
+        var b = AFBody()
+        b.seatHipY = 0.92
+        let g = AFGen(body: b)
+        g.hold(1.6)
+        cycles(g, low: AFPose(side: 50, arms: 0), high: AFPose(side: 0, arms: 0.05))
+        #expect(g.report("de pie: lateral 50° ↔ derecho") == 0)
+    }
+
+    @Test func adelanteMunecasCompensanCabeceoCalibraInclinado() {
+        var b = AFBody()
+        b.pitchFollow = 0
+        let g = AFGen(body: b)
+        g.lean = 45
+        g.hold(1.6)
+        cycles(g, low: AFPose(lean: 45), high: AFPose(lean: 0))
+        #expect(g.report("adelante 45° con las muñecas compensando, calibra inclinado") == 0)
+    }
+
+    @Test func adelanteMesetaInclinadaTrasCalibrarDerecho() {
+        var b = AFBody()
+        b.pitchFollow = 0
+        let g = AFGen(body: b)
+        g.hold(1.6)
+        g.move(AFPose(lean: 45), 1.0)
+        g.hold(2.6)
+        cycles(g, low: AFPose(lean: 45), high: AFPose(lean: 0))
+        #expect(g.report("adelante 45° ↔ derecho, calibra derecho") == 0)
+    }
+
+    @Test func dePieReverenciaProfunda() {
+        var b = AFBody()
+        b.seatHipY = 0.92
+        b.pitchFollow = 0
+        let g = AFGen(body: b)
+        g.hold(1.6)
+        cycles(g, low: AFPose(lean: 48), high: AFPose(lean: 0))
+        #expect(g.report("de pie: reverencia 48° con las muñecas compensando") == 0)
+    }
+
+    @Test(arguments: [0.12, 0.15, 0.18])
+    func inclinado25MasMedioParado(hipRise: Double) {
+        let g = AFGen()
+        g.hold(1.6)
+        g.move(AFPose(fwd: 0.05, lean: 25), 0.8)
+        g.hold(2.6)
+        cycles(g, low: AFPose(hip: 0, fwd: 0.05, lean: 25), high: AFPose(hip: hipRise, fwd: 0.30, lean: 0))
+        #expect(g.report(String(format: "inclinado 25° + medio parado %.0f cm", hipRise * 100)) == 0)
+    }
+
+    @Test(arguments: [0.12, 0.15, 0.18])
+    func encorvadoAtrasMasMedioParado(hipRise: Double) {
+        // Se echa atrás en el respaldo (la cara baja 5 cm y va atrás) y se levanta a medias adelantando la cadera.
+        let g = AFGen()
+        g.lean = -20
+        g.hold(1.6)
+        cycles(g, low: AFPose(hip: 0, fwd: 0, lean: -20), high: AFPose(hip: hipRise, fwd: 0.25, lean: 0))
+        #expect(g.report(String(format: "respaldo −20° + medio parado %.0f cm", hipRise * 100)) == 0)
+    }
+
+    @Test(arguments: [0.10, 0.13])
+    func suspendidoRebotandoSinPausa(hover: Double) {
+        // Una parada honesta y después rebota entre suspendido `hover` sobre la silla y de pie, sin sentarse.
+        let g = AFGen()
+        g.hold(1.6)
+        g.move(AFPose(hip: 0.42, fwd: 0.30, lean: 0), 1.3)
+        g.hold(2.3)
+        cycles(g, low: AFPose(hip: hover, fwd: 0.05), high: AFPose(hip: 0.42, fwd: 0.30), up: 0.9, down: 0.9,
+               lowHold: 0.6, highHold: 2.3)
+        #expect(g.report(String(format: "rebote suspendido %.0f cm ↔ de pie", hover * 100)) <= 1)
+    }
+
+    @Test(arguments: [0.20, 0.22, 0.24])
+    func dosHonestasYDespuesMediasSinBrazos(hipRise: Double) {
+        // Dos paradas enteras (cara +0,42) y después medias paradas de `hipRise` con el tronco derecho.
+        let g = AFGen()
+        g.hold(1.6)
+        for _ in 0..<2 { honestRep(g) }
+        for _ in 0..<8 where g.v.phase != .done {
+            g.move(AFPose(fwd: 0.10, lean: 35), 0.6)
+            g.move(AFPose(hip: hipRise, fwd: 0.22, lean: 0, arms: 0.0), 0.9)
+            g.hold(2.3)
+            g.move(AFPose(hip: 0, fwd: 0, lean: 0), 1.2)
+            g.hold(2.3)
+        }
+        #expect(g.report(String(format: "2 honestas + medias de %.0f cm", hipRise * 100)) <= 2)
+    }
+
+    @Test func unaHonestaYDespuesMediasConBrazos() {
+        let g = AFGen()
+        g.hold(1.6)
+        honestRep(g)
+        cycles(g, low: AFPose(hip: 0, fwd: 0, lean: 0, arms: 0), high: AFPose(hip: 0.16, fwd: 0.20, lean: 0, arms: 0.10))
+        #expect(g.report("1 honesta + medias de 16 cm con brazos +10") <= 1)
+    }
+
+    @Test func brazosConCaraQuietaDejanRastro() {
+        // "Sentado" se mide con la cara: los brazos que suben el teléfono igual abren un intento y quedan anotados.
+        let g = AFGen()
+        g.hold(1.6)
+        cycles(g, n: 6, low: AFPose(arms: 0), high: AFPose(arms: 0.32), up: 0.9, down: 0.9, lowHold: 1.0, highHold: 0.8)
+        #expect(g.report("brazos 32 cm sentado") == 0)
+        #expect(g.v.anomalies.contains { $0.kind == SitStandAnomaly.armsOnly && $0.severity == .hard })
+    }
+
+    @Test func trinqueteDeSuspendido() {
+        // Tras cada parada honesta, la "sentada" queda 6 cm más alta que la anterior (2,3 s quieto, sin tocar la
+        // silla): si el asiento siguiera a cada meseta, la amplitud se achicaría sin que ningún intento lo delate.
+        let g = AFGen()
+        g.hold(1.6)
+        var hover = 0.0
+        for _ in 0..<8 where g.v.phase != .done {
+            g.move(AFPose(fwd: 0.10, lean: 35), 0.6)
+            g.move(AFPose(hip: 0.42, fwd: 0.30, lean: 0), 0.9)
+            g.hold(2.3)
+            hover = min(0.30, hover + 0.06)
+            g.move(AFPose(hip: hover, fwd: 0.0, lean: 0), 1.2)
+            g.hold(2.3)
+        }
+        #expect(g.report("trinquete suspendido +6 cm por rep") <= 2)
+    }
+
+    // MARK: Reclinarse en el respaldo y "abdominales"
+
+    /// Reclinado en el respaldo con las muñecas compensando el cabeceo: enderezarse sube la cara 20-28 cm y, con los
+    /// brazos, el teléfono también. Ninguna postura reclinada puede pasar a ser el asiento.
+    private func reclinedBody() -> AFBody {
+        var b = AFBody()
+        b.pitchFollow = 0
+        return b
+    }
+
+    @Test(arguments: [45.0, 60.0])
+    func reclinadoDesdeElInicioYAbdominalesNoCuenta(recline: Double) {
+        let g = AFGen(body: reclinedBody())
+        g.lean = -recline
+        g.hold(1.6)
+        cycles(g, low: AFPose(lean: -recline, arms: 0), high: AFPose(lean: 0, arms: 0.26))
+        #expect(g.report(String(format: "empieza reclinado %.0f° + abdominales con brazos", recline)) == 0)
+    }
+
+    @Test func unaHonestaYDespuesReclinarseYAbdominalesNoCuenta() {
+        // El asiento ya es conocido: reclinarse y quedarse quieto no lo baja (sin pararse baja ≤ `seatSinkMax`).
+        let g = AFGen(body: reclinedBody())
+        g.hold(1.6)
+        honestRep(g)
+        g.move(AFPose(lean: -60), 1.2)
+        g.hold(2.6)
+        cycles(g, low: AFPose(lean: -60, arms: 0), high: AFPose(lean: 0, arms: 0.26))
+        #expect(g.report("1 honesta + reclinarse 60° + abdominales con brazos") <= 1)
+    }
+
+    @Test func taparLaCamaraReclinarseYAbdominalesNoCuenta() {
+        // Tras un bloqueo (cara tapada) se vuelve a tomar el asiento: reclinado no lo es.
+        let g = AFGen(body: reclinedBody())
+        g.hold(1.6)
+        honestRep(g)
+        g.faceVisible = false
+        g.move(AFPose(lean: -60), 1.2)
+        g.hold(1.5)
+        g.faceVisible = true
+        g.hold(2.6)
+        cycles(g, low: AFPose(lean: -60, arms: 0), high: AFPose(lean: 0, arms: 0.26))
+        #expect(g.report("1 honesta + tapar la cámara, reclinarse 60° + abdominales") <= 1)
+    }
+
+    @Test func montajeConBrazosYAdelanteSinProfundidad() {
+        // Aproximación de un montaje: la "cara" pegada al teléfono (sube con él), brazos +36 cm y 15 cm adelante,
+        // sin mapa de profundidad (no hay relieve que la delate).
+        var b = AFBody()
+        b.trunkToFace = 0.40
+        b.faceAhead = -0.05
+        let g = AFGen(body: b)
+        g.depth = false
+        g.hold(1.6)
+        cycles(g, low: AFPose(arms: 0, reach: 0), high: AFPose(arms: 0.36, reach: 0.15))
+        #expect(g.report("montaje aproximado + brazos 36 cm + adelanta 15 cm, sin profundidad") == 0)
     }
 }

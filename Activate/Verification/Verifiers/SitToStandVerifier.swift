@@ -11,15 +11,21 @@ import Foundation
 // más `CMAltimeter` y `CMPedometer`.
 //
 // Capas contra el engaño (cada una por sí sola no basta; juntas sí):
-// 1. Subida real: en un mismo cuadro el teléfono sube ≥ 18 cm y la CARA ≥ 20 cm sobre la referencia
-//    "sentado" (los brazos no levantan la cara), y después vuelve a < 8 cm con una fase final sentada y
-//    quieta; 1,2-15 s por rep.
+// 1. Subida real: en un mismo cuadro el teléfono sube ≥ 18 cm y la CARA ≥ 20 cm sobre el asiento de ESA rep
+//    (referencias tomadas sentado y quieto justo antes de empezar; los brazos no levantan la cara), y después la
+//    cara vuelve a ≤ 8 cm del asiento, quieta (o en una meseta de ≤ 2,5 cm: el cojín rebota) y sobre la silla;
+//    1,2-15 s por rep. Desde la 3.ª rep, la subida de la cara también se compara con la de la persona (≥ 75 % de
+//    su mediana): medias paradas tras reps enteras no cuentan. El asiento sube como mucho 2 cm por rep (sentarse
+//    cada vez más alto no lo corre) y baja como mucho 5 cm por intento salvo al sentarse de verdad (la cara baja
+//    más de lo que se mueve en horizontal): reclinada en el respaldo o inclinada de lado no es un asiento.
 // 2. Anti-brazos: el teléfono no sube más que la cara (+10 cm, con signo: brazos cansados que bajan el
 //    teléfono no son trampa) y la cara no se mueve respecto de él (±10 cm).
 // 3. Cuerpo que se traslada: pararse adelanta la cara ≥ 10 cm (sobre los pies); un montaje rígido o un
 //    ascensor no. Inclinarse sin pararse no cuenta (el teléfono baja > 12 cm o la cara se desplaza más
 //    en horizontal que en vertical); enderezarse desde una postura encorvada tampoco (al llegar arriba
-//    la cara no puede quedar atrás ni el teléfono girado > 30°).
+//    la cara no puede quedar atrás ni el teléfono girado > 30°), ni desde una inclinación lateral (la cara
+//    corrida > 15 cm de lado o el teléfono girado > 25° de lado), ni desde reclinado (del despegue al pico la
+//    cara avanza > 45 cm: pararse la lleva sobre los pies, 25-35 cm).
 // 4. Persona viva: cara rastreada con micro-expresiones (`shapeEnergy`) en ≥ 20 % de los cuadros de la
 //    rep; < 10 % en una ventana de 2 s → `static` (foto, pantalla, aunque tenga ruido suelto). Cara con
 //    relieve 3D en el mapa de profundidad TrueDepth: una foto o un vídeo en otra pantalla son planos
@@ -30,9 +36,11 @@ import Foundation
 //
 // Tolerancias para el operador real (dolor lumbar, silla alta, poca luz): silla alta (la cadera sube 22 cm)
 // o quedar arriba con 15° de tronco, brazos cansados que bajan el teléfono, inclinación de hasta 60° al
-// despegar, reps de hasta 15 s sin apurarlo, la rep cierra con la cara de vuelta sobre la silla y la
-// referencia "sentado" solo se adapta con el tronco derecho, re-anclaje si ARKit retoma con el origen
-// corrido, calibración y quietud que toleran cuadros sueltos sin cara o sin tracking.
+// despegar, reps de hasta 15 s sin apurarlo, empezar sentado o de pie (la primera postura sale con la cara
+// quieta 0,5 s y sin esperar que el VIO se asiente), caminar hasta la silla antes de sentarse, sentadas cortas
+// (0,6 s) que rebotan en el cojín, el teléfono en el regazo sentado y traído al pecho al pararse, otro agarre
+// entre reps, sentarse a otra profundidad, en el borde o apoyado en el respaldo, el cojín que cede, re-anclaje
+// si ARKit retoma con el origen corrido, quietud que tolera cuadros sueltos sin cara o sin tracking.
 
 // MARK: - Muestra de dominio
 
@@ -132,54 +140,116 @@ nonisolated enum SitStandAnomaly {
 
 // MARK: - Verificador
 
-/// Rep = pararse del todo y volver a sentarse, verificada con la pose del teléfono y la cara.
+/// Rep = pararse del todo desde la silla y volver a sentarse, verificada con la pose del teléfono y la cara.
 /// `kind` llega por init: la integración y los tests usan `.pararseSentarse`.
+///
+/// Máquina de estados (v2, calibrada con grabaciones reales del iPhone 17 Pro Max):
+/// - La postura inicial puede ser sentado O de pie: basta la cara quieta 0,5 s (antes 1 s con el teléfono
+///   quieto en 3D, que con el VIO asentándose o la persona meciéndose tardaba 6-15 s). Si en la historia previa
+///   hubo una meseta de la que después subió la cara, se repasa con las mismas reglas: la rep que empezó
+///   mientras ARKit arrancaba no se pierde.
+/// - "Sentado" lo decide la CARA (altura y quietud, sobre el asiento), no el teléfono: sentado, la cara varía
+///   ±2 cm entre reps y el teléfono va del regazo al pecho (±13 cm).
+/// - Las referencias de cada intento (alturas del asiento, cara en el espacio del teléfono, cabeceo, alabeo,
+///   dirección) se toman de los últimos cuadros quietos sentado justo antes del intento, no de la calibración:
+///   cambiar el agarre sentado ya no da `armsOnly` ni `torsoOnly` en la rep siguiente.
+/// - Cada intento cerrado (contado o no) deja sus medidas en `attempts` (`AttemptDiagnosticsProviding`): el
+///   registro del teléfono las guarda junto a la grabación para calibrar con datos reales.
 nonisolated struct SitToStandVerifier: ActivityVerifier {
     typealias Sample = SitStandSample
 
-    // MARK: Constantes (valores iniciales; se calibran en el iPhone)
+    // MARK: Constantes (calibradas con grabaciones reales; ver `SitToStandRealReplayTests`)
 
-    // Calibración "sentado".
-    static let calibrationSeconds: Double = 1.0
-    static let minCalibrationSamples = 10
-    /// El teléfono no puede moverse más que esto durante la ventana de calibración (m).
-    static let calibrationMaxDrift: Double = 0.05
+    // Postura inicial (sentado o de pie).
+    /// Cara quieta este tiempo con el teléfono delante: primera postura (s).
+    static let calibrationSeconds: Double = 0.5
+    /// …con al menos estos cuadros con cara en la ventana (≈ 24 Hz efectivos).
+    static let minCalibrationSamples = 12
+    /// Rango de altura de la cara dentro de la ventana (m). Quieto (sentado o de pie) varía ±1 cm; el VIO que
+    /// todavía se asienta corre el origen en HORIZONTAL (50 cm en 2 s en una grabación), y eso ya no reinicia.
+    static let calibrationMaxDrift: Double = 0.04
+    /// Las manos pueden moverse algo mientras tanto, no a velocidad de rep (m/s).
+    static let calibrationMaxPhoneSpeed: Double = 0.25
     /// Distancia cara-teléfono plausible con el teléfono frente al pecho (m).
     static let faceDistanceRange: ClosedRange<Double> = 0.15...1.0
     /// El teléfono debe quedar delante de la cara en horizontal (m): define "hacia adelante".
     static let minForwardOffset: Double = 0.06
+    /// Historia previa a la primera postura que se repasa (s).
+    static let preHistorySeconds: Double = 8
+    /// Meseta mínima de la historia previa que sirve de asiento (s).
+    static let preSeatSeconds: Double = 0.15
+    /// ARKit tarda ~1 s en pasar el world tracking a normal: mientras nunca estuvo normal, hasta esto desde el
+    /// inicio no se bloquea con "Mueva el teléfono más despacio" (s).
+    static let trackingWarmupSeconds: Double = 4
 
     // Repetición.
-    /// Subida mínima del teléfono sobre la referencia sentado (m). Sensible: silla alta de casino (la cadera
-    /// sube 22 cm), o persona de 1,62 m que arriba queda con 10-15° de tronco (el teléfono, 30 cm delante del
-    /// pecho, sube 21-24 cm aunque la cara suba 25-27). Lo que separa pararse de los brazos es `minFaceRise`.
+    /// Subida mínima del teléfono sobre el asiento de la rep (m). Silla alta de casino: la cadera sube 22 cm.
     static let standRise: Double = 0.18
-    /// Subida mínima de la CARA en el mismo cuadro (m): los brazos suben el teléfono, no la cara. Levantarse
-    /// 18 cm y completar con los brazos no llega; la silla alta honesta de 22 cm sí (la cara sube con la cadera).
+    /// Subida mínima de la CARA en el mismo cuadro (m): los brazos suben el teléfono, no la cara. Real: 0,35-0,39.
     static let minFaceRise: Double = 0.20
-    /// Desplazamiento horizontal mínimo de la cara durante la rep (m): pararse lleva la cadera sobre los pies
-    /// (honesto ≥ 0,2 m en todos los estilos medidos). Un montaje rígido o un ascensor no se trasladan.
-    static let minFaceTravel: Double = 0.10
-    /// Banda "sentado" alrededor de la referencia (m).
+    /// Desplazamiento horizontal mínimo de la cara durante la rep (m). Real: 0,10-0,47 (la menor, parándose rápido
+    /// desde el borde de la silla, casi en vertical); un montaje rígido o un ascensor, ≤ 0,02.
+    static let minFaceTravel: Double = 0.06
+    /// Tras esta cantidad de reps contadas, la subida de la cara se compara también con la de ESTA persona…
+    static let relativeRiseMinReps = 2
+    /// …: menos que esta fracción de la mediana de las contadas es media parada (`partial`). Real: la menor es 0,92
+    /// de la mediana; quedar suspendido 12 cm (límite aceptado) da 0,82; pararse a medias (20-24 cm) tras reps
+    /// enteras (42 cm) da 0,5-0,6, y quedar cada vez 6 cm más alto sobre la silla, 0,74 a la tercera.
+    static let relativeRiseFraction: Double = 0.75
+    /// El teléfono que sube más que esto sobre el asiento abre un intento (brazos o pararse) (m).
     static let seatedBand: Double = 0.08
+    /// "Sentado" = la cara a no más de esto sobre el asiento de la rep (m). Real: ±2 cm entre reps.
+    static let seatFaceBand: Double = 0.08
+    /// El asiento sube como mucho esto por rep (deriva de ARKit, cojín): sentarse cada vez más alto no lo corre (m).
+    static let seatCreepMax: Double = 0.02
+    /// El asiento baja como mucho esto por intento (cojín que cede, se acomodó más hundido) (m)…
+    static let seatSinkMax: Double = 0.05
+    /// …salvo al sentarse de verdad, que baja la cara MÁS de lo que la mueve en horizontal (fracción, m/m). Real: baja
+    /// 0,35-0,42 m y va 0,10-0,30 m atrás. Reclinarse en el respaldo o inclinarse de lado mueven la cara más en
+    /// horizontal que en vertical: esa postura no pasa a ser el asiento (desde ahí, enderezarse "subiría" 20-28 cm).
+    static let sitDownMaxShiftRatio: Double = 1.0
+    /// Una rep dura al menos esto (s): pararse y sentarse de verdad no baja de ~1,5 s.
     static let minRepSeconds: Double = 1.2
     /// Tolerante a repeticiones lentas de alguien con dolor (juntar fuerza inclinado, subir en 4 s, bajar en 5 s).
     static let maxRepSeconds: Double = 15
-    /// Fase final sentada con velocidad vertical baja (la técnica de la prueba de 30 s se para a los 0,4 s),
-    /// con la cara de vuelta sobre la silla (no > `torsoMinHorizontal` adelante: la cadera todavía se desliza
-    /// hacia atrás). Si se sentó más adelante en la silla, basta quedarse quieto y derecho `seatSettleSeconds`.
+    /// La cara en el asiento y quieta esto, de vuelta sobre la silla: sentado (s). La prueba de 30 s se para a 0,4 s.
     static let seatedStillSeconds: Double = 0.2
+    /// …o en una meseta: la altura de la cara varió a lo más `seatPlateauRange` en los últimos `seatPlateauSeconds`.
+    /// Sentarse rápido rebota 2-3 cm en el cojín y la cara nunca queda quieta cuadro a cuadro (real: sentado 0,6 s,
+    /// altura en ±1-1,6 cm); una bajada lenta con dolor (0,1 m/s) recorre 3 cm en ese tiempo.
+    static let seatPlateauSeconds: Double = 0.3
+    static let seatPlateauRange: Double = 0.025
+    /// Se sentó más adelante en la silla: basta quedarse quieto esto (s)…
     static let seatSettleSeconds: Double = 1.5
-    /// Sentado y quieto el teléfono se mueve < 1 cm/s; una bajada lenta con dolor va a ~0,1 m/s y no debe
-    /// confundirse con "ya se sentó" (contaría a medio camino y rompería el desafío sentado).
+    /// …sin quedar más adelante que esto (m): sentarse en el borde en vez de al fondo (0,20-0,25), o enderezarse
+    /// después de apoyarse en el respaldo con el asiento tomado así (25-35° de tronco: 0,26-0,40)…
+    static let seatMaxMove: Double = 0.40
+    /// …ni con la cara más abajo que esto (inclinado sobre las rodillas no es sentarse) (m).
+    static let seatSettleMaxDrop: Double = 0.06
+    /// Teléfono quieto (m/s): cierra intentos sin pararse (brazos) y refresca la referencia.
     static let stillVerticalSpeed: Double = 0.06
+    /// Cara quieta (m/s). Sentado meciéndose ±0,02-0,04; una bajada lenta con dolor (0,1 m/s) solo baja de esto
+    /// en los últimos 2 cm.
+    static let stillFaceSpeed: Double = 0.06
+    /// Cara quieta en horizontal (m/s), para tomar como asiento una postura más adelantada en la silla. Al
+    /// enderezar el tronco sentándose la cara va atrás a 0,3-0,7 m/s.
+    static let stillFaceHSpeed: Double = 0.10
+    /// Ventana para estimar la velocidad vertical (s).
     static let velocityLookbackSeconds: Double = 0.15
+    /// Historia de alturas que se guarda para esa estimación (s).
     static let heightHistorySeconds: Double = 0.5
     /// EMA de alturas a ~60 Hz (constante de tiempo ≈ 40 ms).
     static let heightSmoothingAlpha: Double = 0.35
-    /// Tras cada rep contada, la referencia sentado se acerca a la postura actual (deriva de ARKit, cojín),
-    /// solo si quedó derecho (cabeceo y cara como sentado): a media bajada inclinada la referencia derivaría.
-    static let referenceAdaptation: Double = 0.5
+    /// Cuadros quietos sentado con que se refresca la referencia del próximo intento (s)…
+    static let restWindowSeconds: Double = 0.4
+    /// …y cuántos cuadros como mínimo.
+    static let restMinFrames = 6
+    /// Intento sin pararse con la cara sentada y quieta este tiempo (s): se cierra aunque el teléfono siga
+    /// moviéndose o quede en otra altura (lo dejó en el regazo o en el pecho).
+    static let phoneParkedSeconds: Double = 0.8
+    /// Un intento sin pararse que sigue abierto más que esto se cierra sin aviso (s): la persona quedó quieta en
+    /// una postura que no es el asiento (reclinada, corrida de lado) y la próxima parada no puede heredar ese reloj.
+    static let openAttemptMaxSeconds: Double = 15
     /// Quieto fuera de la banda tras pararse (encorvado o con el teléfono alto): se orienta con un aviso.
     static let stuckCueSeconds: Double = 1.0
     /// Hueco sin pose confiable que reinicia suavizado e historiales (s).
@@ -190,44 +260,70 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
     static let armsMaxRiseGap: Double = 0.10
     /// La cara se movió respecto del teléfono (m)…
     static let armsMaxFaceInPhoneShift: Double = 0.10
-    /// …y el teléfono no quedó por debajo de la cara más que esto (m): brazos cansados que dejan caer el
-    /// teléfono 10 cm mueven la cara en su espacio, pero el teléfono sube MENOS y eso no es trampa.
+    /// …y el teléfono no quedó por debajo de la cara más que esto (m).
     static let armsDriftMinGap: Double = -0.02
-    /// La comparación se hace en la parte alta del movimiento (fracción de `standRise`), no en la inclinación.
+    /// La comparación se hace en la parte alta del movimiento (fracción de `standRise`).
     static let armsCheckFraction: Double = 0.5
+    /// Con la cara ya arriba de verdad, por cada cm sobre `minFaceRise + armsBodyMargin` se tolera un cm más de
+    /// teléfono sobre la cara (trae el teléfono del regazo al pecho al pararse) (m).
+    static let armsBodyMargin: Double = 0.05
+    /// Desde el tercer `armsOnly` la anomalía es hard.
     static let armsHardCount = 3
 
     // Inclinación y tronco.
-    /// Cabeceo/alabeo máximo del teléfono durante la rep (pararse exige inclinar el tronco; con dolor lumbar
-    /// se usa más impulso y el teléfono acompaña: 50° de tronco con muñecas rígidas da ~46°).
+    /// Cabeceo/alabeo máximo del teléfono durante la rep, contra el inicio de la rep (°).
     static let maxTiltDeltaDeg: Double = 60
-    /// Arriba el tronco vuelve a estar derecho: el teléfono no puede seguir girado más que esto.
+    /// Arriba el tronco vuelve a estar derecho: el teléfono no puede seguir girado más que esto (°).
     static let maxPeakPitchDeltaDeg: Double = 30
     /// Arriba la cara no puede quedar más atrás que esto respecto de donde estaba sentada (m).
     static let maxBackShift: Double = 0.10
+    /// Arriba la cara no puede quedar corrida DE LADO (perpendicular a "adelante") más que esto respecto del asiento
+    /// (m). Real ≤ 0,084; enderezarse de una inclinación lateral de 45-50° la corre 0,48-0,54 (y sube la cara 20-25 cm).
+    static let maxPeakLateral: Double = 0.15
+    /// …ni el teléfono seguir girado de lado (alabeo) más que esto respecto del asiento (°). Real ≤ 7,4°.
+    static let maxPeakRollDeltaDeg: Double = 25
+    /// Del despegue (la cara todavía a la altura del asiento) al pico, la cara avanza a lo más esto (m). Pararse lleva
+    /// la cadera sobre los pies (0,25-0,35) y el tronco que ya iba inclinado al despegar vuelve atrás: honesto ≤ 0,35.
+    /// Enderezarse desde reclinado en el respaldo lo bastante para subir la cara 20 cm (≥ 50° de tronco) la adelanta
+    /// ≥ 0,5 aunque las muñecas compensen el cabeceo y los brazos suban el teléfono.
+    static let maxRiseForward: Double = 0.45
+    /// "Adelante" para medir el corrimiento de lado sale del teléfono delante de la cara al menos esto (m). Sentado
+    /// derecho: 0,22-0,37; inclinado 50° o con el teléfono en el regazo queda casi debajo (< 0,1).
+    static let lateralForwardMinOffset: Double = 0.15
+    /// Sin pararse, la cara bajó más que esto adelantándose: se inclinó (m). Antes era el teléfono: bajarlo al
+    /// regazo daba "Teléfono 19 cm bajo la silla".
     static let torsoMaxDrop: Double = 0.12
+    /// …o se movió en horizontal más que esta fracción de lo que se movió en vertical (inclinarse sin pararse).
     static let torsoHorizontalRatio: Double = 0.8
+    /// Avance de la cara que ya es inclinarse (m): sentado abre un intento; sin pararse, cuenta como tronco.
     static let torsoMinHorizontal: Double = 0.12
+    /// …y la cara bajó al menos esto (m): 15° de tronco la bajan 4,5 cm.
+    static let torsoMinDrop: Double = 0.04
+    /// La cara subió esto sin quedar de pie: "Suba hasta quedar de pie" (m). Más que `seatFaceBand`: enderezarse
+    /// sentado (la cara sube 8-10 cm desde el respaldo) abre un intento, pero no es una parada a medias.
+    static let partialFaceRise: Double = 0.12
 
-    // Re-sentarse: calibró de pie y después se sentó, o ARKit retomó con el origen corrido (poca luz).
-    // Quieto 2 s fuera de la banda, derecho, con la cara sobre la silla y a la misma distancia del teléfono.
+    // Re-sentarse: empezó de pie y se sentó, o ARKit retomó con el origen corrido (poca luz).
+    /// Quieto fuera del asiento este tiempo, sentado derecho sobre la silla: asiento nuevo (s).
     static let reseatSeconds: Double = 2
+    /// Primera postura de pie y después se sentó (la cara bajó ≥ `minFaceRise` sin adelantarse): basta esto (s).
+    static let firstSeatSeconds: Double = 0.3
+    /// Con el origen corrido en horizontal: el cabeceo como al empezar el intento (°)…
     static let reseatMaxPitchDeltaDeg: Double = 15
+    /// La cara no más adelante que esto del asiento: de vuelta sobre la silla, no de pie sobre los pies (m).
     static let reseatMaxForward: Double = 0.05
-    /// La cara en el espacio del teléfono no cambió (m): bajar o subir el teléfono con los brazos no re-ancla.
+    /// …y la cara en el espacio del teléfono no cambió (m): con el origen corrido en horizontal no hay otra prueba.
     static let reseatMaxFaceInPhoneShift: Double = 0.05
-    /// Si ARKit corrió el origen también en horizontal, la cara parece adelantada y nunca "vuelve sobre la
-    /// silla": tras este tiempo quieto, derecho, con la cara a la misma distancia del teléfono y sin estar a
-    /// altura de pie, se re-ancla igual (después de un bloqueo; o tras pararse, cerrando el intento SIN
-    /// contarlo) para no quedar trabado diciendo "Siéntese" a alguien sentado.
+    /// Origen corrido también en horizontal: quieto este tiempo con el agarre del inicio, se re-ancla sin contar (s).
     static let reseatShiftedSeconds: Double = 2.5
 
     // Persona viva y gates.
+    /// Sin cara este tiempo: bloqueo "Mantenga la cara en la pantalla" (s).
     static let faceLostSeconds: Double = 1.5
-    /// Hueco de cara que no reinicia la ventana de calibración (casco, lentes, poca luz: cuadros sueltos).
+    /// Hueco de cara que no reinicia la ventana de la primera postura (casco, lentes, poca luz).
     static let calibrationFaceGapSeconds: Double = 0.3
-    /// Ventana de vida: con cara rastreada, < 10 % de cuadros vivos en 2 s → `static` (una foto con un cuadro
-    /// de ruido cada tanto ya no reinicia la cuenta); vuelve a vigilar cuando hay > 50 % vivos.
+    /// Ventana de vida: con cara rastreada, < 10 % de cuadros vivos en 2 s → `static` (una foto con un cuadro de
+    /// ruido cada tanto ya no reinicia la cuenta); vuelve a vigilar cuando hay > 50 % vivos.
     static let staticSeconds: Double = 2
     static let staticMaxLiveFraction: Double = 0.10
     static let staticRecoverLiveFraction: Double = 0.5
@@ -235,35 +331,47 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
     static let staticMinSamples = 30
     /// Una rep exige cara viva en ≥ 20 % de los cuadros con cara del intento.
     static let minLiveFraction: Double = 0.20
+    /// Energía de blendShapes bajo la que el cuadro se considera estático.
     static let staticEnergyThreshold: Float = FaceLivenessMonitor.staticEnergyThreshold
-    /// Relieve 3D (TrueDepth): mediana de las lecturas de los últimos 3 s bajo esto (m) = plano. Ruido del
-    /// sensor sobre una pantalla o una foto ≈ 1-3 mm; una cara real ≈ 1 cm (mismos valores que la sentadilla).
+    /// Relieve 3D (TrueDepth): mediana de las lecturas de los últimos 3 s bajo esto (m) = plano. Ruido del sensor
+    /// sobre una pantalla o una foto ≈ 1-3 mm; una cara real ≈ 1-2 cm (real: 1,2-2,0 cm).
     static let flatFaceMaxRelief: Double = 0.004
+    /// Ventana del relieve (s) y lecturas mínimas para decidir (≈ 7 Hz en el iPhone: ≥ 1,1 s).
     static let reliefWindowSeconds: Double = 3
     static let reliefMinReadings = 8
     /// La rep no cuenta si ≥ 30 % de sus cuadros con cara vieron una cara plana; desde la 3.ª, `flatFace` hard.
     static let flatFaceRepFraction: Double = 0.3
     static let flatFaceHardCount = 3
+    /// Tracking del mundo limitado este tiempo (ya arrancado): bloqueo "Mueva el teléfono más despacio" (s).
     static let trackingLimitedSeconds: Double = 0.5
 
     // Desafío.
     /// Se pide "2 segundos" y se acepta desde 1,5 s.
     static let holdSeconds: Double = 1.5
-    /// "De pie" durante el desafío = subida ≥ esta fracción de `standRise`.
+    /// "De pie" durante el desafío = la cara sobre esta fracción de `minFaceRise` (sin cara: el teléfono sobre
+    /// esta fracción de `standRise`).
     static let holdStandFraction: Double = 0.8
+    /// Desde el segundo desafío fallado la anomalía es hard y el desafío se retira.
     static let holdFailHardCount = 2
     /// Segundos extra permitidos en la rep del desafío.
     static let challengeExtraSeconds: Double = 3
 
     // Apoyo físico.
+    /// Pasos durante la serie que ya son caminar (soft, con aviso).
     static let walkingSteps = 6
-    /// Pasos desde el inicio de la primera rep contada: ≥ max(8, 2,5 × reps) → `walking` hard (subir y bajar
-    /// un escalón de pie). Un paso espurio por rep (el podómetro cuenta el impulso) o reacomodar los pies no
-    /// llega; caminar hasta otra silla antes de empezar no cuenta (es antes de la primera rep).
+    /// Pasos nuevos en los últimos segundos = está caminando (el podómetro entrega cada ~2,5 s) (s). Antes de conocer
+    /// el asiento, mientras camina, sentarse se mide desde donde está y no desde donde empezó.
+    static let walkingRecentSeconds: Double = 3
+    /// Sin pararse, la cara se movió en horizontal más que esto: caminó (o el VIO se corrió), no se inclinó: el
+    /// tronco no lleva la cara más lejos que su largo (m).
+    static let torsoMaxReach: Double = 0.8
+    /// Pasos desde el inicio de la primera rep contada: ≥ max(8, 2,5 × reps) → `walking` hard (subir y bajar un
+    /// escalón de pie). Un paso espurio por rep (el podómetro cuenta el impulso) o reacomodar los pies no llega.
     static let walkingHardMinSteps = 8
     static let walkingHardStepsPerRep: Double = 2.5
-    /// Velocidad del teléfono no humana para este ejercicio (m/s).
+    /// Velocidad del teléfono no humana para este ejercicio (m/s). Real: máximo 0,86 m/s.
     static let shakeSpeed: Double = 3
+    /// Intervalo mínimo y máximo entre posiciones para medir esa velocidad (s).
     static let shakeMinDt: Double = 0.025
     static let shakeMaxGap: Double = 0.25
     /// Picos sobre `shakeSpeed` dentro de la ventana para declarar sacudida. La posición pasa antes por una
@@ -271,25 +379,24 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
     static let shakeMinPeaks = 4
     static let shakeMedianFrames = 3
     static let shakeWindowSeconds: Double = 2
+    /// Historia de posiciones crudas para la velocidad de sacudida (s).
     static let rawHistorySeconds: Double = 0.3
-    /// Tendencia barométrica que delata escalera o ascensor (señal de apoyo, no bloqueante).
+    /// Tendencia barométrica que delata escalera o ascensor (señal de apoyo, no bloqueante) (m).
     static let altitudeDriftMeters: Double = 1.5
-    /// Ritmo "perfecto" (vídeo en bucle, mecanismo): CV de intervalos bajo esto con ≥ 6 reps.
-    /// Más estricto que el 0,04 general: una persona se para y se sienta con un ritmo muy parejo
-    /// (CV ≈ 0,03-0,10; con 5 intervalos el CV muestral cae bajo 0,02 una de cada cinco veces) y sin
-    /// metrónomo no baja del 1 %. Un bucle da CV ≈ 0,003 y el desafío aleatorio ya derrota a casi todos.
+    /// Ritmo "perfecto" (vídeo en bucle, mecanismo): CV de intervalos bajo esto con ≥ 6 reps. Una persona se para
+    /// con un ritmo muy parejo (CV ≈ 0,03-0,10) y sin metrónomo no baja del 1 %; un bucle da CV ≈ 0,003.
     static let regularityMaxCV: Double = 0.01
     static let regularityMinReps = RegularityDetector.defaultMinReps
 
     // MARK: Tipos
 
     nonisolated enum Phase: String, Sendable, Hashable, Codable {
-        /// Esperando 1 s sentado y quieto con la cara visible.
+        /// Esperando la primera postura quieta con la cara visible (sentado o de pie).
         case calibrating
         /// Tras un bloqueo: hay que volver a sentarse antes de contar.
         case awaitingSeat
         case seated
-        /// Fuera de la banda sentado (inclinándose, de pie o volviendo).
+        /// Fuera del asiento (inclinándose, de pie o volviendo), o moviendo el teléfono.
         case excursion
         case done
     }
@@ -312,7 +419,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         var repIndex: Int
     }
 
-    /// Postura "sentado" de referencia.
+    /// Postura "sentado" de referencia de un intento.
     nonisolated struct Reference: Sendable, Hashable {
         var phoneY: Double
         var faceY: Double
@@ -324,21 +431,41 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         var forward: SIMD2<Double>?
     }
 
-    /// Un intento: desde que deja la banda sentado hasta que vuelve sentado y quieto.
+    /// Un intento: desde que deja el asiento (o mueve el teléfono) hasta que vuelve sentado y quieto.
     nonisolated struct Excursion: Sendable, Hashable {
         var startT: Double
         /// Dónde estaba la cara sentada antes del intento (horizontal).
         var anchorFaceXZ: SIMD2<Double>
+        /// Asiento del intento (referencias tomadas justo antes de empezar).
+        var seat: Reference
         var minRise: Double = .infinity
         var maxRise: Double = -.infinity
+        var lastRise: Double = 0
         var peakPitchDelta: Double = 0
         var peakFaceForward: Double? = nil
+        /// En el pico de la cara: corrimiento de lado (perpendicular a "adelante") desde donde la cara despegó del
+        /// asiento, y alabeo contra el asiento.
+        var peakLateral: Double = 0
+        var peakRollDelta: Double = 0
+        /// Último cuadro con la cara todavía a la altura del asiento (despegue) y "adelante" medido ahí: una silla
+        /// giratoria o el VIO que se asienta corren la cara de lado ANTES de pararse, no al pararse.
+        var departureFaceXZ: SIMD2<Double>? = nil
+        var departureForward: SIMD2<Double>? = nil
+        /// Avance de la cara del despegue al pico (m, con signo; nil sin dirección).
+        var peakRiseForward: Double? = nil
+        /// Último cuadro con la cara a la altura del asiento (± `seatFaceBand`) y "adelante" medido ahí. Si la primera
+        /// postura fue de pie y caminó hasta la silla, sentarse se mide desde aquí, no desde donde empezó.
+        var levelFaceXZ: SIMD2<Double>
+        var levelForward: SIMD2<Double>?
         var maxPitchDelta: Double = 0
         var maxRollDelta: Double = 0
         var maxFaceShift: Double = 0
         var maxFaceLift: Double = 0
-        /// Mayor subida de la cara (con signo) sobre la referencia.
+        /// Mayor avance de la cara (proyección hacia adelante) sobre el asiento.
+        var maxFaceAhead: Double = -.infinity
+        /// Mayor y menor subida de la cara (con signo) sobre el asiento.
         var maxFaceRise: Double = -.infinity
+        var minFaceRise: Double = .infinity
         /// Mayor (subida del teléfono − subida de la cara), con signo.
         var maxRiseGap: Double = -.infinity
         var maxFaceInPhoneShift: Double = 0
@@ -347,26 +474,110 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         var liveSamples = 0
         /// Cuadros con cara mientras el relieve TrueDepth la veía plana.
         var flatSamples = 0
+        var samples = 0
         /// Pasos acumulados al empezar el intento.
         var stepsAtStart: Int? = nil
+        /// Brazos en algún cuadro de la parte alta, con la holgura de la cara de ESE cuadro (avisa en el momento
+        /// a quien sube el teléfono sin pararse).
         var armsFlag = false
+        /// Mayor exceso de (teléfono − cara) o de cara-teléfono sobre lo tolerado sin holgura (m).
+        var maxArmsExcess: Double = -.infinity
+        /// Brazos en la rep completa: la holgura sale de la subida MÁXIMA de la cara. Quien trae el teléfono del
+        /// regazo al pecho al pararse adelanta los brazos a mitad de camino; con la cara ≥ 25 cm arriba el
+        /// cuerpo ya se paró (20 cm de cara cuentan sin brazos) y el teléfono de más no le suma nada a nadie.
+        var armsOnRep: Bool {
+            maxArmsExcess > max(0, maxFaceRise - (SitToStandVerifier.minFaceRise + SitToStandVerifier.armsBodyMargin))
+        }
         var armsReported = false
         var stood = false
         var stoodAt: Double? = nil
+        /// Último cuadro de pie (cara arriba): "aguantó de pie" para el diagnóstico.
+        var lastStandingAt: Double? = nil
         var challenge: HoldChallenge.Kind? = nil
         var holdDone = false
         var holdFailed = false
         var touchedBand = false
         var restoodCued = false
         var stillSince: Double? = nil
+        /// Desde cuándo la cara está quieta cuadro a cuadro en el asiento (sin la meseta): el instante del ritmo.
+        var vyStillSince: Double? = nil
+        var movedSeatSince: Double? = nil
         var seatConfirmedAt: Double? = nil
+        /// Dónde quedó la cara al sentarse en el desafío sentado (x, y, z).
+        var seatConfirmedFace: SIMD3<Double>? = nil
         var stuckSince: Double? = nil
         var stuckCued = false
 
-        init(startT: Double, anchorFaceXZ: SIMD2<Double>, stepsAtStart: Int? = nil) {
+        init(startT: Double, seat: Reference, stepsAtStart: Int? = nil) {
             self.startT = startT
-            self.anchorFaceXZ = anchorFaceXZ
+            self.seat = seat
+            anchorFaceXZ = seat.faceXZ
+            departureForward = seat.forward
+            levelFaceXZ = seat.faceXZ
+            levelForward = seat.forward
             self.stepsAtStart = stepsAtStart
+        }
+
+        /// Segundos de pie desde que llegó arriba.
+        var standSeconds: Double {
+            guard let stoodAt, let last = lastStandingAt else { return 0 }
+            return max(0, last - stoodAt)
+        }
+    }
+
+    /// Medidas de un intento cerrado (contado o no), para el registro de diagnóstico del teléfono.
+    nonisolated struct AttemptRecord: Sendable, Hashable, CustomStringConvertible {
+        var index: Int
+        /// Segundos desde el inicio de la actividad.
+        var start: Double
+        var end: Double
+        /// Asiento de la rep (m, mundo).
+        var seatPhoneY: Double
+        var seatFaceY: Double
+        /// Subidas máximas sobre el asiento (m).
+        var phoneRise: Double
+        var faceRise: Double
+        /// Bajada máxima de la cara bajo el asiento (m, ≥ 0).
+        var faceDrop: Double
+        /// Teléfono − cara en la parte alta (m) y cambio de la cara en el espacio del teléfono contra el inicio
+        /// de la rep (m).
+        var riseGap: Double
+        var faceInPhoneShift: Double
+        /// Desplazamiento horizontal máximo de la cara, avance y corrimiento de lado en el pico (m).
+        var faceTravel: Double
+        var peakForward: Double?
+        var peakLateral: Double
+        /// Avance de la cara del despegue al pico (m).
+        var riseForward: Double?
+        /// Cabeceo máximo y en el pico, alabeo máximo y en el pico, contra el inicio de la rep (°).
+        var pitchDelta: Double
+        var peakPitchDelta: Double
+        var rollDelta: Double
+        var peakRollDelta: Double
+        /// De pie desde que llegó arriba, y sentado en el desafío (s).
+        var standSeconds: Double
+        var seatHoldSeconds: Double
+        var liveFraction: Double
+        var flatFraction: Double
+        var challenge: HoldChallenge.Kind?
+        var stood: Bool
+        /// Número de rep si contó.
+        var rep: Int?
+        var rejection: Rejection?
+
+        var description: String {
+            let outcome = rep.map { "rep \($0)" } ?? rejection?.rawValue ?? "acomodo"
+            let forward = peakForward.map { String(format: "%+.2f", $0) } ?? "-"
+            return String(format: "#%d %.2f-%.2f s %@ | asiento cara %+.3f tel %+.3f | sube cara %.3f tel %.3f baja cara %.3f"
+                          + " | tel-cara %+.3f cara-tel %.3f | avance %.2f pico %@ al subir %@ lado %.2f"
+                          + " | cabeceo %.0f° pico %.0f° alabeo %.0f° pico %.0f°"
+                          + " | de pie %.1f s sentado %.1f s | viva %.0f%% plana %.0f%% | desafío %@%@",
+                          index, start, end, outcome, seatFaceY, seatPhoneY, faceRise, phoneRise, faceDrop,
+                          riseGap, faceInPhoneShift, faceTravel, forward, riseForward.map { String(format: "%+.2f", $0) } ?? "-",
+                          peakLateral,
+                          pitchDelta, peakPitchDelta, rollDelta, peakRollDelta,
+                          standSeconds, seatHoldSeconds, liveFraction * 100, flatFraction * 100,
+                          challenge?.rawValue ?? "-", stood ? " | de pie" : "")
         }
     }
 
@@ -377,17 +588,27 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
     }
 
     private nonisolated struct Reading: Sendable {
+        var t: Double
         var phone: SIMD3<Double>
-        /// Altura suavizada del teléfono.
+        /// Altura suavizada del teléfono y su velocidad vertical.
         var phoneY: Double
         var vy: Double?
         var face: FaceReading?
+        /// Velocidad vertical de la cara (suavizada); nil sin cara o recién aparecida.
+        var faceVy: Double?
+        /// Rapidez horizontal de la cara (m/s); nil sin cara o recién aparecida.
+        var faceHSpeed: Double? = nil
         var pitch: Double
         var roll: Double
         var live: Bool
 
         var phoneXZ: SIMD2<Double> { SIMD2(phone.x, phone.z) }
         var isStill: Bool { vy.map { abs($0) < SitToStandVerifier.stillVerticalSpeed } ?? false }
+        /// La cara quieta en vertical: true/false si se sabe, nil si no hay cara o velocidad.
+        var faceStill: Bool? {
+            guard face != nil, let faceVy else { return nil }
+            return abs(faceVy) < SitToStandVerifier.stillFaceSpeed
+        }
     }
 
     private nonisolated struct TimedValue: Sendable, Hashable {
@@ -405,9 +626,10 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         var on: Bool
     }
 
-    private nonisolated struct CalibrationWindow: Sendable {
+    /// Promedio de cuadros (calibración, historia previa y refresco sentado) → referencia.
+    private nonisolated struct PoseAverage: Sendable {
         var start: Double? = nil
-        var anchor = SIMD3<Double>.zero
+        var anchorFaceY = 0.0
         var firstPitch = 0.0
         var firstRoll = 0.0
         var n = 0
@@ -419,18 +641,32 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         var pitchDelta = 0.0
         var rollDelta = 0.0
 
-        mutating func add(_ r: Reading, _ face: FaceReading, offset o: SIMD2<Double>) {
+        init(start: Double? = nil, anchorFaceY: Double = 0, firstPitch: Double = 0, firstRoll: Double = 0) {
+            self.start = start
+            self.anchorFaceY = anchorFaceY
+            self.firstPitch = firstPitch
+            self.firstRoll = firstRoll
+        }
+
+        mutating func add(_ r: Reading, _ face: FaceReading) {
+            if n == 0, start == nil {
+                start = r.t
+                anchorFaceY = face.y
+                firstPitch = r.pitch
+                firstRoll = r.roll
+            }
             n += 1
             phoneY += r.phoneY
             faceY += face.y
             faceXZ += face.xz
             faceInPhone += face.inPhone
-            offset += o
+            offset += r.phoneXZ - face.xz
             pitchDelta += AngleMath.delta(r.pitch, firstPitch)
             rollDelta += AngleMath.delta(r.roll, firstRoll)
         }
 
-        var reference: Reference? {
+        /// `fallbackForward`: si el teléfono quedó casi bajo la cara (en el regazo), se conserva la dirección.
+        func reference(fallbackForward: SIMD2<Double>? = nil) -> Reference? {
             guard n > 0 else { return nil }
             let d = Double(n)
             let meanOffset = offset / d
@@ -438,7 +674,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
             return Reference(phoneY: phoneY / d, faceY: faceY / d, faceXZ: faceXZ / d, faceInPhone: faceInPhone / d,
                              pitch: AngleMath.wrap180(firstPitch + pitchDelta / d),
                              roll: AngleMath.wrap180(firstRoll + rollDelta / d),
-                             forward: length > 0 ? meanOffset / length : nil)
+                             forward: length >= SitToStandVerifier.minForwardOffset ? meanOffset / length : fallbackForward)
         }
     }
 
@@ -450,14 +686,22 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
     let challenge: HoldChallenge
     private(set) var progress: VerifierProgress
     private(set) var phase: Phase = .calibrating
+    /// Asiento del próximo intento: se refresca sentado y quieto, y se congela al empezar cada intento.
     private(set) var reference: Reference? = nil
+    /// Se vio a la persona sentada en ese asiento (tras una rep o al sentarse después de empezar de pie). Antes
+    /// de eso, la primera postura es provisoria: puede haber sido de pie.
+    private(set) var seatKnown = false
     private(set) var excursion: Excursion? = nil
     private(set) var anomalies: [Anomaly] = []
     private(set) var rejections: [RejectionRecord] = []
+    /// Medidas de cada intento cerrado (diagnóstico; `AttemptDiagnosticsProviding`).
+    private(set) var attempts: [AttemptRecord] = []
     /// Duración de cada rep contada (s).
     private(set) var repSeconds: [Double] = []
     /// Mayor subida del teléfono en una rep contada (m).
     private(set) var maxCountedRise: Double? = nil
+    /// Subida máxima de la cara de cada rep contada (m): la referencia de `relativeRiseFraction`.
+    private(set) var countedFaceRises: [Double] = []
     private(set) var challengeFailures = 0
     private(set) var challengePassed = false
     private(set) var challengeRetired = false
@@ -465,8 +709,10 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
     private(set) var flatFaceCount = 0
     /// El relieve TrueDepth de los últimos segundos es el de una superficie plana (foto, pantalla).
     private(set) var faceLooksFlat = false
-    /// Veces que se re-ancló la referencia tras pararse (ARKit retomó con el origen corrido).
+    /// Veces que el asiento se re-ancló fuera de la banda (se sentó más alto o más bajo, ARKit retomó corrido).
     private(set) var reanchorCount = 0
+    /// Reps contadas al repasar la historia previa a la primera postura.
+    private(set) var replayedReps = 0
     /// Velocidad máxima del teléfono observada (m/s), para diagnóstico.
     private(set) var peakPhoneSpeed: Double = 0
     /// Rango barométrico observado (m), señal de apoyo.
@@ -474,32 +720,45 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
 
     private var started = false
     private var t0: Double = 0
-    private var window = CalibrationWindow()
+    private var window = PoseAverage()
     private var phoneSmoother = ExponentialSmoother(alpha: SitToStandVerifier.heightSmoothingAlpha)
     private var faceSmoother = ExponentialSmoother(alpha: SitToStandVerifier.heightSmoothingAlpha)
     private var lastPoseAt: Double? = nil
     private var lastFaceReadAt: Double? = nil
     private var heightHistory: [TimedValue] = []
+    private var faceHistory: [TimedValue] = []
+    private var faceXZHistory: [TimedPoint] = []
     private var rawHistory: [TimedPoint] = []
     private var aboveShake = false
     private var shakePeaks: [Double] = []
     private var shakingReported = false
     private var lastFaceAt: Double = 0
     private var sawFace = false
-    /// Cuadros con cara de los últimos `staticSeconds` (vivo o no) y desde cuándo la ventana está llena.
+    private var worldEverNormal = false
     private var liveWindow: [TimedFlag] = []
     private var liveWindowLive = 0
     private var liveWindowSince: Double? = nil
     private var staticReported = false
     private var reliefReadings: [TimedValue] = []
-    /// Últimas posiciones crudas del teléfono para la mediana anti-glitch.
     private var rawRecent: [TimedPoint] = []
     private var limitedSince: Double? = nil
     private var seatStillSince: Double? = nil
     private var lowStillSince: Double? = nil
-    private var restFaceXZ: SIMD2<Double>? = nil
+    /// Altura y posición de la cara al sentarse: límites del refresco sentado (no se corre inclinándose).
+    /// Límites de la altura de la cara para el refresco sentado: a lo más `seatCreepMax` sobre el asiento de la
+    /// rep anterior y `seatSinkMax` bajo donde se sentó. Y la posición de la cara al sentarse (no se adelanta).
+    private var seatCeilingY: Double? = nil
+    private var seatFloorY: Double? = nil
+    private var seatAnchorFaceXZ: SIMD2<Double>? = nil
+    /// Cuadros quietos sentado de los últimos `restWindowSeconds`.
+    private var rest: [Reading] = []
+    /// Lecturas previas a la primera postura (para no perder una rep que empezó antes).
+    private var preHistory: [Reading] = []
+    private var replaying = false
     private var stepsBase: Int? = nil
     private var lastSteps: Int? = nil
+    /// Cuándo subió por última vez el podómetro.
+    private var lastStepAt: Double? = nil
     private var stepsAtFirstRep: Int? = nil
     private var walkingReported = false
     private var walkingHardReported = false
@@ -552,7 +811,13 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         observeSupport(s, at: t, &events)
         observeFace(s, at: t, &events)
         trackRelief(s, at: t)
-        limitedSince = s.worldTrackingNormal ? nil : (limitedSince ?? t)
+        if s.worldTrackingNormal {
+            worldEverNormal = true
+            limitedSince = nil
+        } else if limitedSince == nil {
+            // Arranque: ARKit tarda ~1 s en pasar a normal; eso no es "mover rápido" (antes bloqueaba a los 0,9 s).
+            limitedSince = worldEverNormal ? t : max(t, t0 + Self.trackingWarmupSeconds)
+        }
         let blocked = updateGate(at: t, &events)
 
         // Sin tracking normal la pose no es confiable: ese tramo no se mide ni se cuenta.
@@ -560,14 +825,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         let reading = read(s, at: t)
         detectShake(reading.phone, at: t, &events)
         guard !blocked else { return events }
-
-        switch phase {
-        case .calibrating: calibrate(reading, at: t, &events)
-        case .awaitingSeat: awaitSeat(reading, at: t, &events)
-        case .seated: watchSeated(reading, at: t, &events)
-        case .excursion: track(reading, at: t, &events)
-        case .done: break
-        }
+        step(reading, at: t, &events)
         return events
     }
 
@@ -585,6 +843,16 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
             metrics: .reps(count: progress.count, minDescentRatio: maxCountedRise, meanRepSeconds: mean),
             anomalies: anomalies,
             reason: reason)
+    }
+
+    private mutating func step(_ r: Reading, at t: Double, _ events: inout [VerifierEvent]) {
+        switch phase {
+        case .calibrating: calibrate(r, at: t, &events)
+        case .awaitingSeat: awaitSeat(r, at: t, &events)
+        case .seated: watchSeated(r, at: t, &events)
+        case .excursion: track(r, at: t, &events)
+        case .done: break
+        }
     }
 
     // MARK: Lectura y señales de apoyo
@@ -610,13 +878,30 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         }
 
         var face: FaceReading? = nil
+        var faceVy: Double? = nil
+        var faceHSpeed: Double? = nil
         if s.faceTracked {
-            if let last = lastFaceReadAt, t - last > Self.poseGapResetSeconds { faceSmoother.reset() }
+            if let last = lastFaceReadAt, t - last > Self.poseGapResetSeconds {
+                faceSmoother.reset()
+                faceHistory.removeAll()
+                faceXZHistory.removeAll()
+            }
             lastFaceReadAt = t
             let f = Self.double(s.facePos)
-            face = FaceReading(y: faceSmoother.update(f.y), xz: SIMD2(f.x, f.z), inPhone: Self.double(s.faceInPhone))
+            let fy = faceSmoother.update(f.y)
+            faceHistory.append(TimedValue(t: t, v: fy))
+            while let first = faceHistory.first, first.t < t - Self.heightHistorySeconds { faceHistory.removeFirst() }
+            if let past = faceHistory.last(where: { $0.t <= t - Self.velocityLookbackSeconds }), t > past.t {
+                faceVy = (fy - past.v) / (t - past.t)
+            }
+            faceXZHistory.append(TimedPoint(t: t, p: SIMD3(f.x, 0, f.z)))
+            while let first = faceXZHistory.first, first.t < t - Self.heightHistorySeconds { faceXZHistory.removeFirst() }
+            if let past = faceXZHistory.last(where: { $0.t <= t - Self.velocityLookbackSeconds }), t > past.t {
+                faceHSpeed = Self.norm(SIMD3(f.x, 0, f.z) - past.p) / (t - past.t)
+            }
+            face = FaceReading(y: fy, xz: SIMD2(f.x, f.z), inPhone: Self.double(s.faceInPhone))
         }
-        return Reading(phone: phone, phoneY: y, vy: vy, face: face,
+        return Reading(t: t, phone: phone, phoneY: y, vy: vy, face: face, faceVy: faceVy, faceHSpeed: faceHSpeed,
                        pitch: s.phonePitchDeg, roll: s.phoneRollDeg,
                        live: s.faceTracked && s.shapeEnergy >= Self.staticEnergyThreshold)
     }
@@ -626,6 +911,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         if let steps = s.steps {
             let base = stepsBase ?? steps
             stepsBase = base
+            if let previous = lastSteps, steps > previous { lastStepAt = t }
             lastSteps = steps
             if !walkingReported, steps - base >= Self.walkingSteps {
                 walkingReported = true
@@ -646,8 +932,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         }
     }
 
-    /// Cara visible (para el gate) y viva (micro-expresiones), medida por fracción en una ventana de 2 s:
-    /// una foto con un cuadro de ruido cada tanto (luz, reflejo) ya no reinicia la cuenta.
+    /// Cara visible (para el gate) y viva (micro-expresiones), medida por fracción en una ventana de 2 s.
     private mutating func observeFace(_ s: SitStandSample, at t: Double, _ events: inout [VerifierEvent]) {
         guard s.faceTracked else { return }
         lastFaceAt = t
@@ -658,7 +943,6 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
             if first.on { liveWindowLive -= 1 }
             liveWindow.removeFirst()
         }
-        // Tras un hueco de cara de 2 s o más, la ventana vuelve a llenarse desde cero.
         if liveWindow.isEmpty { liveWindowSince = t }
         let live = s.shapeEnergy >= Self.staticEnergyThreshold
         liveWindow.append(TimedFlag(t: t, on: live))
@@ -695,8 +979,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         faceLooksFlat = sorted[sorted.count / 2] < Self.flatFaceMaxRelief
     }
 
-    /// Velocidad del teléfono por encima de lo humano, repetida → sacudida. La posición pasa por una mediana
-    /// de 3 cuadros: un salto de tracking de un cuadro (ida y vuelta) desaparece; una sacudida real no.
+    /// Velocidad del teléfono por encima de lo humano, repetida → sacudida (mediana de 3 cuadros antes).
     private mutating func detectShake(_ raw: SIMD3<Double>, at t: Double, _ events: inout [VerifierEvent]) {
         rawRecent.append(TimedPoint(t: t, p: raw))
         if rawRecent.count > Self.shakeMedianFrames { rawRecent.removeFirst() }
@@ -758,162 +1041,327 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
 
     /// Se perdió la cara o el tracking: el intento en curso no cuenta y hay que volver a sentarse.
     private mutating func interrupt(at t: Double) {
-        if phase == .excursion, excursion != nil { reject(.interrupted, at: t) }
+        if phase == .excursion, let ex = excursion {
+            reject(.interrupted, at: t)
+            logAttempt(ex, at: t, rep: nil, rejection: .interrupted)
+        }
         excursion = nil
-        window = CalibrationWindow()
+        window = PoseAverage()
+        preHistory.removeAll()
+        rest.removeAll()
         seatStillSince = nil
         lowStillSince = nil
         phase = reference == nil ? .calibrating : .awaitingSeat
     }
 
-    // MARK: Fases
+    // MARK: Primera postura
 
+    /// La primera postura quieta (sentado o de pie): la cara quieta `calibrationSeconds` con el teléfono delante.
+    /// El teléfono puede moverse algo (manos) y el origen de ARKit correrse en horizontal mientras se asienta.
     private mutating func calibrate(_ r: Reading, at t: Double, _ events: inout [VerifierEvent]) {
+        if !replaying {
+            preHistory.append(r)
+            while let first = preHistory.first, first.t < t - Self.preHistorySeconds { preHistory.removeFirst() }
+        }
         guard let face = r.face else {
             // Cuadros sueltos sin cara (casco, lentes, poca luz) no reinician la ventana; un hueco largo sí.
-            if lastFaceReadAt.map({ t - $0 > Self.calibrationFaceGapSeconds }) ?? true { window = CalibrationWindow() }
+            if lastFaceReadAt.map({ t - $0 > Self.calibrationFaceGapSeconds }) ?? true { window = PoseAverage() }
             return
         }
-        let offset = r.phoneXZ - face.xz
-        let still = r.vy.map { abs($0) < Self.stillVerticalSpeed } ?? true
-        guard Self.faceDistanceRange.contains(Self.norm(face.inPhone)),
-              Self.norm(offset) >= Self.minForwardOffset, still else {
-            window = CalibrationWindow()
+        let calm = r.vy.map { abs($0) < Self.calibrationMaxPhoneSpeed } ?? true
+        guard Self.plausible(r, face), calm, r.faceStill != false else {
+            window = PoseAverage()
             return
         }
-        if window.start == nil || Self.norm(r.phone - window.anchor) > Self.calibrationMaxDrift {
-            window = CalibrationWindow(start: t, anchor: r.phone, firstPitch: r.pitch, firstRoll: r.roll)
+        if window.start == nil || abs(face.y - window.anchorFaceY) > Self.calibrationMaxDrift {
+            window = PoseAverage(start: t, anchorFaceY: face.y, firstPitch: r.pitch, firstRoll: r.roll)
         }
-        window.add(r, face, offset: offset)
+        window.add(r, face)
         guard let start = window.start, t - start >= Self.calibrationSeconds,
-              window.n >= Self.minCalibrationSamples, let ref = window.reference else { return }
-        reference = ref
-        restFaceXZ = ref.faceXZ
-        window = CalibrationWindow()
-        phase = .seated
+              window.n >= Self.minCalibrationSamples, let ref = window.reference() else { return }
+        window = PoseAverage()
         progress.gate = .ready
         events.append(.gate(.ready))
         events.append(.cue(Cue(text: SitStandCopy.calibrated, symbol: "checkmark.circle.fill")))
+        acquire(ref, windowStart: start, &events)
     }
 
+    /// Cara a distancia de brazos y el teléfono delante de ella en horizontal.
+    private static func plausible(_ r: Reading, _ face: FaceReading) -> Bool {
+        faceDistanceRange.contains(norm(face.inPhone)) && norm(r.phoneXZ - face.xz) >= minForwardOffset
+    }
+
+    /// Toma la primera postura. Si en la historia previa hubo una meseta de la cara de la que después subió
+    /// ≥ `minFaceRise` (venía sentado y se paró mientras ARKit arrancaba), se parte de esa meseta y se repasa la
+    /// historia con las mismas reglas: esa rep no se pierde. Los avisos del repaso ya pasaron y no se muestran.
+    private mutating func acquire(_ ref: Reference, windowStart: Double, _ events: inout [VerifierEvent]) {
+        let history = preHistory
+        preHistory.removeAll()
+        guard let (seat, seatEnd) = Self.earlierSeat(in: history, before: windowStart) else {
+            setSeat(ref)
+            return
+        }
+        setSeat(seat)
+        var replayed: [VerifierEvent] = []
+        let before = progress.count
+        replaying = true
+        for h in history where h.t > seatEnd {
+            step(h, at: h.t, &replayed)
+        }
+        replaying = false
+        replayedReps += progress.count - before
+        events += replayed.filter {
+            switch $0 {
+            case .rep, .progress, .completed, .anomaly: true
+            case .cue, .gate: false
+            }
+        }
+    }
+
+    /// Primera meseta de la cara en la historia (quieta ≥ `preSeatSeconds`, a distancia plausible) desde la que
+    /// la cara subió después ≥ `minFaceRise`.
+    private static func earlierSeat(in history: [Reading], before end: Double) -> (Reference, Double)? {
+        var run = PoseAverage()
+        var runEnd = 0.0
+        var lastFaceT: Double? = nil
+        var candidates: [(PoseAverage, Double)] = []
+        func close() {
+            if let s = run.start, runEnd - s >= preSeatSeconds, run.n >= restMinFrames { candidates.append((run, runEnd)) }
+            run = PoseAverage()
+        }
+        for r in history where r.t < end {
+            guard let face = r.face else { continue }
+            if let last = lastFaceT, r.t - last > calibrationFaceGapSeconds { close() }
+            lastFaceT = r.t
+            guard plausible(r, face), r.faceStill == true else {
+                close()
+                continue
+            }
+            if run.start != nil, abs(face.y - run.anchorFaceY) > calibrationMaxDrift { close() }
+            run.add(r, face)
+            runEnd = r.t
+        }
+        close()
+        for (avg, endT) in candidates {
+            guard let ref = avg.reference() else { continue }
+            // Subió la cara ≥ `minFaceRise` y sin quedar atrás: pararse lleva la cara adelante, sobre los pies;
+            // enderezarse desde una inclinación la lleva atrás (esa meseta no era el asiento).
+            let rose = history.contains { r in
+                guard r.t > endT, let f = r.face, f.y - ref.faceY >= minFaceRise else { return false }
+                let shift = f.xz - ref.faceXZ
+                return (ref.forward.map { dot(shift, $0) } ?? 0) >= 0
+            }
+            if rose { return (ref, endT) }
+        }
+        return nil
+    }
+
+    /// `ref` pasa a ser el asiento del próximo intento y el ancla del refresco sentado. `ceiling`: altura máxima
+    /// de la cara para el refresco (por omisión `seatCreepMax` sobre `ref`).
+    private mutating func setSeat(_ ref: Reference, known: Bool = false, ceiling: Double? = nil) {
+        reference = ref
+        seatCeilingY = ceiling ?? ref.faceY + Self.seatCreepMax
+        seatFloorY = ref.faceY - Self.seatSinkMax
+        seatAnchorFaceXZ = ref.faceXZ
+        if known { seatKnown = true }
+        rest.removeAll()
+        excursion = nil
+        seatStillSince = nil
+        lowStillSince = nil
+        phase = .seated
+    }
+
+    // MARK: Sentado
+
+    /// Tras un bloqueo: vuelve a estar sentado cuando la cara está en el asiento y quieta.
     private mutating func awaitSeat(_ r: Reading, at t: Double, _ events: inout [VerifierEvent]) {
         guard let ref = reference else { return }
         if reseatIfNeeded(r, at: t, afterBlock: true, &events) { return }
-        let inBand = abs(r.phoneY - ref.phoneY) < Self.seatedBand
-        // `vy` desconocido (hueco corto de tracking con poca luz) dentro de la banda no reinicia la quietud.
-        if inBand, r.vy == nil { return }
-        guard inBand, r.isStill else {
+        let plateau = facePlateau(at: t)
+        guard let face = r.face, r.faceStill != nil || plateau else { return } // sin cara no se decide
+        let still = r.faceStill == true || plateau
+        // Más abajo que el asiento solo si es sentarse (o el origen saltó en vertical): reclinada o inclinada de lado
+        // no se toma como asiento.
+        // A la altura del asiento de antes (hasta `seatCreepMax` más arriba): tras un bloqueo el origen pudo correrse;
+        // más arriba lo decide `reseatIfNeeded` con la cara quieta 2 s (asentarse tras el bajón de sentarse sube la
+        // cara 3-4 cm y un asiento tomado antes quedaría bajo ella).
+        let inSeat = face.y - ref.faceY <= Self.seatCreepMax && ahead(face.xz, from: ref.faceXZ, ref) <= Self.torsoMinHorizontal
+            && (face.y >= ref.faceY - Self.seatSinkMax || Self.isSitDown(from: ref, to: face))
+        guard inSeat, still else {
             seatStillSince = nil
             return
         }
-        let since = seatStillSince ?? t
+        let since = plateau ? min(seatStillSince ?? t, t - Self.seatPlateauSeconds) : (seatStillSince ?? t)
         seatStillSince = since
         guard t - since >= Self.seatedStillSeconds else { return }
-        seatStillSince = nil
-        enterSeated(r, upright: isUpright(r, anchor: restFaceXZ ?? ref.faceXZ))
+        var seat = Self.pose(r, face, fallbackForward: ref.forward)
+        seat.faceY = min(seat.faceY, ref.faceY + Self.seatCreepMax)
+        setSeat(seat)
     }
 
-    /// Sentado. La posición de la cara "en reposo" solo se actualiza con el tronco derecho.
-    private mutating func enterSeated(_ r: Reading, upright: Bool) {
-        phase = .seated
-        if upright, let face = r.face { restFaceXZ = face.xz }
-    }
-
-    /// Postura de sentado derecho: cabeceo como en la calibración y la cara no adelantada respecto de `anchor`.
-    /// A media bajada, con el tronco todavía inclinado, no lo es.
-    private func isUpright(_ r: Reading, anchor: SIMD2<Double>) -> Bool {
-        guard let ref = reference, let face = r.face else { return false }
-        let pitchDelta = abs(AngleMath.delta(r.pitch, ref.pitch))
-        let ahead = ref.forward.map { Self.dot(face.xz - anchor, $0) } ?? 0
-        return pitchDelta < Self.reseatMaxPitchDeltaDeg && ahead < Self.reseatMaxForward
-    }
-
-    /// Sentado: empieza un intento si el teléfono sale de la banda o la cara se va hacia adelante.
+    /// Sentado: empieza un intento si la cara sube o se va adelante, o el teléfono sube. Mientras tanto, la
+    /// referencia sigue a la postura quieta (teléfono del regazo al pecho, otro agarre, el cojín que cede).
     private mutating func watchSeated(_ r: Reading, at t: Double, _ events: inout [VerifierEvent]) {
         guard let ref = reference else { return }
-        let anchor = restFaceXZ ?? ref.faceXZ
         let rise = r.phoneY - ref.phoneY
-        var leaning = false
+        var leaning = false, faceMoved = false
         if let face = r.face {
-            let shift = face.xz - anchor
-            // Solo hacia adelante: enderezarse (cara hacia atrás) no es un intento.
-            let ahead = ref.forward.map { Self.dot(shift, $0) } ?? Self.norm(shift)
-            leaning = ahead > Self.torsoMinHorizontal
+            leaning = ahead(face.xz, from: ref.faceXZ, ref) > Self.torsoMinHorizontal
+            let faceRise = face.y - ref.faceY
+            faceMoved = faceRise > Self.seatFaceBand || faceRise < -Self.torsoMaxDrop
         }
-        guard abs(rise) > Self.seatedBand || leaning else { return }
-        excursion = Excursion(startT: t, anchorFaceXZ: anchor, stepsAtStart: lastSteps)
+        // Bajar el teléfono (al regazo) no es un intento: la referencia lo sigue cuando queda quieto.
+        guard rise > Self.seatedBand || leaning || faceMoved else {
+            refreshRest(r, at: t)
+            return
+        }
+        rest.removeAll()
+        excursion = Excursion(startT: t, seat: ref, stepsAtStart: lastSteps)
         phase = .excursion
         track(r, at: t, &events)
     }
 
-    /// Un intento en curso: mide subida, cara, inclinación, desafío y la vuelta sentado.
+    /// Sentado y quieto (cara y teléfono): la referencia es el promedio de los últimos cuadros así. La cara solo
+    /// entre `seatFloorY` y `seatCeilingY`, y sin adelantarse: inclinarse o subir de a poco no corre el asiento.
+    private mutating func refreshRest(_ r: Reading, at t: Double) {
+        guard let ref = reference, let face = r.face, r.faceStill == true, r.vy.map({ abs($0) < Self.stillVerticalSpeed }) ?? false,
+              Self.faceDistanceRange.contains(Self.norm(face.inPhone)) else { return }
+        let anchorXZ = seatAnchorFaceXZ ?? ref.faceXZ
+        guard face.y >= seatFloorY ?? ref.faceY - Self.seatSinkMax, face.y <= seatCeilingY ?? ref.faceY + Self.seatCreepMax,
+              ahead(face.xz, from: anchorXZ, ref) <= Self.reseatMaxForward else { return }
+        rest.append(r)
+        while let first = rest.first, first.t < t - Self.restWindowSeconds { rest.removeFirst() }
+        guard rest.count >= Self.restMinFrames else { return }
+        var avg = PoseAverage()
+        for frame in rest { if let f = frame.face { avg.add(frame, f) } }
+        if let fresh = avg.reference(fallbackForward: ref.forward) { reference = fresh }
+    }
+
+    /// Referencia con la postura de un cuadro.
+    private static func pose(_ r: Reading, _ face: FaceReading, fallbackForward: SIMD2<Double>?) -> Reference {
+        var avg = PoseAverage()
+        avg.add(r, face)
+        return avg.reference(fallbackForward: fallbackForward)!
+    }
+
+    /// Proyección hacia adelante de `xz − from` (sin dirección conocida, la distancia).
+    private func ahead(_ xz: SIMD2<Double>, from: SIMD2<Double>, _ ref: Reference) -> Double {
+        let shift = xz - from
+        return ref.forward.map { Self.dot(shift, $0) } ?? Self.norm(shift)
+    }
+
+    // MARK: Intento
+
+    /// Un intento en curso: mide subida, cara, inclinación, desafío y la vuelta sentado, contra su propio asiento.
     private mutating func track(_ r: Reading, at t: Double, _ events: inout [VerifierEvent]) {
-        guard var ex = excursion, let ref = reference else { return }
+        guard var ex = excursion else { return }
+        let ref = ex.seat
         let rise = r.phoneY - ref.phoneY
         let pitchDelta = abs(AngleMath.delta(r.pitch, ref.pitch))
         let rollDelta = abs(AngleMath.delta(r.roll, ref.roll))
+        ex.samples += 1
         ex.minRise = min(ex.minRise, rise)
+        ex.lastRise = rise
         ex.maxPitchDelta = max(ex.maxPitchDelta, pitchDelta)
         ex.maxRollDelta = max(ex.maxRollDelta, rollDelta)
         if r.live { ex.liveSamples += 1 }
+        // Intento sin pararse abierto demasiado tiempo (quieta en una postura que no es el asiento): se cierra sin
+        // aviso y con el mismo asiento; si sigue fuera, empieza otro con el reloj de nuevo.
+        if !ex.stood, t - ex.startT > Self.openAttemptMaxSeconds {
+            logAttempt(ex, at: t, rep: nil, rejection: nil)
+            excursion = nil
+            rest.removeAll()
+            phase = .seated
+            return
+        }
 
         var faceForward: Double? = nil
-        var faceRise = -Double.infinity
+        var faceRise: Double? = nil
         if let face = r.face {
             ex.faceSamples += 1
             if faceLooksFlat { ex.flatSamples += 1 }
-            faceRise = face.y - ref.faceY
+            let fr = face.y - ref.faceY
+            faceRise = fr
             let shift = face.xz - ex.anchorFaceXZ
             ex.maxFaceShift = max(ex.maxFaceShift, Self.norm(shift))
-            ex.maxFaceLift = max(ex.maxFaceLift, abs(faceRise))
-            ex.maxFaceRise = max(ex.maxFaceRise, faceRise)
-            faceForward = ref.forward.map { Self.dot(shift, $0) }
+            ex.maxFaceLift = max(ex.maxFaceLift, abs(fr))
+            ex.minFaceRise = min(ex.minFaceRise, fr)
+            let forward = ref.forward.map { Self.dot(shift, $0) }
+            faceForward = forward
+            ex.maxFaceAhead = max(ex.maxFaceAhead, forward ?? Self.norm(shift))
+            let offset = r.phoneXZ - face.xz
+            let offsetLength = Self.norm(offset)
+            // Solo caminando antes de conocer el asiento (empezó de pie y va hacia la silla): reclinarse o inclinarse de
+            // lado también dejan la cara a esa altura un rato, pero sin pasos.
+            let walking = !seatKnown && (lastStepAt.map { t - $0 <= Self.walkingRecentSeconds } ?? false)
+            if walking, abs(fr) <= Self.seatFaceBand {
+                ex.levelFaceXZ = face.xz
+                if offsetLength >= Self.lateralForwardMinOffset { ex.levelForward = offset / offsetLength }
+            }
+            if fr < Self.seatFaceBand {
+                // Todavía a la altura del asiento: aquí despega. "Adelante" solo con el teléfono bien delante de la
+                // cara (inclinado 50° o con el teléfono en el regazo queda casi debajo y la dirección no vale).
+                ex.departureFaceXZ = face.xz
+                if offsetLength >= Self.lateralForwardMinOffset { ex.departureForward = offset / offsetLength }
+            }
+            if fr > ex.maxFaceRise {
+                // El pico es el de la CARA: arriba el tronco vuelve a estar derecho (brazos cansados no lo corren).
+                ex.maxFaceRise = fr
+                ex.peakPitchDelta = pitchDelta
+                ex.peakRollDelta = rollDelta
+                if let forward { ex.peakFaceForward = forward }
+                // De lado = la componente perpendicular a "adelante" desde el despegue (sin dirección, nada que medir).
+                let side = face.xz - (ex.departureFaceXZ ?? ex.anchorFaceXZ)
+                ex.peakLateral = ex.departureForward.map { abs(side.x * $0.y - side.y * $0.x) } ?? 0
+                ex.peakRiseForward = ex.departureForward.map { Self.dot(side, $0) }
+            }
             if rise >= Self.armsCheckFraction * Self.standRise {
                 ex.upperFaceSamples += 1
-                // Con signo: el ataque sube el teléfono MÁS que la cara; brazos cansados lo suben menos y
-                // eso nunca infla una rep.
-                let gap = rise - faceRise
+                // Con signo: el ataque sube el teléfono MÁS que la cara; brazos cansados lo suben menos. Con la cara
+                // ya arriba de verdad se tolera traer el teléfono del regazo al pecho.
+                let gap = rise - fr
                 let drift = Self.norm(face.inPhone - ref.faceInPhone)
+                let slack = max(0, fr - (Self.minFaceRise + Self.armsBodyMargin))
                 ex.maxRiseGap = max(ex.maxRiseGap, gap)
                 ex.maxFaceInPhoneShift = max(ex.maxFaceInPhoneShift, drift)
-                if gap > Self.armsMaxRiseGap || (drift > Self.armsMaxFaceInPhoneShift && gap > Self.armsDriftMinGap) {
-                    ex.armsFlag = true
-                }
+                // Exceso sobre lo tolerado sin holgura (se decide al cerrar con la subida máxima de la cara).
+                let excess = max(gap - Self.armsMaxRiseGap,
+                                 gap > Self.armsDriftMinGap ? drift - Self.armsMaxFaceInPhoneShift : -.infinity)
+                ex.maxArmsExcess = max(ex.maxArmsExcess, excess)
+                if excess > slack { ex.armsFlag = true }
             }
         }
-        if rise > ex.maxRise {
-            ex.maxRise = rise
-            ex.peakPitchDelta = pitchDelta
-            if let faceForward { ex.peakFaceForward = faceForward }
-        }
+        ex.maxRise = max(ex.maxRise, rise)
 
         // De pie: el teléfono y la cara arriba en el mismo cuadro (los brazos no suben la cara; tapar la
         // cámara arriba tampoco sirve).
-        if !ex.stood, rise >= Self.standRise, faceRise >= Self.minFaceRise {
+        if !ex.stood, rise >= Self.standRise, (faceRise ?? -1) >= Self.minFaceRise {
             ex.stood = true
             ex.stoodAt = t
+            ex.lastStandingAt = t
             ex.challenge = activeChallenge?.kind
             switch ex.challenge {
-            case .stand?: events.append(.cue(Cue(text: SitStandCopy.holdStand, symbol: "figure.stand")))
-            case .sit?: events.append(.cue(Cue(text: SitStandCopy.sitThenHold, symbol: "chair.fill")))
+            case .stand?: cue(SitStandCopy.holdStand, "figure.stand", &events)
+            case .sit?: cue(SitStandCopy.sitThenHold, "chair.fill", &events)
             case nil: break
             }
-        } else if ex.stood, ex.touchedBand, rise >= Self.standRise, !ex.restoodCued {
+        } else if ex.stood, ex.touchedBand, (faceRise ?? -1) >= Self.minFaceRise, rise >= Self.standRise, !ex.restoodCued {
             ex.restoodCued = true
-            events.append(.cue(Cue(text: SitStandCopy.notSeated, symbol: "chair.fill")))
+            cue(SitStandCopy.notSeated, "chair.fill", &events)
         }
-        // Teléfono arriba con la cara desfasada: brazos, aunque la cara nunca llegue arriba.
-        if rise >= Self.standRise, ex.armsFlag, !ex.armsReported {
-            ex.armsReported = true
-            reportArms(gap: ex.maxRiseGap, drift: ex.maxFaceInPhoneShift, at: t, &events)
-        }
+        let standing = faceRise.map { $0 >= Self.holdStandFraction * Self.minFaceRise }
+            ?? (rise >= Self.holdStandFraction * Self.standRise)
+        if ex.stood, standing, ex.stoodAt != nil, ex.seatConfirmedAt == nil, !ex.touchedBand { ex.lastStandingAt = t }
+
+        // Teléfono arriba con la cara desfasada: brazos. Se decide al cerrar (sin pararse) o con la rep completa:
+        // a mitad de una parada honesta los brazos pueden ir adelante de la cara (del regazo al pecho).
 
         // Desafío de pie: quedarse arriba ≥ 1,5 s desde que llegó.
         if ex.stood, ex.challenge == .stand, !ex.holdDone, !ex.holdFailed, let stoodAt = ex.stoodAt {
-            if rise >= Self.holdStandFraction * Self.standRise {
+            if standing {
                 if t - stoodAt >= Self.holdSeconds {
                     ex.holdDone = true
-                    events.append(.cue(Cue(text: SitStandCopy.holdOK, symbol: "checkmark.circle.fill")))
+                    cue(SitStandCopy.holdOK, "checkmark.circle.fill", &events)
                 }
             } else {
                 ex.holdFailed = true
@@ -921,17 +1369,25 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
             }
         }
 
-        let inBand = abs(rise) < Self.seatedBand
-        if ex.stood, inBand { ex.touchedBand = true }
+        // En el asiento: la cara a no más de `seatFaceBand` sobre el asiento de la rep (sin cara, no se sabe).
+        let inSeat: Bool? = faceRise.map { $0 <= Self.seatFaceBand }
+        if ex.stood, inSeat == true { ex.touchedBand = true }
 
-        // Desafío sentado en curso: debe quedarse en la banda 1,5 s.
+        // Desafío sentado en curso: debe quedarse en el asiento 1,5 s. Inclinarse para pararse (la cara se
+        // adelanta o baja 12 cm) ya es dejarlo.
         if let confirmedAt = ex.seatConfirmedAt {
-            if !inBand {
+            // Contra donde se sentó (puede ser más adelante en la silla que al empezar la rep).
+            let seatedFace = ex.seatConfirmedFace ?? SIMD3(ex.anchorFaceXZ.x, ref.faceY, ex.anchorFaceXZ.y)
+            let leftSeat = inSeat == false
+                || (r.face.map { $0.y - seatedFace.y < -Self.torsoMaxDrop } ?? false)
+                || (r.face.map { ahead($0.xz, from: SIMD2(seatedFace.x, seatedFace.z), ref) > Self.torsoMinHorizontal } ?? false)
+            if leftSeat {
                 excursion = nil
                 failChallenge(at: t, &events)
                 reject(.holdChallengeFailed, at: t)
-                // Ya se está levantando: empieza otro intento ahora mismo.
-                excursion = Excursion(startT: t, anchorFaceXZ: ex.anchorFaceXZ, stepsAtStart: lastSteps)
+                logAttempt(ex, at: t, rep: nil, rejection: .holdChallengeFailed)
+                // Ya se está levantando: empieza otro intento ahora mismo, desde ese asiento.
+                excursion = Excursion(startT: t, seat: ex.seat, stepsAtStart: lastSteps)
                 phase = .excursion
                 return
             }
@@ -943,73 +1399,158 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
             return
         }
 
-        // Fase final sentado: en la banda, con velocidad vertical baja y la cara de vuelta sobre la silla.
-        if inBand, r.isStill {
-            let since = ex.stillSince ?? t
-            ex.stillSince = since
-            let faceBack = (faceForward ?? 0) <= Self.torsoMinHorizontal
-            let settled = t - since >= Self.seatSettleSeconds
-                && abs(AngleMath.delta(r.pitch, ref.pitch)) < Self.reseatMaxPitchDeltaDeg
-            if (t - since >= Self.seatedStillSeconds && faceBack) || settled {
+        // Fase final sentado: la cara en el asiento, quieta y de vuelta sobre la silla. Sin pararse, además el
+        // teléfono de vuelta en la banda (o quieto en otra altura: lo dejó en el pecho o en el regazo).
+        // Empezó de pie (primera postura provisoria) y se está sentando: se espera el asiento nuevo, sin cerrar
+        // el intento como inclinación.
+        if !ex.stood, !seatKnown, let fr = faceRise, fr <= -Self.minFaceRise {
+            excursion = ex
+            _ = reseatIfNeeded(r, at: t, standingFrom: Self.levelSeat(ex), &events)
+            return
+        }
+        let plateau = inSeat == true && facePlateau(at: t)
+        if inSeat == true, r.faceStill == true || plateau {
+            // Desde cuándo está sentado: en una meseta, desde que empezó (`seatPlateauSeconds` atrás). El desafío
+            // sentado cuenta desde que se confirma (ahora), no desde el comienzo de la meseta: al final de la bajada la
+            // cara ya está quieta a la altura del asiento mientras el tronco todavía se endereza.
+            let stillSince = ex.stillSince ?? t
+            ex.stillSince = stillSince
+            if r.faceStill == true { ex.vyStillSince = ex.vyStillSince ?? t } else { ex.vyStillSince = nil }
+            let since = plateau ? min(stillSince, t - Self.seatPlateauSeconds) : stillSince
+            let forward = faceForward ?? 0
+            let faceBack = forward <= Self.torsoMinHorizontal
+            // Se sentó más adelante en la silla: la cara a la altura del asiento (no inclinada: no bajó más de
+            // `torsoMinDrop`), hasta `seatMaxMove` adelante, y quieta también en horizontal (a media bajada la
+            // cadera que baja y el tronco que se endereza se compensan en vertical, no en horizontal).
+            let movedSeat = !faceBack && forward <= Self.seatMaxMove && (faceRise ?? -1) >= -Self.torsoMinDrop
+                && (r.faceHSpeed.map { $0 < Self.stillFaceHSpeed } ?? false)
+            if movedSeat { ex.movedSeatSince = ex.movedSeatSince ?? t } else if r.faceHSpeed != nil { ex.movedSeatSince = nil }
+            let movedSettled = ex.movedSeatSince.map { t - $0 >= Self.seatedStillSeconds } ?? false
+            // Quieto un rato con la cara a la altura del asiento, aunque parezca adelantada (el VIO corrió el origen
+            // en horizontal o gira en una silla giratoria). Inclinado sobre las rodillas la cara queda más abajo.
+            let settled = t - since >= Self.seatSettleSeconds && (faceRise ?? -1) >= -Self.seatSettleMaxDrop
+            // Sin pararse (brazos, acomodo), además el teléfono de vuelta en la banda y quieto; o la cara sentada
+            // y quieta `phoneParkedSeconds` aunque el teléfono siga moviéndose o quede en otra altura (regazo,
+            // pecho): un intento abierto por el teléfono no se arrastra hasta la próxima rep (daría `tooSlow`).
+            let phoneBack = abs(rise) < Self.seatedBand && (r.vy.map { abs($0) < Self.stillVerticalSpeed } ?? true)
+            let ready = ex.stood || phoneBack || t - since >= Self.phoneParkedSeconds
+            // Sin pararse, una postura más baja que el asiento que no es sentarse (reclinada, de lado) no cierra el
+            // intento: no puede pasar a ser el asiento.
+            let lowNotSeat = !ex.stood && (faceRise ?? 0) < -Self.seatSinkMax
+                && !(r.face.map { Self.isSitDown(from: ref, to: $0) } ?? false)
+            if ready, !lowNotSeat, (t - since >= Self.seatedStillSeconds && faceBack) || movedSettled || settled {
                 if ex.stood, ex.challenge == .sit {
-                    ex.seatConfirmedAt = since
+                    ex.seatConfirmedAt = t
+                    ex.seatConfirmedFace = r.face.map { SIMD3($0.xz.x, $0.y, $0.xz.y) }
                     excursion = ex
                     return
                 }
-                complete(ex, seatedAt: since, r, at: t, movedSeat: !faceBack, &events)
+                // Sentado desde que la cara quedó quieta (o ahora, si solo hay meseta): el ritmo se mide aquí y un
+                // instante nítido no se corre con el rebote del cojín.
+                complete(ex, seatedAt: ex.vyStillSince ?? t, r, at: t, movedSeat: !faceBack, &events)
                 return
             }
-        } else if !(inBand && r.vy == nil) {
-            // `vy` desconocido (hueco corto de tracking con poca luz) dentro de la banda no reinicia la quietud.
+        } else if r.faceStill != nil || inSeat == false {
+            // Sin cara o sin velocidad (hueco corto con poca luz) no se reinicia la quietud.
             ex.stillSince = nil
+            ex.vyStillSince = nil
+            ex.movedSeatSince = nil
         }
 
-        // Quieto fuera de la banda tras pararse: encorvado, con el teléfono alto, o ARKit retomó con el origen
-        // corrido. Se orienta una vez y, si está sentado derecho como al calibrar (cabeceo, cara-teléfono y la
-        // cara de vuelta sobre la silla), se re-ancla la referencia y se cierra la rep.
-        if ex.stood, !inBand, r.isStill, rise < Self.holdStandFraction * Self.standRise {
+        // Quieto fuera del asiento tras pararse: encorvado, suspendido sobre la silla, o ARKit retomó con el
+        // origen corrido. Se orienta una vez y, si está sentado derecho sobre la silla, se re-ancla y se cierra.
+        if ex.stood, inSeat == false, r.faceStill == true, !standing {
             let since = ex.stuckSince ?? t
             ex.stuckSince = since
-            let seatedLike = r.face.map { isSeatedLike(r, $0, anchor: ex.anchorFaceXZ) } ?? false
-            // Si ya está sentado derecho (solo corrió el origen), no hay nada que corregir: se re-ancla a los 2 s.
+            let seatedLike = r.face.map { isSeatedLike(r, $0, ref, anchor: ex.anchorFaceXZ) } ?? false
             if !ex.stuckCued, !seatedLike, t - since >= Self.stuckCueSeconds {
                 ex.stuckCued = true
-                events.append(.cue(Cue(text: SitStandCopy.sitUpright, symbol: "chair.fill")))
+                cue(SitStandCopy.sitUpright, "chair.fill", &events)
             }
-            if t - since >= Self.reseatSeconds, seatedLike, let face = r.face {
-                reanchor(r, face)
-                complete(ex, seatedAt: since, r, at: t, &events)
+            if t - since >= Self.reseatSeconds, seatedLike {
+                excursion = ex
+                complete(ex, seatedAt: since, r, at: t, reanchored: true, &events)
                 return
             }
             // Origen corrido también en horizontal: no se puede confirmar que se sentó. Se re-ancla para no
             // quedar trabado, pero el intento no cuenta.
-            if t - since >= Self.reseatShiftedSeconds, let face = r.face, isSeatedLike(r, face, anchor: nil) {
-                reanchor(r, face, horizontal: true)
+            if t - since >= Self.reseatShiftedSeconds, let face = r.face, isSeatedLike(r, face, ref, anchor: nil) {
                 excursion = nil
-                phase = .seated
                 reject(.interrupted, at: t)
-                events.append(.cue(Cue(text: SitStandCopy.reseated, symbol: "checkmark.circle.fill")))
+                logAttempt(ex, at: t, rep: nil, rejection: .interrupted)
+                reanchored(Self.pose(r, face, fallbackForward: ref.forward), &events)
                 return
             }
-        } else {
+        } else if r.faceStill != nil {
             ex.stuckSince = nil
         }
 
         excursion = ex
-        if !ex.stood { _ = reseatIfNeeded(r, at: t, &events) }
+        if !ex.stood { _ = reseatIfNeeded(r, at: t, standingFrom: Self.levelSeat(ex), &events) }
+    }
+
+    /// El asiento del intento visto desde donde la cara estuvo a su altura por última vez (posición y "adelante").
+    private static func levelSeat(_ ex: Excursion) -> Reference {
+        var seat = ex.seat
+        seat.faceXZ = ex.levelFaceXZ
+        seat.forward = ex.levelForward ?? ex.seat.forward
+        return seat
+    }
+
+    /// La cara está en una meseta: su altura varió ≤ `seatPlateauRange` en los últimos `seatPlateauSeconds`.
+    private func facePlateau(at t: Double) -> Bool {
+        guard lastFaceReadAt == t, let first = faceHistory.first, t - first.t >= Self.seatPlateauSeconds else { return false }
+        var lo = Double.infinity, hi = -Double.infinity
+        for h in faceHistory where h.t >= t - Self.seatPlateauSeconds {
+            lo = min(lo, h.v)
+            hi = max(hi, h.v)
+        }
+        return hi - lo <= Self.seatPlateauRange
     }
 
     private func maxSeconds(_ ex: Excursion) -> Double {
         Self.maxRepSeconds + (ex.challenge == nil ? 0 : Self.challengeExtraSeconds)
     }
 
-    /// Volvió sentado y quieto: decide si el intento cuenta.
-    /// `movedSeat`: se sentó derecho pero más adelante en la silla; la cara de reposo pasa a ser la actual.
+    /// Volvió sentado y quieto: decide si el intento cuenta. El asiento del próximo intento: la cara donde se
+    /// sentó (sube como mucho `seatCreepMax` por rep) y el agarre del inicio de esta rep, hasta que el refresco
+    /// sentado lo actualice (al confirmar, el tronco todavía se endereza y el teléfono va 5 cm más abajo).
+    /// `reanchored`: quedó quieto fuera de la banda (suspendido sobre la silla u origen corrido) y se re-ancló.
     private mutating func complete(_ ex: Excursion, seatedAt: Double, _ r: Reading, at t: Double,
-                                   movedSeat: Bool = false, _ events: inout [VerifierEvent]) {
+                                   movedSeat: Bool = false, reanchored: Bool = false, _ events: inout [VerifierEvent]) {
         excursion = nil
-        let upright = isUpright(r, anchor: ex.anchorFaceXZ)
-        enterSeated(r, upright: upright || movedSeat)
+        let ceiling = ex.seat.faceY + Self.seatCreepMax
+        if let face = r.face {
+            var seat = ex.seat
+            // Más abajo que el asiento sin haberse sentado (reclinada, de lado): esa posición no es el asiento, o la
+            // bajada siguiente parecería vertical.
+            let lowNotSeat = face.y < ex.seat.faceY - Self.seatSinkMax && !Self.isSitDown(from: ex.seat, to: face)
+            if ex.stood {
+                if !lowNotSeat { seat.faceXZ = face.xz }
+                if reanchored {
+                    reanchorCount += 1
+                    seat = Self.pose(r, face, fallbackForward: ex.seat.forward)
+                } else {
+                    // Entre `seatSinkMax` bajo y `seatCreepMax` sobre el asiento anterior: una vez desplomado no
+                    // deja la banda abajo, y sentarse cada vez más alto no la sube.
+                    seat.faceY = min(max(face.y, ex.seat.faceY - Self.seatSinkMax), ceiling)
+                }
+            } else {
+                // Sin pararse la persona no dejó la silla: la altura de la cara sigue en su asiento (solo puede
+                // haber bajado, y no más que `seatSinkMax` salvo un salto vertical del origen: reclinada o
+                // inclinada de lado no es el asiento); la posición, donde quedó (se acomodó, o el VIO corrió el
+                // origen); el teléfono, donde lo dejó.
+                seat = Self.pose(r, face, fallbackForward: ex.seat.forward)
+                seat.faceY = min(face.y, ex.seat.faceY)
+                if lowNotSeat {
+                    seat.faceY = ex.seat.faceY - Self.seatSinkMax
+                    seat.faceXZ = ex.seat.faceXZ
+                }
+            }
+            setSeat(seat, known: ex.stood, ceiling: reanchored ? nil : ceiling)
+        } else {
+            setSeat(ex.seat)
+        }
         guard ex.stood else {
             closeAttempt(ex, at: t, &events)
             return
@@ -1017,29 +1558,32 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         let duration = seatedAt - ex.startT
         if let reason = rejection(for: ex, duration: duration) {
             reject(reason, at: t)
+            logAttempt(ex, at: t, rep: nil, rejection: reason, seatHold: t - (ex.seatConfirmedAt ?? t))
             switch reason {
-            case .tooFast:
-                events.append(.cue(Cue(text: SitStandCopy.tooFast, symbol: "tortoise")))
-            case .tooSlow:
-                events.append(.cue(Cue(text: SitStandCopy.tooSlow, symbol: "clock")))
-            case .faceNotSeen:
-                events.append(.cue(Cue(text: SitStandCopy.faceLost, symbol: "face.dashed")))
-            case .notLive:
-                events.append(.cue(Cue(text: SitStandCopy.notLive, symbol: "face.dashed")))
+            case .tooFast: cue(SitStandCopy.tooFast, "tortoise", &events)
+            case .tooSlow: cue(SitStandCopy.tooSlow, "clock", &events)
+            case .faceNotSeen: cue(SitStandCopy.faceLost, "face.dashed", &events)
+            case .notLive: cue(SitStandCopy.notLive, "face.dashed", &events)
             case .flatFace:
                 flatFaceCount += 1
                 record(Anomaly(kind: SitStandAnomaly.flatFace, severity: flatFaceCount >= Self.flatFaceHardCount ? .hard : .soft,
                                at: t - t0, detail: "Cara sin relieve 3D: foto o pantalla"), &events)
-                events.append(.cue(Cue(text: SitStandCopy.notLive, symbol: "face.dashed")))
-            case .phoneTilted:
-                events.append(.cue(Cue(text: SitStandCopy.phoneTilted, symbol: "iphone")))
-            case .noTravel:
-                events.append(.cue(Cue(text: SitStandCopy.noTravel, symbol: "figure.stand")))
+                cue(SitStandCopy.notLive, "face.dashed", &events)
+            case .phoneTilted: cue(SitStandCopy.phoneTilted, "iphone", &events)
+            case .noTravel: cue(SitStandCopy.noTravel, "figure.stand", &events)
             case .torsoOnly:
-                record(Anomaly(kind: SitStandAnomaly.torsoOnly, severity: .soft, at: t - t0,
-                               detail: "Se enderezó sin pararse"), &events)
-                events.append(.cue(Cue(text: SitStandCopy.torsoOnly, symbol: "figure.stand")))
-            case .armsOnly, .holdChallengeFailed, .partial, .interrupted:
+                let detail = leanedSideways(ex)
+                    ? String(format: "Se enderezó de lado: cara %.0f cm corrida, alabeo %.0f°", ex.peakLateral * 100, ex.peakRollDelta)
+                    : sitUpFromRecline(ex)
+                    ? String(format: "Se enderezó desde reclinado: la cara avanzó %.0f cm al subir", (ex.peakRiseForward ?? 0) * 100)
+                    : "Se enderezó sin pararse"
+                record(Anomaly(kind: SitStandAnomaly.torsoOnly, severity: .soft, at: t - t0, detail: detail), &events)
+                cue(SitStandCopy.torsoOnly, "figure.stand", &events)
+            case .partial:
+                cue(SitStandCopy.partial, "arrow.up", &events)
+            case .armsOnly:
+                if !ex.armsReported { reportArms(gap: ex.maxRiseGap, drift: ex.maxFaceInPhoneShift, at: t, &events) }
+            case .holdChallengeFailed, .interrupted:
                 break // ya avisado en el momento
             }
             return
@@ -1048,14 +1592,14 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         progress.count += 1
         if stepsAtFirstRep == nil { stepsAtFirstRep = ex.stepsAtStart ?? lastSteps }
         repSeconds.append(duration)
+        countedFaceRises.append(ex.maxFaceRise)
         maxCountedRise = max(maxCountedRise ?? ex.maxRise, ex.maxRise)
         if ex.challenge != nil { challengePassed = true }
+        logAttempt(ex, at: t, rep: progress.count, rejection: nil, seatHold: t - (ex.seatConfirmedAt ?? t))
         events.append(.rep(progress.count))
         events.append(.progress(progress.fraction))
         // El ritmo se mide al sentarse (no al contar): el desafío sentado retrasa el conteo, no el movimiento.
         if let anomaly = regularity.recordRep(at: seatedAt - t0) { record(anomaly, &events) }
-        // A media bajada, con el tronco todavía inclinado, la referencia no se adapta (derivaría hacia abajo).
-        if upright { adaptReference(r) }
         if progress.count >= spec.target {
             checkStepsPerRep(at: t, &events)
             phase = .done
@@ -1066,7 +1610,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
     private func rejection(for ex: Excursion, duration: Double) -> Rejection? {
         if duration < Self.minRepSeconds { return .tooFast }
         if duration > maxSeconds(ex) { return .tooSlow }
-        if ex.armsFlag { return .armsOnly }
+        if ex.armsOnRep { return .armsOnly }
         if ex.maxFaceShift < Self.minFaceTravel { return .noTravel }
         if ex.upperFaceSamples == 0 { return .faceNotSeen }
         if ex.liveSamples == 0 || Double(ex.liveSamples) < Self.minLiveFraction * Double(ex.faceSamples) {
@@ -1077,106 +1621,131 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         }
         if ex.maxPitchDelta > Self.maxTiltDeltaDeg || ex.maxRollDelta > Self.maxTiltDeltaDeg { return .phoneTilted }
         if ex.peakPitchDelta > Self.maxPeakPitchDeltaDeg { return .torsoOnly }
+        if leanedSideways(ex) || sitUpFromRecline(ex) { return .torsoOnly }
         if let forward = ex.peakFaceForward, forward < -Self.maxBackShift { return .torsoOnly }
         if ex.challenge == .stand, !ex.holdDone { return .holdChallengeFailed }
+        if let usual = usualFaceRise, ex.maxFaceRise < Self.relativeRiseFraction * usual { return .partial }
         return nil
     }
 
-    /// Intento que nunca llegó de pie: inclinarse (tronco) o quedarse a medias.
-    private mutating func closeAttempt(_ ex: Excursion, at t: Double, _ events: inout [VerifierEvent]) {
-        // El teléfono llegó arriba pero la cara no: brazos (ya avisado y anotado al llegar arriba).
-        if ex.armsReported {
-            reject(.armsOnly, at: t)
-            return
-        }
-        let dropped = ex.minRise < -Self.torsoMaxDrop
-        let leaned = ex.maxFaceShift >= Self.torsoMinHorizontal
-            && ex.maxFaceShift > Self.torsoHorizontalRatio * ex.maxFaceLift
-        if dropped || leaned {
-            reject(.torsoOnly, at: t)
-            record(Anomaly(kind: SitStandAnomaly.torsoOnly, severity: .soft, at: t - t0,
-                           detail: dropped ? String(format: "Teléfono %.0f cm bajo la silla", -ex.minRise * 100)
-                                           : "Se inclinó sin pararse"), &events)
-            events.append(.cue(Cue(text: SitStandCopy.torsoOnly, symbol: "figure.stand")))
-        } else if ex.maxRise >= Self.armsCheckFraction * Self.standRise {
-            reject(.partial, at: t)
-            events.append(.cue(Cue(text: SitStandCopy.partial, symbol: "arrow.up")))
-        }
-        // Si no, fue un acomodo en la silla: sin aviso.
+    /// Arriba la cara quedó corrida de lado o el teléfono girado de lado: se enderezó de una inclinación lateral.
+    private func leanedSideways(_ ex: Excursion) -> Bool {
+        ex.peakLateral > Self.maxPeakLateral || ex.peakRollDelta > Self.maxPeakRollDeltaDeg
     }
 
-    /// Fuera de la banda pero sentado, quieto y derecho como al calibrar: calibró de pie y se sentó, se
-    /// acomodó más abajo, o ARKit retomó con el origen corrido (poca luz). Nueva referencia.
+    /// Del despegue al pico la cara avanzó más de lo que avanza al pararse: se enderezó desde reclinado.
+    private func sitUpFromRecline(_ ex: Excursion) -> Bool {
+        (ex.peakRiseForward ?? 0) > Self.maxRiseForward
+    }
+
+    /// Mediana de la subida de la cara en las reps contadas (desde `relativeRiseMinReps`): la de ESTA persona.
+    private var usualFaceRise: Double? {
+        guard countedFaceRises.count >= Self.relativeRiseMinReps else { return nil }
+        let sorted = countedFaceRises.sorted()
+        let mid = sorted.count / 2
+        return sorted.count % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
+    }
+
+    /// Intento que nunca llegó de pie: brazos, inclinarse (tronco), quedarse a medias o acomodarse.
+    private mutating func closeAttempt(_ ex: Excursion, at t: Double, _ events: inout [VerifierEvent]) {
+        // El teléfono llegó arriba (≥ `standRise`) pero la cara no: brazos.
+        if ex.armsFlag, ex.maxRise >= Self.standRise {
+            if !ex.armsReported { reportArms(gap: ex.maxRiseGap, drift: ex.maxFaceInPhoneShift, at: t, &events) }
+            reject(.armsOnly, at: t)
+            logAttempt(ex, at: t, rep: nil, rejection: .armsOnly)
+            return
+        }
+        // Inclinarse adelanta la cara Y la baja (40° de tronco: 45 cm y 21 cm). Un corrimiento horizontal sin
+        // bajar es el VIO asentándose o acomodarse en la silla, no una inclinación.
+        let forward = ex.maxFaceAhead >= Self.torsoMinHorizontal && ex.minFaceRise < -Self.torsoMinDrop
+        let dropped = ex.minFaceRise < -Self.torsoMaxDrop
+        let leaned = ex.maxFaceShift >= Self.torsoMinHorizontal
+            && ex.maxFaceShift > Self.torsoHorizontalRatio * ex.maxFaceLift
+        let walked = ex.maxFaceShift > Self.torsoMaxReach
+        if forward, !walked, dropped || leaned {
+            reject(.torsoOnly, at: t)
+            logAttempt(ex, at: t, rep: nil, rejection: .torsoOnly)
+            record(Anomaly(kind: SitStandAnomaly.torsoOnly, severity: .soft, at: t - t0,
+                           detail: dropped ? String(format: "Cara %.0f cm más abajo, adelantada", -ex.minFaceRise * 100)
+                                           : "Se inclinó sin pararse"), &events)
+            cue(SitStandCopy.torsoOnly, "figure.stand", &events)
+        } else if ex.maxFaceRise >= Self.partialFaceRise {
+            reject(.partial, at: t)
+            logAttempt(ex, at: t, rep: nil, rejection: .partial)
+            cue(SitStandCopy.partial, "arrow.up", &events)
+        } else {
+            // Acomodarse en la silla o mover el teléfono: sin aviso.
+            logAttempt(ex, at: t, rep: nil, rejection: nil)
+        }
+    }
+
+    /// Fuera del asiento pero quieto y sentado derecho sobre la silla: empezó de pie y se sentó, se sentó más
+    /// alto o más bajo, o ARKit retomó con el origen corrido (poca luz). Nuevo asiento.
     /// `afterBlock`: tras un bloqueo de tracking el origen pudo correrse también en horizontal; pasados
     /// `reseatShiftedSeconds` no se exige que la cara vuelva al ancla.
-    private mutating func reseatIfNeeded(_ r: Reading, at t: Double, afterBlock: Bool = false,
+    /// `standingFrom`: el asiento visto desde donde la cara estuvo a su altura por última vez (caminó hasta la silla).
+    private mutating func reseatIfNeeded(_ r: Reading, at t: Double, afterBlock: Bool = false, standingFrom: Reference? = nil,
                                          _ events: inout [VerifierEvent]) -> Bool {
-        guard let ref = reference, let face = r.face else {
+        guard let ref = reference, let face = r.face, r.faceStill != nil || facePlateau(at: t) else {
+            if r.face == nil { lowStillSince = nil }
+            return false
+        }
+        let plateau = facePlateau(at: t)
+        let still = r.faceStill == true || plateau
+        let from = standingFrom ?? ref
+        let faceRise = face.y - ref.faceY
+        let notStanding = faceRise < Self.holdStandFraction * Self.minFaceRise
+        // Empezó de pie: la cara bajó a una silla (sin adelantarse) desde donde estaba de pie.
+        let satFromStanding = faceRise <= -Self.minFaceRise
+        // Bajar el asiento exige que la cara baje más de lo que se mueve en horizontal (sentarse, no reclinarse).
+        let seatedLike = isSeatedLike(r, face, from, anchor: from.faceXZ) && (!satFromStanding || Self.isSitDown(from: from, to: face))
+        let shifted = afterBlock && notStanding && isSeatedLike(r, face, ref, anchor: nil)
+        let outOfSeat = faceRise > (afterBlock ? Self.seatCreepMax : Self.seatFaceBand) || satFromStanding
+        guard outOfSeat, still, seatedLike || shifted else {
             lowStillSince = nil
             return false
         }
-        let rise = r.phoneY - ref.phoneY
-        let seatedLike = isSeatedLike(r, face, anchor: ref.faceXZ)
-        let shifted = afterBlock && rise < Self.holdStandFraction * Self.standRise && isSeatedLike(r, face, anchor: nil)
-        guard abs(rise) > Self.seatedBand, r.isStill, seatedLike || shifted else {
-            lowStillSince = nil
-            return false
-        }
-        let since = lowStillSince ?? t
+        let since = plateau ? min(lowStillSince ?? t, t - Self.seatPlateauSeconds) : (lowStillSince ?? t)
         lowStillSince = since
-        guard t - since >= (seatedLike ? Self.reseatSeconds : Self.reseatShiftedSeconds) else { return false }
-        lowStillSince = nil
-        let offset = r.phoneXZ - face.xz
-        let length = Self.norm(offset)
-        reference = Reference(phoneY: r.phoneY, faceY: face.y, faceXZ: face.xz, faceInPhone: face.inPhone,
-                              pitch: r.pitch, roll: r.roll,
-                              forward: length >= Self.minForwardOffset ? offset / length : ref.forward)
-        excursion = nil
-        seatStillSince = nil
-        phase = .seated
-        restFaceXZ = face.xz
-        events.append(.cue(Cue(text: SitStandCopy.reseated, symbol: "checkmark.circle.fill")))
+        let needed = satFromStanding && !seatKnown && seatedLike ? Self.firstSeatSeconds
+            : seatedLike ? Self.reseatSeconds : Self.reseatShiftedSeconds
+        guard t - since >= needed else { return false }
+        if let ex = excursion { logAttempt(ex, at: t, rep: nil, rejection: nil) }
+        reanchored(Self.pose(r, face, fallbackForward: ref.forward), &events)
         return true
     }
 
-    /// Como al calibrar: cabeceo, cara a la misma distancia del teléfono (no lo movió con los brazos) y la
-    /// cara no adelantada respecto de `anchor` (de vuelta sobre la silla, no de pie sobre los pies).
-    /// `anchor == nil`: no se mira la posición horizontal (origen de ARKit corrido).
-    private func isSeatedLike(_ r: Reading, _ face: FaceReading, anchor: SIMD2<Double>?) -> Bool {
-        guard let ref = reference else { return false }
-        let pitchDelta = abs(AngleMath.delta(r.pitch, ref.pitch))
-        let ahead = anchor.flatMap { a in ref.forward.map { Self.dot(face.xz - a, $0) } } ?? 0
-        return pitchDelta < Self.reseatMaxPitchDeltaDeg
-            && Self.norm(face.inPhone - ref.faceInPhone) < Self.reseatMaxFaceInPhoneShift
-            && ahead < Self.reseatMaxForward
+    /// Bajada del asiento que es sentarse de verdad (o un salto vertical del origen de ARKit): la cara baja más de lo
+    /// que se mueve en horizontal (`sitDownMaxShiftRatio`). Reclinarse en el respaldo o inclinarse de lado no.
+    private static func isSitDown(from seat: Reference, to face: FaceReading) -> Bool {
+        let drop = seat.faceY - face.y
+        return drop > 0 && norm(face.xz - seat.faceXZ) <= sitDownMaxShiftRatio * drop
     }
 
-    /// Re-ancla la altura de referencia (teléfono y cara) en la postura actual, conservando la dirección;
-    /// con `horizontal`, también la posición de la cara sentada (origen corrido en horizontal).
-    private mutating func reanchor(_ r: Reading, _ face: FaceReading, horizontal: Bool = false) {
-        guard var ref = reference else { return }
-        ref.phoneY = r.phoneY
-        ref.faceY = face.y
-        if horizontal {
-            ref.faceXZ = face.xz
-            restFaceXZ = face.xz
-        }
-        reference = ref
+    /// Asiento nuevo fuera de la banda: se avisa que ya puede pararse.
+    private mutating func reanchored(_ seat: Reference, _ events: inout [VerifierEvent]) {
         reanchorCount += 1
+        setSeat(seat, known: true)
+        cue(SitStandCopy.reseated, "checkmark.circle.fill", &events)
     }
 
-    private mutating func adaptReference(_ r: Reading) {
-        guard var ref = reference else { return }
-        let a = Self.referenceAdaptation
-        ref.phoneY += a * (r.phoneY - ref.phoneY)
-        if let face = r.face {
-            ref.faceY += a * (face.y - ref.faceY)
-            ref.faceInPhone += a * (face.inPhone - ref.faceInPhone)
+    /// Sentado derecho sobre la silla: la cara no adelantada respecto de `anchor` (de vuelta sobre la silla, no
+    /// de pie sobre los pies ni inclinada). `anchor == nil` (origen corrido en horizontal): sin esa prueba, se
+    /// exige además el agarre del inicio del intento (cabeceo y cara-teléfono): bajar o subir el teléfono con
+    /// los brazos no re-ancla.
+    private func isSeatedLike(_ r: Reading, _ face: FaceReading, _ ref: Reference, anchor: SIMD2<Double>?) -> Bool {
+        guard let anchor else {
+            return abs(AngleMath.delta(r.pitch, ref.pitch)) < Self.reseatMaxPitchDeltaDeg
+                && Self.norm(face.inPhone - ref.faceInPhone) < Self.reseatMaxFaceInPhoneShift
         }
-        reference = ref
+        return ahead(face.xz, from: anchor, ref) < Self.reseatMaxForward
     }
 
-    // MARK: Desafío, anomalías y rechazos
+    // MARK: Desafío, anomalías, rechazos y diagnóstico
+
+    private func cue(_ text: String, _ symbol: String, _ events: inout [VerifierEvent]) {
+        events.append(.cue(Cue(text: text, symbol: symbol)))
+    }
 
     private mutating func failChallenge(at t: Double, _ events: inout [VerifierEvent]) {
         challengeFailures += 1
@@ -1185,7 +1754,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         record(Anomaly(kind: SitStandAnomaly.holdChallengeFailed, severity: hard ? .hard : .soft, at: t - t0,
                        detail: "No se quedó \(what) lo pedido (intento \(challengeFailures))"), &events)
         if hard { challengeRetired = true }
-        events.append(.cue(Cue(text: hard ? SitStandCopy.holdGiveUp : SitStandCopy.holdFailed, symbol: "timer")))
+        cue(hard ? SitStandCopy.holdGiveUp : SitStandCopy.holdFailed, "timer", &events)
     }
 
     private mutating func reportArms(gap: Double, drift: Double, at t: Double, _ events: inout [VerifierEvent]) {
@@ -1194,7 +1763,7 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         record(Anomaly(kind: SitStandAnomaly.armsOnly, severity: hard ? .hard : .soft, at: t - t0,
                        detail: String(format: "Cara desfasada %.0f cm; cara-teléfono %.0f cm", gap * 100, drift * 100)),
                &events)
-        events.append(.cue(Cue(text: SitStandCopy.armsOnly, symbol: "figure.stand")))
+        cue(SitStandCopy.armsOnly, "figure.stand", &events)
     }
 
     /// Muchos pasos por rep contada → no fue pararse de una silla (subir y bajar un escalón de pie).
@@ -1216,6 +1785,24 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
     private mutating func record(_ anomaly: Anomaly, _ events: inout [VerifierEvent]) {
         anomalies.append(anomaly)
         events.append(.anomaly(anomaly))
+    }
+
+    /// Anota las medidas de un intento cerrado.
+    private mutating func logAttempt(_ ex: Excursion, at t: Double, rep: Int?, rejection: Rejection?, seatHold: Double = 0) {
+        let faces = Double(max(1, ex.faceSamples))
+        attempts.append(AttemptRecord(
+            index: attempts.count + 1, start: ex.startT - t0, end: t - t0,
+            seatPhoneY: ex.seat.phoneY, seatFaceY: ex.seat.faceY,
+            phoneRise: ex.maxRise.isFinite ? ex.maxRise : 0, faceRise: ex.maxFaceRise.isFinite ? ex.maxFaceRise : 0,
+            faceDrop: ex.minFaceRise.isFinite ? max(0, -ex.minFaceRise) : 0,
+            riseGap: ex.maxRiseGap.isFinite ? ex.maxRiseGap : 0, faceInPhoneShift: ex.maxFaceInPhoneShift,
+            faceTravel: ex.maxFaceShift, peakForward: ex.peakFaceForward, peakLateral: ex.peakLateral,
+            riseForward: ex.peakRiseForward,
+            pitchDelta: ex.maxPitchDelta, peakPitchDelta: ex.peakPitchDelta, rollDelta: ex.maxRollDelta,
+            peakRollDelta: ex.peakRollDelta,
+            standSeconds: ex.standSeconds, seatHoldSeconds: max(0, seatHold),
+            liveFraction: Double(ex.liveSamples) / faces, flatFraction: Double(ex.flatSamples) / faces,
+            challenge: ex.challenge, stood: ex.stood, rep: rep, rejection: rejection))
     }
 
     // MARK: Consigna
@@ -1253,6 +1840,12 @@ nonisolated struct SitToStandVerifier: ActivityVerifier {
         func m(_ a: Double, _ b: Double, _ c: Double) -> Double { max(min(a, b), min(max(a, b), c)) }
         return SIMD3(m(p[0].x, p[1].x, p[2].x), m(p[0].y, p[1].y, p[2].y), m(p[0].z, p[1].z, p[2].z))
     }
+}
+
+/// Las medidas de cada intento (rep contada o rechazada) van al registro del teléfono.
+extension SitToStandVerifier: AttemptDiagnosticsProviding {
+    var attemptCount: Int { attempts.count }
+    func attemptLine(_ index: Int) -> String { attempts[index].description }
 }
 
 // MARK: - Fixtures sintéticas (simulador y tests)
@@ -1328,6 +1921,8 @@ nonisolated struct SitStandSynth: Sendable {
     var lean: Double = 0
     var armsLift: Double = 0
     var armsForward: Double = 0
+    /// Cabeceo extra del teléfono por las muñecas (cambiar el agarre sentado), grados.
+    var gripPitch: Double = 0
     var standing = false
     var faceTracked = true
     var worldTrackingNormal = true
@@ -1367,32 +1962,75 @@ nonisolated struct SitStandSynth: Sendable {
         for _ in 0..<frames(seconds) { emit() }
     }
 
-    mutating func standUp(seconds: Double, rise: Double, forward: Double, leanDeg: Double) {
+    /// Se para desde la postura actual (la cadera puede estar más abajo o adelante: cojín, profundidad) hasta
+    /// `rise` / `forward` sobre el asiento. `armsTo`: lleva los brazos a esa altura mientras sube (del regazo al
+    /// pecho), al ritmo de la cadera.
+    mutating func standUp(seconds: Double, rise: Double, forward: Double, leanDeg: Double, armsTo: Double? = nil) {
         let n = frames(seconds)
+        let h0 = hipRise, f0 = hipForward, a0 = armsLift
         for i in 1...n {
             let u = Double(i) / Double(n)
             lean = leanDeg * (u < 0.4 ? (1 - cos(.pi * u / 0.4)) / 2 : (1 + cos(.pi * (u - 0.4) / 0.6)) / 2)
-            hipRise = rise * Self.smoothstep((u - 0.35) / 0.65)
-            hipForward = forward * Self.smoothstep((u - 0.2) / 0.8)
+            let k = Self.smoothstep((u - 0.35) / 0.65)
+            hipRise = h0 + (rise - h0) * k
+            hipForward = f0 + (forward - f0) * Self.smoothstep((u - 0.2) / 0.8)
+            if let armsTo { armsLift = a0 + (armsTo - a0) * k }
             standing = u > 0.7
             emit()
         }
         lean = 0
     }
 
-    mutating func sitDown(seconds: Double, leanDeg: Double) {
+    /// Se sienta hasta `toHip` / `toForward` (0 = el asiento de siempre; < 0 el cojín cede, > 0 más adelante en
+    /// la silla). `armsTo`: deja el teléfono a esa altura de brazos al sentarse (en el regazo).
+    mutating func sitDown(seconds: Double, leanDeg: Double, toHip: Double = 0, toForward: Double = 0, armsTo: Double? = nil) {
         let n = frames(seconds)
-        let rise0 = hipRise, forward0 = hipForward
+        let rise0 = hipRise, forward0 = hipForward, a0 = armsLift
         for i in 1...n {
             let u = Double(i) / Double(n)
             lean = leanDeg * (1 - cos(2 * .pi * u)) / 2
-            hipRise = rise0 * (1 - Self.smoothstep(u / 0.85))
-            hipForward = forward0 * (1 - Self.smoothstep(u))
+            hipRise = toHip + (rise0 - toHip) * (1 - Self.smoothstep(u / 0.85))
+            hipForward = toForward + (forward0 - toForward) * (1 - Self.smoothstep(u))
+            if let armsTo { armsLift = a0 + (armsTo - a0) * Self.smoothstep(u) }
             standing = u < 0.3
             emit()
         }
         lean = 0
         standing = false
+    }
+
+    /// Empieza de pie frente a la silla (la cadera arriba y adelante, sobre los pies).
+    mutating func startStanding(rise: Double = Rep().rise, forward: Double = Rep().forward) {
+        hipRise = rise
+        hipForward = forward
+        standing = true
+    }
+
+    /// Lleva la postura a otra en `seconds` (perfil suave): agarre del teléfono (brazos, alcance, cabeceo de las
+    /// muñecas), profundidad en la silla o el cojín que cede. `nil` = la deja como está.
+    mutating func shift(seconds: Double, hip: Double? = nil, forward: Double? = nil, arms: Double? = nil,
+                        reach: Double? = nil, gripPitchDeg: Double? = nil) {
+        let h0 = hipRise, f0 = hipForward, a0 = armsLift, r0 = armsForward, g0 = gripPitch
+        let n = frames(seconds)
+        for i in 1...n {
+            let u = Self.smoothstep(Double(i) / Double(n))
+            hipRise = h0 + ((hip ?? h0) - h0) * u
+            hipForward = f0 + ((forward ?? f0) - f0) * u
+            armsLift = a0 + ((arms ?? a0) - a0) * u
+            armsForward = r0 + ((reach ?? r0) - r0) * u
+            gripPitch = g0 + ((gripPitchDeg ?? g0) - g0) * u
+            emit()
+        }
+    }
+
+    /// Se mece sentado adelante y atrás (juntando impulso), `amplitudeDeg` de tronco a `hz`.
+    mutating func rock(seconds: Double, amplitudeDeg: Double, hz: Double) {
+        let start = t
+        for _ in 0..<frames(seconds) {
+            lean = amplitudeDeg * sin(2 * .pi * hz * (t - start))
+            emit()
+        }
+        lean = 0
     }
 
     mutating func rep(_ r: Rep) {
@@ -1518,7 +2156,7 @@ nonisolated struct SitStandSynth: Sendable {
         let tremor = noise.tremor * sin(2 * .pi * 8 * t)
         phone += SIMD3(tremor, tremor, 0.5 * tremor) + shakeOffset
 
-        let pitch = body.phonePitchDeg + body.pitchFollow * lean + rng.symmetric(noise.angleJitterDeg)
+        let pitch = body.phonePitchDeg + gripPitch + body.pitchFollow * lean + rng.symmetric(noise.angleJitterDeg)
         let roll = body.phoneRollDeg + rng.symmetric(noise.angleJitterDeg)
         // Cara en el espacio del teléfono: rotación inversa del cabeceo sobre el eje lateral.
         let p = pitch * .pi / 180

@@ -583,7 +583,9 @@ struct HandheldExtensionTests {
     @MainActor
     @Test func laFilaDelPlanDiceEnLasDosManosParaLosEjerciciosEnLasManos() {
         // La extensión es `.face` como cuello y ojos, pero la fila del plan no debe decir "en la mano" (selfie).
-        for kind in [ActivityKind.sentadilla, .pararseSentarse, .extensionLumbar] {
+        // Pararse y sentarse va en el bolsillo (PocketSitStandVerifier): ya no es un ejercicio en las manos.
+        #expect(PlanRow.placement(for: .pararseSentarse) == "Teléfono en el bolsillo delantero del pantalón")
+        for kind in [ActivityKind.sentadilla, .extensionLumbar] {
             #expect(PlanRow.placement(for: kind) == "Teléfono en las dos manos, frente al pecho", "\(kind)")
             #expect(PlanRow.placementSymbol(for: kind) == "iphone", "\(kind)")
         }

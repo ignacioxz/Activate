@@ -200,7 +200,7 @@ private struct PauseFlowContent: View {
                         .id(coordinator.runnerGeneration)
                         .transition(stageTransition)
                 } else if assignment.kind == .pararseSentarse {
-                    // Teléfono en las dos manos frente al pecho: consigna grande, nunca la imagen de la cámara.
+                    // Teléfono en el bolsillo delantero del pantalón: contador y vibración, sin cámara.
                     SitToStandActivityView(runner: runner,
                                            assignment: assignment,
                                            position: index + 1,

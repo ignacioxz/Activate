@@ -26,6 +26,8 @@ final class Haptics {
         static let goalGapSeconds: TimeInterval = 0.2
         static let goalSharpness: Float = 0.5
         static let goalStartDelaySeconds: TimeInterval = 0.5
+        /// Vibraciones clásicas seguidas al terminar la tarea (pedido del usuario: "que vibre varias veces").
+        static let goalSystemVibrations = 3
     }
 
     let supportsHaptics: Bool
@@ -105,12 +107,31 @@ final class Haptics {
         notification.notificationOccurred(.warning)
     }
 
+    // MARK: Contador en el bolsillo
+
+    /// `times` vibraciones clásicas encadenadas (cada una espera a que termine la anterior).
+    nonisolated static func vibrate(times: Int) {
+        guard times > 0 else { return }
+        AudioServicesPlaySystemSoundWithCompletion(kSystemSoundID_Vibrate) {
+            vibrate(times: times - 1)
+        }
+    }
+
+    /// Una repetición contada con el teléfono en el bolsillo: el zumbido clásico del teléfono (el motor de háptica
+    /// liviano no se siente con la pantalla apagada por proximidad; dato real: el usuario no lo sintió y sacó el
+    /// teléfono para mirar).
+    func pocketTick() {
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+    }
+
     // MARK: Meta de pasos (fuerte, para sentirla en el bolsillo)
 
     /// Meta de pasos cumplida: tres pulsos largos e intensos (motor de háptica) y el zumbido clásico del
     /// teléfono como refuerzo. Se siente con el teléfono en el bolsillo y la pantalla apagada por proximidad.
     func goalReached() {
-        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        // Varias vibraciones clásicas seguidas: es lo que se siente en el bolsillo con la pantalla apagada
+        // (el patrón de CoreHaptics solo se nota con la pantalla encendida).
+        Self.vibrate(times: Pattern.goalSystemVibrations)
         guard supportsHaptics else { return }
         prepare()
         guard let engine, engineRunning, let pattern = try? Self.goalPattern() else {

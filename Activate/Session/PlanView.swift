@@ -145,8 +145,9 @@ struct PlanRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// Dónde va el teléfono. La sentadilla, pararse y sentarse y la extensión lumbar usan el bloque de cara
-    /// (`.face`), pero van con el teléfono en las dos manos frente al pecho, no en una mano a distancia selfie.
+    /// Dónde va el teléfono. La sentadilla y la extensión lumbar usan el bloque de cara (`.face`), pero van con
+    /// el teléfono en las dos manos frente al pecho; pararse y sentarse comparte el bloque de la caminata, pero
+    /// va en el bolsillo delantero del pantalón.
     static func placement(for kind: ActivityKind) -> String {
         switch kind {
         case .sentadilla, .pararseSentarse, .extensionLumbar: kind.placement

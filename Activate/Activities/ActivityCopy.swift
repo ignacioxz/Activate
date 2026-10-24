@@ -64,7 +64,7 @@ nonisolated extension ActivityKind {
         case .sentadilla:
             "Tome el teléfono con las dos manos frente al pecho y mírelo. Baje hasta la mitad, como si fuera a sentarse, y suba sin apuro."
         case .pararseSentarse:
-            "Siéntese en una silla con el teléfono en las dos manos frente al pecho. Párese y vuelva a sentarse sin usar las manos."
+            "Guarde el teléfono en el bolsillo delantero del pantalón y siéntese en una silla. Párese del todo sin usar las manos y vuelva a sentarse, quedándose sentado un segundo cada vez."
         case .cuello:
             "Siga la flecha en pantalla: sí es asentir, no es girar, quizás es inclinar. Muévase lento hasta llenar la barra y vuelva al centro."
         case .respiracion:
@@ -80,7 +80,8 @@ nonisolated extension ActivityKind {
     var placement: String {
         switch self {
         // En las manos (cámaras + sensores, sin mostrar la cámara): sentadilla, pararse y sentarse y extensión.
-        case .sentadilla, .pararseSentarse, .extensionLumbar: "Teléfono en las dos manos, frente al pecho"
+        case .sentadilla, .extensionLumbar: "Teléfono en las dos manos, frente al pecho"
+        case .pararseSentarse: "Teléfono en el bolsillo delantero del pantalón"
         default: sensorBlock.placement
         }
     }
@@ -90,7 +91,7 @@ nonisolated extension ActivityKind {
         switch self {
         case .stroop: ["Pantalla en la mano.", "Toque el color, no lo que dice.", "3 · 2 · 1"]
         case .sentadilla: ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Baje como si se sentara."]
-        case .pararseSentarse: ["Siéntese con el teléfono frente al pecho.", "Quieto un segundo.", "Párese sin usar las manos."]
+        case .pararseSentarse: ["Guarde el teléfono en el bolsillo delantero del pantalón.", "Siéntese quieto un segundo.", "Párese y siéntese sin usar las manos."]
         case .extensionLumbar: ["Tome el teléfono frente al pecho y mírelo.", "Quieto un segundo.", "Inclínese hacia atrás."]
         case .respiracion: ["Pantalla en la mano.", "Dedo en el botón al exhalar."]
         case .ojos: ["Sáquese los lentes.", "Mire al teléfono.", "Cierre bien los ojos."]

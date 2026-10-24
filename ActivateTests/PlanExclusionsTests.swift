@@ -45,7 +45,7 @@ struct PlanExclusionsTests {
         // Plan suave.
         let gentle = explain(.campamento5, checkIn([true, true, true, true, true, false]))
         #expect(gentle.first { $0.kind == .pararseSentarse }?.reason == PlanExclusions.gentle)
-        // Sin consentimiento de cámara (la segunda barrera del coordinador la saca del plan).
+        // Sin consentimiento de cámara sigue en el plan: va en el bolsillo, sin cámara.
         let c = checkIn(Array(repeating: false, count: 6))
         let d = SafetyRules.evaluate(checkIn: c)
         let base = Recipes.base(.campamento5, demo: false)
@@ -53,7 +53,8 @@ struct PlanExclusionsTests {
                                                         allowed: d.allowed, demo: false)
         let noConsent = PlanExclusions.explain(recipe: .campamento5, decision: d, checkIn: c, consentGiven: false,
                                                baseKinds: base.kinds, planKinds: filtered.kinds)
-        #expect(noConsent.first { $0.kind == .pararseSentarse }?.reason == PlanExclusions.noConsent)
+        #expect(!noConsent.contains { $0.kind == .pararseSentarse })
+        #expect(filtered.kinds.contains(.pararseSentarse))
         // Toda exclusión trae su razón y va en el orden fijo.
         for ex in [bending, gentle, noConsent] {
             #expect(ex.allSatisfy { !$0.reason.isEmpty })

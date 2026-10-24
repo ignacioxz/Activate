@@ -353,8 +353,8 @@ private func durationSeconds(_ d: Duration) -> Double {
 /// Por kind (fuente en vivo / fixture de replay):
 /// - `.pasos` (A2): `PedometerVerifier` ← `SensorHub` (StepSample: podómetro + movimiento + actividad) / `FixtureSynth.walk(steps:)`.
 /// - `.sentadilla` (A3): `HandheldSquatVerifier` ← `HandheldBodySource` (ARKit cara + mundo, en las manos) / `HandheldSquatSynth`.
-/// - `.pararseSentarse` (A4): `SitToStandVerifier` ← `HandheldSitStandSource` (la ARSession de la sentadilla en
-///   las manos, `HandheldSquatSample` → `SitStandSample`) / `SitStandSynth.completing(_:)`.
+/// - `.pararseSentarse` (A4): `PocketSitStandVerifier` ← `PocketSitStandSource` (teléfono en el bolsillo:
+///   deviceMotion, altímetro, podómetro y proximidad) / `PocketSitStandSynth.completing(_:)`.
 /// - `.extensionLumbar` (A1): `HandheldExtensionVerifier` ← la misma `HandheldBodySource` / `HandheldExtensionSynth`.
 /// - `.cuello` (A5): `NeckVerifier` (challenge aleatorio con semilla) ← `FaceSource` (FaceSample) / `FixtureSynth.neckSequence(_:)`.
 /// - `.ojos` (A9): `EyeRestVerifier` ← la misma `FaceSource` / `FixtureSynth.blinks(count:)` + `gaze(seconds:awayDegrees:)`.
