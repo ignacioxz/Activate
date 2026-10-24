@@ -170,7 +170,9 @@ struct HandheldSquatTests {
         #expect(VerificationPolicy.level(for: outcome, source: .live, kind: .sentadilla) == .suspicious)
     }
 
-    @Test func sinProfundidadElRelieveNoDecide() {
+    @Test func sinProfundidadElRelieveNoRechazaPeroNoLlegaAFull() {
+        // Sol directo o lentes: sin mapa de profundidad no se rechaza ninguna rep, pero sin una cara 3D confirmada
+        // (también es lo que ve la TrueDepth frente a un video en otra pantalla) la serie queda en reduced.
         var options = Synth.Options()
         options.relief = false
         var v = HandheldSquatVerifier(target: 5)
@@ -180,7 +182,9 @@ struct HandheldSquatTests {
 
         #expect(outcome.achieved == 5)
         #expect(!v.faceLooksFlat)
+        #expect(!v.faceDepthConfirmed)
         #expect(hardKinds(outcome).isEmpty)
+        #expect(VerificationPolicy.level(for: outcome, source: v.limitedSourceLevel(.live), kind: .sentadilla) == .reduced)
     }
 
     @Test func relieveDeUnaCaraYDeUnPlanoEnElMapaDeProfundidad() {
@@ -211,8 +215,8 @@ struct HandheldSquatTests {
     }
 
     @Test func cabezaMuyAgachadaNoCalibraYPidePararseDerecho() {
-        // Sentado y doblado: la cabeza mira 80° abajo, fuera del margen de calibración (70°, antes 55°). Con
-        // −70° el caso quedaba justo en el umbral y solo el ruido decidía.
+        // Sentado y doblado: la cabeza mira 80° abajo, fuera del margen de calibración (50°; de pie real −23..+11°,
+        // con lentes −45°).
         var options = Synth.Options()
         options.headPitch = -80
         var v = HandheldSquatVerifier(target: 5)
@@ -225,35 +229,51 @@ struct HandheldSquatTests {
     }
 
     @Test func repsConElRespaldoBajanElNivelDeLaFuente() {
+        // Con el mundo y la cara 3D confirmada la fuente queda en vivo; sin confirmar (aún sin reps), no.
+        var world = HandheldSquatVerifier(target: 10)
+        #expect(world.limitedSourceLevel(.live) == .fallback)
+        let worldSamples = Synth.samples(reps: Synth.squatReps(count: 2))
+        _ = run(&world, worldSamples)
+        #expect(world.faceDepthConfirmed && !world.rigidFaceSeries)
+        #expect(world.limitedSourceLevel(.live) == .live)
+
         var v = HandheldSquatVerifier(target: 10)
-        #expect(v.limitedSourceLevel(.live) == .live)
         var options = Synth.Options()
         options.world = false
         options.leadInSeconds = 4.5
         let samples = Synth.samples(reps: Synth.squatReps(count: 2), options: options)
         _ = run(&v, samples)
-        #expect(v.inertialReps == 2)
-        #expect(v.limitedSourceLevel(.live) == .fallback)
+        // Regla nueva (correcciones simples pedidas por el usuario): con la cámara trasera tapada no se cuenta
+        // ninguna sentadilla y se pide "Destape la cámara de atrás."
+        #expect(v.inertialReps == 0)
+        #expect(v.count == 0)
         #expect(v.limitedSourceLevel(.replay) == .replay)
         #expect(v.limitedSourceLevel(.fallback) == .fallback)
     }
 
     @MainActor
     @Test func elRunnerAplicaElNivelLimitadoPorElVerificador() async {
-        // Fuente "en vivo" que en realidad entrega reps sin seguimiento del mundo: el runner baja a reduced.
-        var options = Synth.Options()
-        options.world = false
-        options.leadInSeconds = 4.5
-        let samples = Synth.samples(reps: Synth.squatReps(count: 3), options: options)
-        let runner = ActivityRunner(assignment: Recipes.assignment(.sentadilla, demo: true),
-                                    verifier: HandheldSquatVerifier(target: 3),
-                                    source: LiveDeclaredReplay(samples: samples))
-        runner.start()
-        for _ in 0..<400 where runner.outcome == nil {
-            try? await Task.sleep(for: .milliseconds(10))
+        // Fuente "en vivo" cuyas reps el verificador no puede dar por full: con la cámara trasera tapada (respaldo IMU,
+        // que además topa las reps) o sin una cara 3D confirmada por la TrueDepth. El runner baja a reduced.
+        var covered = Synth.Options()
+        covered.world = false
+        covered.leadInSeconds = 4.5
+        var noDepth = Synth.Options()
+        noDepth.relief = false
+        // Regla nueva (correcciones simples pedidas por el usuario): con la cámara trasera tapada no se cuenta
+        // ninguna sentadilla y se pide "Destape la cámara de atrás."
+        for (options, expected) in [(covered, 0), (noDepth, 3)] {
+            let samples = Synth.samples(reps: Synth.squatReps(count: 3), options: options)
+            let runner = ActivityRunner(assignment: Recipes.assignment(.sentadilla, demo: true),
+                                        verifier: HandheldSquatVerifier(target: 3),
+                                        source: LiveDeclaredReplay(samples: samples))
+            runner.start()
+            for _ in 0..<400 where runner.outcome == nil {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(runner.outcome?.achieved == expected)
+            if expected > 0 { #expect(runner.level == .reduced) }
         }
-        #expect(runner.outcome?.achieved == 3)
-        #expect(runner.level == .reduced)
     }
 
     @Test func fotoPegadaAlTelefonoEsStatic() {
@@ -274,10 +294,12 @@ struct HandheldSquatTests {
     @Test func videoQueNoSigueLaConsignaDePausaEsHoldChallengeFailed() {
         let challenge = SquatHoldChallenge(repNumber: 4)
         var v = HandheldSquatVerifier(target: 10, challenge: challenge)
-        // Diez sentadillas "grabadas": ninguna se queda abajo cuando se pide. Sin otra señal de trampa el desafío
-        // fallado no vuelve sospechosa la pausa (una persona que no lo logró no es un video), pero nunca llega a
-        // full: el verificador baja la fuente a `.fallback` (reduced).
-        let samples = Synth.samples(reps: Synth.squatReps(count: 10, holdAtRep: nil))
+        // Diez sentadillas "grabadas" en otra pantalla (la TrueDepth no confirma una cara 3D): ninguna se queda abajo
+        // cuando se pide. Sin otra señal de trampa el desafío fallado no vuelve sospechosa la pausa, pero nunca llega
+        // a full: el verificador baja la fuente a `.fallback` (reduced).
+        var options = Synth.Options()
+        options.relief = false
+        let samples = Synth.samples(reps: Synth.squatReps(count: 10, holdAtRep: nil), options: options)
         let events = run(&v, samples)
         let outcome = finish(&v, samples)
 
@@ -292,28 +314,49 @@ struct HandheldSquatTests {
         #expect(VerificationPolicy.level(for: outcome, source: v.limitedSourceLevel(.live), kind: .sentadilla) == .reduced)
     }
 
+    @Test func personaConLaCaraConfirmadaQueNoSeQuedaAbajoQuedaFull() {
+        // Datos reales: el usuario casi nunca se quedaba abajo cuando aparecía "Quédese abajo 2 segundos" y 4 de 6 series
+        // terminaban en reduced. Con la cara 3D confirmada por la TrueDepth (y moviéndose respecto del teléfono, como
+        // en una persona), fallar el desafío deja la anomalía soft y el nivel full.
+        let challenge = SquatHoldChallenge(repNumber: 2)
+        var v = HandheldSquatVerifier(target: 5, challenge: challenge)
+        let samples = Synth.samples(reps: Synth.squatReps(count: 7, holdAtRep: nil))
+        let events = run(&v, samples)
+        let outcome = finish(&v, samples, reason: .completed)
+
+        #expect(events.contains(.cue(SquatHoldChallenge.missedCue)))
+        #expect(outcome.achieved == 5)
+        #expect(v.challengeFailed)
+        #expect(v.faceDepthConfirmed && !v.rigidFaceSeries)
+        #expect(anomalies(outcome, HandheldSquatAnomaly.holdChallengeFailed).map(\.severity) == [.soft])
+        #expect(VerificationPolicy.level(for: outcome, source: v.limitedSourceLevel(.live), kind: .sentadilla) == .full)
+    }
+
     @Test func desafioFalladoConOtraSenalDeTrampaEsHard() {
         // Un montaje que primero baja el teléfono con los brazos (armsOnly) y después pasa "sentadillas grabadas"
         // que nunca se quedan abajo: el desafío fallado más otra señal de trampa sí deja la pausa sospechosa.
         let challenge = SquatHoldChallenge(repNumber: 4)
         var v = HandheldSquatVerifier(target: 10, challenge: challenge)
         var reps = Synth.squatReps(count: 10, holdAtRep: nil)
-        reps.insert(Synth.Rep(depth: 0.22, downSeconds: 1.1, holdSeconds: 0.3, upSeconds: 1.1, restSeconds: 1.0,
-                              style: .armsOnly), at: 0)
+        // Tres bajadas con los brazos (la 3ª es hard): una sola, soft, ya no agrava el desafío (pedido del usuario).
+        for _ in 0..<3 {
+            reps.insert(Synth.Rep(depth: 0.22, downSeconds: 1.1, holdSeconds: 0.3, upSeconds: 1.1, restSeconds: 1.0,
+                                  style: .armsOnly), at: 0)
+        }
         let samples = Synth.samples(reps: reps)
         _ = run(&v, samples)
         let outcome = finish(&v, samples)
 
-        #expect(anomalies(outcome, HandheldSquatAnomaly.armsOnly).map(\.severity) == [.soft])
-        #expect(hardKinds(outcome) == [HandheldSquatAnomaly.holdChallengeFailed])
+        #expect(anomalies(outcome, HandheldSquatAnomaly.armsOnly).map(\.severity) == [.soft, .soft, .hard])
+        #expect(hardKinds(outcome).contains(HandheldSquatAnomaly.holdChallengeFailed))
         #expect(outcome.achieved == 8)
         #expect(VerificationPolicy.level(for: outcome, source: .live, kind: .sentadilla) == .suspicious)
     }
 
     @Test func unoODosFallosDelDesafioNuncaSonHard() {
         // Pedido del usuario: una pausa honesta no queda sospechosa por fallar el desafío una o dos veces. Un fallo y
-        // después la pausa: full. Dos fallos: el desafío se cierra soft, las reps siguientes cuentan y el nivel queda
-        // en reduced (nunca suspicious).
+        // después la pausa: full. Dos fallos: el desafío se cierra soft y las reps siguientes cuentan; con la cara 3D
+        // confirmada el nivel sigue en full (nunca suspicious).
         for misses in [1, 2] {
             let challenge = SquatHoldChallenge(repNumber: 2)
             var v = HandheldSquatVerifier(target: 5, challenge: challenge)
@@ -334,7 +377,7 @@ struct HandheldSquatTests {
             } else {
                 #expect(!v.challenge.passed && v.challenge.isFinished)
                 #expect(anomalies(outcome, HandheldSquatAnomaly.holdChallengeFailed).map(\.severity) == [.soft])
-                #expect(level == .reduced)
+                #expect(level == .full)
             }
         }
     }
@@ -526,6 +569,9 @@ struct HandheldSquatTests {
     // MARK: Respaldo sin seguimiento del mundo
 
     @Test func respaldoSinSeguimientoDelMundoCuentaConNivelReducido() {
+        // Cámara trasera tapada toda la serie, con el signo de la aceleración como lo entrega la fuente de hoy: las
+        // sentadillas cuentan (reduced) hasta el tope del respaldo (menos de la mitad de la meta); después piden
+        // destapar la cámara y la serie no se termina tapada.
         var options = Synth.Options()
         options.world = false
         options.leadInSeconds = 4.5
@@ -533,18 +579,23 @@ struct HandheldSquatTests {
         var v = HandheldSquatVerifier(target: 6)
         let samples = Synth.samples(reps: Synth.squatReps(count: 6), options: options)
         let events = run(&v, samples)
-        let outcome = finish(&v, samples, reason: .completed)
+        let outcome = finish(&v, samples, reason: .timeout)
 
         #expect(v.mode == .inertial)
-        #expect(events.contains(.completed))
-        #expect(outcome.achieved == 6, "\(v.diagnostics.map { ($0.phoneDescent, $0.rejection as Any) })")
-        #expect(v.inertialReps == 6)
+        #expect(v.accelSign.sign == HandheldSquatTuning.recordedAccelSign)
+        // Regla nueva (correcciones simples pedidas por el usuario): con la cámara trasera tapada no se cuenta
+        // ninguna sentadilla y se pide "Destape la cámara de atrás."
+        #expect(v.inertialRepCap == 0)
+        #expect(!events.contains(.completed))
+        #expect(outcome.achieved == 0, "\(v.diagnostics.map { ($0.phoneDescent, $0.rejection as Any) })")
+        #expect(v.inertialReps == 0)
+        #expect(v.diagnostics.allSatisfy { $0.rejection == .inertialLimit }, "\(v.diagnostics.compactMap(\.rejection))")
+        #expect(events.contains(.cue(Cue(text: HandheldSquatCopy.uncoverCamera, symbol: "camera.metering.unknown"))))
         #expect(hardKinds(outcome).isEmpty)
-        #expect(anomalies(outcome, HandheldSquatAnomaly.inertialFallback).count == 1)
         let stats = HandheldSquatSourcePolicy.Stats(everNormal: false, normalFrames: 0, countedFrames: samples.count)
         let level = HandheldSquatSourcePolicy.level(worldTrackingSupported: true, stats: stats)
         #expect(level == .fallback)
-        #expect(VerificationPolicy.level(for: outcome, source: level, kind: .sentadilla) == .reduced)
+        #expect(VerificationPolicy.level(for: outcome, source: level, kind: .sentadilla) != .full)
     }
 
     @Test func respaldoTambienRechazaLosBrazos() {
@@ -748,6 +799,8 @@ private struct RTOut {
     /// Relieve TrueDepth de la cara (m): una cara real ≈ 1 cm, foto o pantalla ≈ 1,5 mm; nil = sin
     /// profundidad (sol directo, vidrio).
     var relief: Double? = 0.010
+    /// Montaje pegado (foto o pantalla fija al teléfono): sin el movimiento natural de las manos respecto de la cara.
+    var glued = false
 }
 
 /// Mundo: Y arriba; la persona mira hacia −Z. Teléfono frente al pecho, cara 35 cm más arriba y 38 cm
@@ -993,7 +1046,12 @@ private func simulate(_ sc: RTScenario) -> RTResult {
             if started >= sc.repCount, endT == nil { endT = max(t, sc.leadIn) + sc.trail }
         }
 
-        let o = sc.body(frame)
+        var o = sc.body(frame)
+        if !o.glued {
+            // Las manos no son un soporte: en el fondo el teléfono cae ≈ 2 cm respecto de la cara y se acerca al pecho, y
+            // tiembla unos mm (reales: la cara se mueve ≥ 3,4 cm por rep respecto del teléfono). Un montaje pegado, no.
+            o.phone += SIMD3(0.004 * sin(1.7 * t), -0.018 * frame.x + 0.003 * sin(1.1 * t), 0.024 * frame.x)
+        }
 
         // IMU: derivada segunda de la trayectoria real del teléfono (+ lo que el cuerpo no explica).
         history.append(o.phone)
@@ -1005,7 +1063,8 @@ private func simulate(_ sc: RTScenario) -> RTResult {
         while let first = rmsWindow.first, first.t < t - 0.5 { rmsWindow.removeFirst() }
         let meanSquare = rmsWindow.reduce(0) { $0 + $1.m2 } / Double(rmsWindow.count)
         let rms = (0.02 * 0.02 + meanSquare).squareRoot()
-        let vertical = a.y + sc.accelBias + rng.symmetric(0.04)
+        // Como la entrega la fuente de hoy (signo invertido respecto de la aceleración física).
+        let vertical = HandheldSquatTuning.recordedAccelSign * (a.y + sc.accelBias + rng.symmetric(0.04))
 
         if t >= nextAltitudeAt {
             nextAltitudeAt = t + 1
@@ -1101,6 +1160,7 @@ private func gluedRig(name: String, energy: Double, relief: Double? = 0.0015) ->
         let pitch = 10 + 2.5 * sin(f.t * 1.7)
         let phone = SIMD3<Double>(0.01 * sin(f.t * 0.9), 1.20 - drop * f.x, -0.02 * f.x)
         var o = RTOut(phone: phone, face: rtGluedFace(phone: phone, pitch: pitch), pitch: pitch)
+        o.glued = true
         o.energy = energy
         o.relief = relief
         // La "cara" mira de vuelta a la cámara frontal: su cabeceo es el opuesto al del teléfono.
@@ -1415,6 +1475,8 @@ struct HandheldSquatAttackTests {
         withKnownIssue("Sin mapa de profundidad no hay prueba de relieve: el video pegado cuenta si alguien lo pausa cuando aparece \"Quédese abajo\"") {
             #expect(r.achieved == 0)
         }
+        // Pero nunca en full: sin una cara 3D confirmada (y con la cara rígida respecto del teléfono) queda en reduced.
+        #expect(r.level != .full, "\(r.level)")
         // Un video que corre solo no sigue la consigna: falla el desafío y nunca llega a full (queda en reduced).
         var unattended = gluedRig(name: "A4e video pegado sin profundidad que no sigue la consigna", energy: 0.015, relief: nil)
         unattended.holdWhenArmed = 0.02
@@ -1430,6 +1492,7 @@ struct HandheldSquatAttackTests {
                                     body: { f in
             let phone = SIMD3<Double>(0, 1.20 - 0.24 * f.x, 0)
             var o = RTOut(phone: phone, face: rtGluedFace(phone: phone, pitch: 10), pitch: 10)
+            o.glued = true
             o.energy = 0.015
             o.headPitch = -10
             return o
@@ -1596,10 +1659,11 @@ struct HandheldSquatAttackTests {
             o.world = !(f.rep != nil || coveredBefore || coveredAfter)
             return o
         }))
-        #expect(r.verifier.inertialReps > 0)
+        // Regla nueva (correcciones simples pedidas por el usuario): con la cámara trasera tapada no se cuenta
+        // ninguna sentadilla y se pide "Destape la cámara de atrás."
+        #expect(r.verifier.inertialReps == 0)
         #expect(r.normalFraction >= HandheldSquatSourcePolicy.minWorldFraction)
-        #expect(r.sourceLevel == .fallback)
-        #expect(r.level != .full)
+        #expect(r.level != .full || r.verifier.count == 0 || r.verifier.diagnostics.contains { $0.rejection == .inertialLimit })
     }
 
     // MARK: Límite aceptado
@@ -1746,14 +1810,16 @@ struct HandheldSquatAttackTests {
     }
 
     @Test func fp_sinProfundidadTrueDepthSigueContando() {
-        // Sol directo o lentes: sin mapa de profundidad el relieve no decide nada (no castiga).
+        // Sol directo o lentes: sin mapa de profundidad el relieve no rechaza ninguna rep, pero sin una cara 3D
+        // confirmada (lo mismo que ve la TrueDepth frente a un video en otra pantalla) la serie queda en reduced.
         let r = simulate(RTScenario(name: "FP9 sin profundidad", body: { f in
             var o = realSquat()(f)
             o.relief = nil
             return o
         }))
         #expect(r.achieved == 10)
-        #expect(r.level == .full)
+        #expect(r.hard.isEmpty)
+        #expect(r.level == .reduced)
     }
 
     @Test func fp_cabezaMirandoMasAbajoAlCalibrar() {
@@ -1818,7 +1884,8 @@ struct HandheldSquatAttackTests {
             }
         }
         // Con la cámara trasera tapada (respaldo IMU) la cara se mide con la TrueDepth proyectada sobre la gravedad:
-        // el teléfono baja 8 cm más que la cara y eso no es "solo brazos" (la cara bajó con el cuerpo). Cuenta en reduced.
+        // el teléfono baja 8 cm más que la cara y eso no es "solo brazos" (la cara bajó con el cuerpo). Cuenta en reduced
+        // hasta el tope del respaldo (4 de 10); las demás piden destapar la cámara.
         let covered = simulate(RTScenario(name: "FP12b respaldo cae 8 y se aleja 8", leadIn: 5, body: { f in
             var o = realSquat(tweak: { f, p in
                 p.armSag = 0.08 * f.x
@@ -1827,7 +1894,8 @@ struct HandheldSquatAttackTests {
             o.world = false
             return o
         }))
-        #expect(covered.achieved >= 9, "\(covered.rejections)")
+        #expect(covered.achieved == covered.verifier.inertialRepCap, "\(covered.rejections)")
+        #expect(covered.rejections.allSatisfy { $0 == HandheldSquatVerifier.Rejection.inertialLimit.rawValue }, "\(covered.rejections)")
         #expect(covered.hard.isEmpty)
         #expect(covered.level == .reduced)
     }
@@ -1922,7 +1990,8 @@ struct HandheldSquatAttackTests {
 
     @Test func legitimo_sentadillasConLaCamaraTapadaYTroncoInclinadoCuentanReduced() {
         // La otra cara del respaldo: sentadillas reales con la cámara tapada, con el teléfono frente a la cara o con
-        // los antebrazos pegados al pecho (el teléfono baja más que la cara), cuentan en reduced.
+        // los antebrazos pegados al pecho (el teléfono baja más que la cara), cuentan en reduced hasta el tope del
+        // respaldo (menos de la mitad de la meta: tapada no se termina la serie) y después piden destapar la cámara.
         var lenses = RTBody.standing
         lenses.baseHeadPitch = -45
         let cases: [(String, Double, RTArms, RTBody, Double?)] = [
@@ -1937,7 +2006,9 @@ struct HandheldSquatAttackTests {
                 o.world = false
                 return o
             }))
-            #expect(r.achieved >= 9, "\(label): \(r.rejections)")
+            #expect(r.achieved == r.verifier.inertialRepCap, "\(label): \(r.rejections)")
+            #expect(r.rejections.allSatisfy { $0 == HandheldSquatVerifier.Rejection.inertialLimit.rawValue }, "\(label): \(r.rejections)")
+            #expect(r.events.contains(.cue(Cue(text: HandheldSquatCopy.uncoverCamera, symbol: "camera.metering.unknown"))))
             #expect(r.hard.isEmpty)
             #expect(r.level == .reduced)
         }
@@ -2113,3 +2184,370 @@ struct HandheldSquatAttackTests {
     }
 }
 
+// MARK: - Red team 6 (ab61b3b): cabina, asiento, bisagra, cuarto de sentadilla, escalón, cara falsa, respaldo IMU
+
+/// Sentado en la cabina: calibra con el tronco a `start`° y lo mece `swing`° más; `comp` = cuánto compensa el cuello.
+private func seatedRock(start: Double, swing: Double, comp: Double = 0, arms: RTArms = .headLocked, drop: Double = 0,
+                        world: Bool = true) -> (RTFrame) -> RTOut {
+    { f in
+        var p = RTBody.Posture()
+        p.lean = start + swing * f.x
+        p.headComp = comp
+        p.arms = arms
+        p.shift = SIMD3(0, -drop * f.x, 0)
+        var o = RTBody.seated.pose(p)
+        o.world = world
+        return o
+    }
+}
+
+/// Sentadilla en la que la cabeza SIGUE a la pantalla (su cabeceo cambia lo que cambia la elevación cara → teléfono)
+/// más `neck`° de flexión de cuello, con el teléfono pegado al pecho que cae `sag` m: el perfil de Marco.
+private func gazeSquat(hip: Double, lean: Double, neck: Double, sag: Double, body: RTBody = .standing,
+                       arms: RTArms = .rigid) -> (RTFrame) -> RTOut {
+    { f in
+        var p = RTBody.Posture()
+        p.arms = arms
+        p.hipDrop = hip * f.x
+        p.hipBack = min(0.18, 0.4 * hip) * f.x
+        p.lean = lean * f.x
+        p.armSag = sag * f.x
+        var o = body.pose(p)
+        func elevation(_ v: SIMD3<Double>) -> Double { atan2(v.y, (v.x * v.x + v.z * v.z).squareRoot()) * 180 / .pi }
+        let e0 = elevation(body.phone0 - body.face0), e = elevation(o.phone - o.face)
+        o.headPitch = body.baseHeadPitch + (e - e0) - neck * f.x
+        return o
+    }
+}
+
+private func slowTiming(_ i: Int) -> RTRep {
+    RTRep(down: 2.0 + 0.2 * Double(i % 3), hold: 0.3, up: 2.2 + 0.2 * Double(i % 2), rest: 1.5 + 0.3 * Double(i % 3))
+}
+
+/// Hallazgos del red team sobre ab61b3b (con sus repros) y los del abogado del usuario honesto. Lo que sigue abierto va
+/// en `withKnownIssue` con la razón física.
+struct HandheldSquatRedTeam6Tests {
+    // MARK: Cabina
+
+    @Test func ataque_sentadoMeciendoseConLaCabezaSiguiendoAlTronco() {
+        // R1 y R2 del red team, semillas 1-3: antes 4-7/10 y 10/10 en full.
+        for seed in [UInt64(1), 2, 3] {
+            let r1 = simulate(RTScenario(name: "R1 sentado 20+20 c0 s\(seed)", seed: seed, body: seatedRock(start: 20, swing: 20)))
+            let r2 = simulate(RTScenario(name: "R2 sentado 30+26 c0.3 s\(seed)", seed: seed, body: seatedRock(start: 30, swing: 26, comp: 0.3)))
+            #expect(r1.achieved == 0, "R1 semilla \(seed): \(r1.diag())")
+            #expect(r2.achieved == 0, "R2 semilla \(seed): \(r2.diag())")
+        }
+        // Barrido: cualquier inclinación de partida con el cuello compensando poco (≤ 30 %), cualquier compensación
+        // partiendo hasta 30°, con el teléfono frente a la cara, pegado al pecho o a medias.
+        var counted: [String] = []
+        for (start, comps) in [(0.0, [0.0, 0.3, 0.9]), (20, [0.0, 0.3, 0.5, 0.9]), (30, [0.0, 0.3, 0.5, 0.9]), (40, [0.0, 0.3]), (50, [0.0, 0.3])] {
+            for comp in comps {
+                for (label, arms) in [("cara", RTArms.headLocked), ("pecho", .rigid), ("mitad", .blend(0.5))] {
+                    let r = simulate(RTScenario(name: "H3b \(Int(start))+26 c\(comp) \(label)", body: seatedRock(start: start, swing: 26, comp: comp, arms: arms)))
+                    if r.achieved > 0 { counted.append("\(Int(start))° c\(comp) \(label): \(r.achieved) \(r.level)") }
+                }
+            }
+        }
+        #expect(counted.isEmpty, "\(counted)")
+    }
+
+    @Test func limite_sentadoMuyDobladoConLaCabezaArriba() {
+        // Residuo: sentado y muy doblado (40° o más, el pecho cerca de los muslos) con la cabeza levantada (el cuello
+        // compensa la mitad o más) y el teléfono frente a la cara: el arco de 40° a 66° baja la cara 22 cm y la adelanta
+        // 17 (avance/descenso 0,75), con 13° de cabeceo. Es la trayectoria de una sentadilla de 22 cm con el tronco algo
+        // inclinado; sin ver las piernas no se separa. Con la cabeza siguiendo al tronco no calibra (> 50°).
+        let r = simulate(RTScenario(name: "H3c sentado 40+26 c0.5", body: seatedRock(start: 40, swing: 26, comp: 0.5)))
+        withKnownIssue("Residuo físicamente indistinguible: sentado muy doblado (≥ 40°) con la cabeza levantada = sentadilla de 20-25 cm algo inclinada") {
+            #expect(r.achieved == 0)
+        }
+    }
+
+    @Test func ataque_hundirseEnElAsientoMientrasSeMece() {
+        // R3: el asiento baja unos cm (o se hunde en él) mientras se inclina un poco, con la cabeza siguiendo al tronco o no.
+        var counted: [String] = []
+        for (drop, start, swing) in [(0.05, 10.0, 15.0), (0.07, 0.0, 15.0), (0.03, 20.0, 15.0), (0.07, 20.0, 15.0)] {
+            for comp in [0.0, 0.5, 1.0] {
+                let r = simulate(RTScenario(name: "R3 asiento \(drop) \(Int(start))+\(Int(swing)) c\(comp)",
+                                            timing: { i in RTRep(down: 1.5 + 0.1 * Double(i % 3), hold: 0.3, up: 1.8 + 0.1 * Double(i % 2), rest: 1.0 + 0.3 * Double(i % 3)) },
+                                            body: seatedRock(start: start, swing: swing, comp: comp, drop: drop)))
+                if r.achieved > 0 { counted.append("\(drop) \(Int(start))+\(Int(swing)) c\(comp): \(r.achieved) \(r.level) \(r.diag().prefix(120))") }
+            }
+        }
+        #expect(counted.isEmpty, "\(counted)")
+        // Una carrera del asiento de 8 cm no llega a la sentadilla más corta.
+        let short = simulate(RTScenario(name: "R3c asiento 8 cm", body: seatedRock(start: 0, swing: 0, comp: 0.5, drop: 0.08)))
+        #expect(short.achieved == 0)
+    }
+
+    @Test func limite_carreraVerticalDelAsientoDe10cmOMas() {
+        // Residuo: el cuerpo entero baja 10-14 cm en vertical (botón de altura del asiento neumático), sin girar ni
+        // avanzar. Es exactamente una sentadilla de 10-14 cm con el tronco derecho (el pedido del usuario: desde 10 cm).
+        let r = simulate(RTScenario(name: "R3b asiento 10 cm", body: seatedRock(start: 0, swing: 0, comp: 0.5, drop: 0.10)))
+        withKnownIssue("Residuo físicamente indistinguible: bajar el asiento 10-14 cm en vertical = sentadilla de 10-14 cm con el tronco derecho") {
+            #expect(r.achieved == 0)
+        }
+    }
+
+    @Test func ataque_sentadoConLaCamaraTapadaNoTerminaLaSerie() {
+        // R2b y los baches del camión con la cámara trasera tapada: sin el mundo no se ve el avance de la cara. Lo
+        // frenan la sentadilla mínima del respaldo (16 cm) y el tope (menos de la mitad de la meta): nunca completa ni
+        // llega a full.
+        let rocking = simulate(RTScenario(name: "R2b sentado 30+26 c0.3 tapada", leadIn: 5, body: seatedRock(start: 30, swing: 26, comp: 0.3, world: false)))
+        let shallow = simulate(RTScenario(name: "R2c sentado 15+26 tapada", leadIn: 5, body: seatedRock(start: 15, swing: 26, comp: 0.3, world: false)))
+        let truck = simulate(RTScenario(name: "R2d baches tapada", leadIn: 5,
+                                        timing: { i in RTRep(down: 0.6 * (1 + 0.1 * Double(i % 3)), hold: 0.1, up: 0.6 * (1 + 0.08 * Double(i % 2)), rest: 1.5 + 0.7 * Double(i % 3)) },
+                                        body: { f in
+            var p = RTBody.Posture()
+            p.lean = 10
+            p.shift = SIMD3(0, -0.20 * f.x, -0.5 * f.t)
+            var o = RTBody.seated.pose(p)
+            o.world = false
+            o.altitudeOffset = -0.20 * f.x
+            return o
+        }))
+        for r in [rocking, shallow, truck] {
+            #expect(r.achieved <= r.verifier.inertialRepCap, "\(r.rejections)")
+            #expect(!r.outcome.completed)
+            #expect(r.level != .full)
+        }
+        #expect(shallow.achieved == 0, "\(shallow.diag())")
+    }
+
+    @Test func ataque_respaldoNoCuentaDosVecesUnaSentadillaLenta() {
+        // Antes: 3 s abajo + 3 s arriba con la cámara tapada contaba 12 reps por 6 sentadillas (el ZUPT frenaba la
+        // integración a mitad de la bajada). Meta grande para que el tope no esconda el doble conteo.
+        for seated in [false, true] {
+            for hip in [0.30, 0.45, 0.55] {
+                for (down, up) in [(2.0, 2.0), (3.0, 3.0)] {
+                    let r = simulate(RTScenario(name: "D \(seated ? "sentado" : "pie") \(hip) \(down)s", leadIn: 5, repCount: 6, target: 99, challengeRep: 0,
+                                                timing: { i in RTRep(down: down * (1 + 0.1 * Double(i % 3)), hold: 0.1, up: up * (1 + 0.08 * Double(i % 2)), rest: 1.5 + 0.7 * Double(i % 3)) },
+                                                body: { f in
+                        var o: RTOut
+                        if seated {
+                            var p = RTBody.Posture()
+                            p.lean = 10
+                            p.shift = SIMD3(0, -hip * f.x, 0)
+                            o = RTBody.seated.pose(p)
+                        } else {
+                            o = realSquat(tweak: { f, p in p.hipDrop = hip * f.x })(f)
+                        }
+                        o.world = false
+                        return o
+                    }))
+                    #expect(r.achieved <= 6, "\(seated) \(hip) \(down): \(r.achieved) por 6 físicas | \(r.diag().prefix(200))")
+                }
+            }
+        }
+    }
+
+    // MARK: De pie
+
+    @Test func ataque_bisagraDePieConPocaCompensacionDelCuello() {
+        // R4: rodillas rectas, tronco a 35°, cadera 20 cm atrás, la cabeza gira el 80 % con el tronco. Antes 10/10 full.
+        for seed in [UInt64(1), 2, 3] {
+            let r = simulate(RTScenario(name: "R4 bisagra 35 c0.2 s\(seed)", seed: seed, body: hinge(lean: 35, knees: 0, hipBack: 0.20, headComp: 0.2)))
+            #expect(r.achieved == 0, "semilla \(seed): \(r.diag())")
+        }
+        var counted: [String] = []
+        for lean in [25.0, 35] {
+            for back in [0.12, 0.20, 0.28] {
+                for comp in [0.0, 0.2] {
+                    let r = simulate(RTScenario(name: "R4b bisagra \(Int(lean)) atrás \(back) c\(comp)", body: hinge(lean: lean, knees: 0, hipBack: back, headComp: comp)))
+                    if r.achieved > 0 { counted.append("\(Int(lean))° \(back) c\(comp): \(r.achieved)") }
+                }
+            }
+        }
+        #expect(counted.isEmpty, "\(counted)")
+    }
+
+    @Test func limite_bisagraDePieMuyInclinadaConElCuelloCompensandoUnPoco() {
+        // Residuo (de pie la bisagra puede contar): a 45-55° con la cadera atrás y el cuello compensando el 20 %, la
+        // cabeza ve 36-44° y la bisagra estimada deja 8,5-9 cm a las rodillas; con 3 cm de rodillas cuenta también a 35°.
+        let r = simulate(RTScenario(name: "R4c bisagra 45 c0.2", body: hinge(lean: 45, knees: 0.03, hipBack: 0.12, headComp: 0.2)))
+        withKnownIssue("Residuo aceptado: bisagra de pie de 35-55° con 3 cm de rodillas y el cuello compensando ≥ 20 % = sentadilla corta e inclinada") {
+            #expect(r.achieved == 0)
+        }
+    }
+
+    @Test func ataque_cuartoDeSentadillaMasCabeceoMasBrazos() {
+        // R5: 6,5 cm de cadera + cabecear 4 cm + bajar el teléfono 5 cm (y 7 + 3 + 8-30 cm): la cara baja 10-10,5 cm
+        // pero las rodillas solo aportan 7-8 cm (< 8,5).
+        for seed in [UInt64(1), 2, 3] {
+            let r = simulate(RTScenario(name: "R5 6.5+4+5 s\(seed)", seed: seed, body: { f in
+                var p = RTBody.Posture()
+                p.hipDrop = 0.065 * f.x
+                p.nod = 0.04 * f.x
+                p.armSag = 0.05 * f.x
+                return RTBody.standing.pose(p)
+            }))
+            #expect(r.achieved == 0, "semilla \(seed): \(r.diag())")
+        }
+        for sag in [0.08, 0.16, 0.30] {
+            for reach in [-0.25, 0.0, 0.10] {
+                let r = simulate(RTScenario(name: "R5b 7+3+\(sag) reach \(reach)", body: { f in
+                    var p = RTBody.Posture()
+                    p.hipDrop = 0.07 * f.x
+                    p.nod = 0.03 * f.x
+                    p.armSag = sag * f.x
+                    p.armReach = reach * f.x
+                    return RTBody.standing.pose(p)
+                }))
+                #expect(r.achieved == 0, "brazos \(sag) alcance \(reach): \(r.diag().prefix(200))")
+            }
+        }
+    }
+
+    @Test func ataque_bajarUnEscalonHaciaAdelante() {
+        // R6: baja un escalón de 18-25 cm hacia adelante (huella 22-30 cm) y lo vuelve a subir: la cara avanza tanto como
+        // baja sin que gire nada (una sentadilla avanza ≤ la mitad de lo que baja).
+        func step(rise: Double, run: Double, seed: UInt64 = 1) -> RTResult {
+            simulate(RTScenario(name: "R6 escalón \(rise)/\(run) s\(seed)", seed: seed,
+                                timing: { i in RTRep(down: 0.9 + 0.1 * Double(i % 3), hold: 0.4, up: 1.0 + 0.1 * Double(i % 2), rest: 1.0 + 0.2 * Double(i % 3)) },
+                                body: { f in
+                var p = RTBody.Posture()
+                p.shift = SIMD3(0, -rise * f.x + 0.012 * sin(2 * .pi * f.x), -run * f.x)
+                var o = RTBody.standing.pose(p)
+                o.steps = 2 * f.done + (f.rep != nil && f.x > 0.5 ? 1 : 0)
+                return o
+            }))
+        }
+        for seed in [UInt64(1), 2, 3] {
+            let r = step(rise: 0.20, run: 0.22, seed: seed)
+            #expect(r.achieved == 0, "semilla \(seed): \(r.diag())")
+        }
+        for (rise, run) in [(0.18, 0.22), (0.25, 0.22), (0.18, 0.30), (0.25, 0.30)] {
+            let r = step(rise: rise, run: run)
+            #expect(r.achieved == 0, "\(rise)/\(run): \(r.diag().prefix(200))")
+        }
+    }
+
+    // MARK: Cara falsa
+
+    @Test func ataque_fotoCurvadaOVideoSinRelieveNuncaLlegaAFull() {
+        // R7: foto curvada (relieve 4,2-7 mm, bajo los 8 mm de una cara real) o video sin profundidad, con alguien que
+        // se queda abajo cuando aparece el desafío. La foto curvada es plana para la TrueDepth (hard); sin profundidad,
+        // o con una máscara 3D pegada (relieve de cara pero inmóvil respecto del teléfono), no llega a full.
+        for seed in [UInt64(1), 2, 3] {
+            for relief in [0.0042, 0.005, 0.007] {
+                var g = gluedRig(name: "R7 foto curvada \(relief) s\(seed)", energy: 0.0035, relief: relief)
+                g.seed = seed
+                let r = simulate(g)
+                #expect(r.achieved == 0, "relieve \(relief) semilla \(seed): \(r.rejections)")
+                #expect(r.level == .suspicious)
+            }
+        }
+        for (label, relief) in [("sin profundidad", nil), ("máscara 3D pegada", Optional(0.012))] as [(String, Double?)] {
+            for energy in [0.0035, 0.015] {
+                let r = simulate(gluedRig(name: "R7b \(label) \(energy)", energy: energy, relief: relief))
+                #expect(r.level != .full, "\(label): \(r.achieved) \(r.level)")
+                var covered = gluedRig(name: "R7c \(label) tapada", energy: energy, relief: relief)
+                let base = covered.body
+                covered.body = { f in
+                    var o = base(f)
+                    o.world = false
+                    return o
+                }
+                covered.leadIn = 5
+                let c = simulate(covered)
+                #expect(c.level != .full, "\(label) tapada: \(c.achieved) \(c.level)")
+            }
+        }
+    }
+
+    // MARK: Honestos
+
+    @Test func fp_temblorDeLaManoNoEsSacudida() {
+        // Temblor esencial o fisiológico (mayores, frío, cansancio): 1,5 mm a 9 Hz y 3 mm a 6 Hz llegan a ±4-5 m/s² pero no
+        // mueven el teléfono. Antes: `shaking` hard y la pausa sospechosa.
+        for (amp, hz) in [(0.0015, 9.0), (0.003, 6.0), (0.002, 8.0)] {
+            for hip in [0.12, 0.25, 0.55] {
+                let r = simulate(RTScenario(name: "FP15 temblor \(amp * 1000) mm \(hz) Hz cadera \(hip)", body: { f in
+                    var o = realSquat(tweak: { f, p in p.hipDrop = hip * f.x })(f)
+                    o.phone += SIMD3(0.6 * amp * sin(2 * .pi * hz * 1.1 * f.t), amp * sin(2 * .pi * hz * f.t), 0.5 * amp * sin(2 * .pi * hz * 0.9 * f.t))
+                    return o
+                }))
+                #expect(r.achieved >= 9, "\(amp) \(hz) \(hip): \(r.rejections)")
+                #expect(!r.hard.contains(HandheldSquatAnomaly.shaking), "\(amp) \(hz) \(hip)")
+                #expect(r.level == .full)
+            }
+        }
+    }
+
+    @Test func fp_marcoMirandoElTelefonoQueSeLeCae() {
+        // El perfil del abogado: teléfono pegado al pecho que cae 3 cm, la cabeza siguiendo la pantalla y 8° más de cuello.
+        // Antes: cadera 10-12 cm con el tronco a 20-30° (y con lentes) → 10/10 torsoBend "Doble las rodillas, espalda
+        // derecha". La cabeza que sigue al teléfono es cuello, no tronco.
+        var lenses = RTBody.standing
+        lenses.baseHeadPitch = -45
+        for (label, body, hip, lean) in [("pecho 12/30", RTBody.standing, 0.12, 30.0), ("pecho 10/20", .standing, 0.10, 20),
+                                         ("lentes 12/20", lenses, 0.12, 20), ("lentes 10/20", lenses, 0.10, 20), ("lentes 15/30", lenses, 0.15, 30)] {
+            let r = simulate(RTScenario(name: "FP16 Marco \(label)", timing: slowTiming, body: gazeSquat(hip: hip, lean: lean, neck: 8, sag: 0.03, body: body)))
+            #expect(r.achieved >= 9, "\(label): \(r.rejections) \(r.diag().prefix(200))")
+            #expect(r.level == .full, "\(label)")
+        }
+    }
+
+    @Test func legitimo_camaraTapadaDesdeElInicioPideDestaparla() {
+        // Datos reales: con los dedos sobre la cámara trasera no contaba ninguna sentadilla (la aceleración llega con el
+        // signo invertido) y "Quieto un segundo." tapaba el aviso. Ahora el aviso queda mientras calibra, las sentadillas
+        // cuentan (reduced) hasta el tope y después vuelve a pedir destaparla.
+        var v = HandheldSquatVerifier(target: 5)
+        v.start(at: 0)
+        var options = HandheldSquatSynth.Options()
+        options.world = false
+        options.leadInSeconds = 4.5
+        var calibratingHints: Set<String> = []
+        var events: [VerifierEvent] = []
+        for s in HandheldSquatSynth.samples(reps: HandheldSquatSynth.squatReps(count: 4), options: options) {
+            events += v.ingest(s, at: s.t)
+            if v.progress.gate == .calibrating, v.mode == .inertial { calibratingHints.insert(v.progress.hint) }
+        }
+        #expect(calibratingHints == [HandheldSquatCopy.uncoverCamera], "\(calibratingHints)")
+        #expect(v.count == v.inertialRepCap)
+        #expect(v.diagnostics.contains { $0.rejection == .inertialLimit })
+        #expect(events.contains(.cue(Cue(text: HandheldSquatCopy.uncoverCamera, symbol: "camera.metering.unknown"))))
+    }
+
+    @Test func elSignoDeLaAceleracionSeAprendeConElMundo() {
+        // Con el mundo visible el verificador compara el cambio de velocidad del mundo con la aceleración grabada: aprende
+        // el signo invertido de la fuente de hoy y también el correcto (si se arregla la fuente).
+        for sign in [1.0, -1.0] {
+            var v = HandheldSquatVerifier(target: 10)
+            v.start(at: 0)
+            for var s in HandheldSquatSynth.samples(reps: HandheldSquatSynth.squatReps(count: 6)) {
+                // El generador entrega el signo de hoy (`recordedAccelSign`): se pasa al pedido.
+                s.verticalAccel = s.verticalAccel.map { $0 * HandheldSquatTuning.recordedAccelSign * sign }
+                _ = v.ingest(s, at: s.t)
+            }
+            #expect(v.accelSign.learned == sign, "signo \(sign): \(String(describing: v.accelSign.learned)) votos \(v.accelSign.votes)")
+        }
+        // Sin el mundo no aprende: vale el de la fuente de hoy.
+        #expect(AccelSignEstimator().sign == HandheldSquatTuning.recordedAccelSign)
+    }
+
+    @Test func subirALaCabinaObligaARecalibrar() {
+        // Calibra de pie y sube a la cabina (1,2 m más arriba) a sentarse inclinado: la referencia ya no se adapta hacia esa
+        // postura (llevaba la cabeza de referencia a −56° sin pasar por la calibración); se recalibra y, con la cabeza
+        // siguiendo al tronco, no calibra.
+        let r = simulate(RTScenario(name: "CLIMB 40+26 c0.2", leadIn: 25, body: { f in
+            var p = RTBody.Posture()
+            p.headComp = 0.2
+            let standing = RTBody.standing.pose(RTBody.Posture())
+            var cab = RTBody.seated
+            let lift = SIMD3<Double>(0, 1.2, -1.0)
+            cab.hip0 += lift
+            cab.face0 += lift
+            cab.phone0 += lift
+            p.lean = 40 + 26 * f.x
+            let seated = cab.pose(p)
+            let k = HandheldSquatSynth.minJerk((f.t - 3) / 5)
+            var o = seated
+            o.phone = standing.phone + (seated.phone - standing.phone) * k
+            o.face = standing.face + (seated.face - standing.face) * k
+            o.pitch = standing.pitch + (seated.pitch - standing.pitch) * k
+            o.headPitch = (standing.headPitch ?? -28) + ((seated.headPitch ?? -28) - (standing.headPitch ?? -28)) * k
+            return o
+        }))
+        #expect(r.achieved == 0, "\(r.diag())")
+    }
+}

@@ -17,27 +17,34 @@ import simd
 // - Las medidas horizontales (avance, atrás, de lado, recorrido) se toman desde el ANCLA de la rep (la cara
 //   en su punto más alto justo antes de bajar), no desde la calibración: correrse de lugar entre reps o
 //   inclinarse un poco antes de bajar no es trampa.
-// - Anti-inclinarse: si la cabeza (o el teléfono) cabecea mucho, o la cara avanza más de lo que permite lo
-//   que bajó (de pie el equilibrio lleva la cadera atrás; sentado la cara recorre un arco hacia adelante), o
-//   el giro del tronco sobre la cadera explica casi todo el descenso (`HingeModel`: mecerse sentado en la
-//   cabina, bisagra de pie), fue una bisagra sin doblar rodillas → `torsoBend`. Para calibrar hay que estar
-//   con la cabeza razonablemente derecha (no sentado y doblado).
+// - Anti-inclinarse (`HingeModel`): el giro del tronco se estima con lo que la cabeza mira más abajo (menos lo que
+//   solo siguió al teléfono que cae, si el teléfono giró con el tronco) o lo que el teléfono cabecea, desde la
+//   inclinación que ya traía al calibrar (cabeza muy abajo o teléfono muy acostado). Ese giro explica una parte
+//   del descenso de la cara; las rodillas deben aportar el resto (≥ 8,5 cm y ≥ 40 %). Y la cara no puede avanzar
+//   más de lo que permite una sentadilla (margen + la mitad de lo que bajó) salvo que el giro A LA VISTA lo
+//   explique: si se esconde el giro (cuello que compensa, teléfono frente a la cara), mecerse sentado o bajar un
+//   escalón hacia adelante avanzan de más. Si no → `torsoBend`. Para calibrar hay que estar con la cabeza
+//   razonablemente derecha (≤ 50°, no sentado y doblado); subir a la cabina obliga a recalibrar.
 // - Anti-escalón: la cara no puede irse atrás ni de lado (bajar de espaldas o de lado un escalón).
 // - Persona viva: la cara debe tener micro-expresiones (`shapeEnergy`) y RELIEVE 3D en la TrueDepth;
-//   una foto o una pantalla pegada al teléfono es un plano → `static` / `flatFace`.
+//   una foto o una pantalla pegada al teléfono es un plano (< 8 mm) → `static` / `flatFace`. Sin una cara 3D
+//   CONFIRMADA en la serie (sin profundidad) o con la cara inmóvil respecto del teléfono en todas las reps
+//   (montaje pegado), la serie no llega a full.
 // - Desafío: en una rep al azar aparece "Quédese abajo 2 segundos" (la vista lo muestra mientras esté armado,
-//   con la barra de la pausa en `progress.live`); un vídeo o un mecanismo no lo sigue. Fallarlo deja el nivel
-//   en reduced (nunca full); solo con otra señal de trampa es hard: el desafío solo no vuelve sospechosa una
-//   pausa honesta.
-// - Sacudir = OSCILAR (muchas inversiones del movimiento por segundo, `OscillationDetector`), no "mucha
-//   aceleración": una sentadilla rápida y honda es una sola bajada suave y cuenta. Ritmo de metrónomo y
-//   caminar → anomalías. Altímetro como apoyo (escalera / ascensor).
+//   con la barra de la pausa en `progress.live`); un vídeo o un mecanismo no lo sigue. Fallarlo solo es hard con
+//   otra señal de trampa; con la cara 3D confirmada no baja el nivel (el usuario real casi nunca se quedaba abajo).
+// - Sacudir = OSCILAR (muchas inversiones del movimiento por segundo que mueven de verdad el teléfono,
+//   `OscillationDetector`), no "mucha aceleración": una sentadilla rápida y honda es una sola bajada suave y
+//   cuenta, y el temblor de la mano (mm a 6-9 Hz) no mueve el teléfono. Ritmo de metrónomo y caminar →
+//   anomalías. Altímetro como apoyo (escalera / ascensor).
 // - Teléfono volteado o bajado hacia los muslos (cabeceo ≫ y la cara no bajó con él) → `phoneTilted`.
 // - Sin seguimiento del mundo (cámara trasera tapada, equipo sin soporte): respaldo con la aceleración
-//   vertical integrada para el teléfono y, para la CARA, su altura sobre el teléfono medida por la TrueDepth
-//   proyectada sobre la gravedad (`HandheldSquatGeometry.faceAbovePhone`): bajar el teléfono con los brazos
-//   (recto o en arco hacia el cuerpo) sube la cara en esa proyección y no entra. Si alguna rep se contó así,
-//   el nivel de la fuente baja a `.fallback` (reduced) aunque el resto fuera en vivo.
+//   vertical integrada para el teléfono (con el signo que entrega la fuente, aprendido del mundo cuando se ve) y,
+//   para la CARA, su altura sobre el teléfono medida por la TrueDepth proyectada sobre la gravedad
+//   (`HandheldSquatGeometry.faceAbovePhone`): bajar el teléfono con los brazos (recto o en arco hacia el cuerpo)
+//   sube la cara en esa proyección y no entra. Sin el mundo no se ve el avance de la cara: se cuentan menos de la
+//   mitad de las reps de la meta (pide "Sin tapar la cámara de atrás."), desde 16 cm, y el nivel de la fuente
+//   baja a `.fallback` (reduced) aunque el resto fuera en vivo.
 // - Postura de pie que cambia de lugar (se baja de la solera, baja una escalera): la referencia se
 //   re-ancla cuando queda quieto ahí, con la cabeza y el teléfono como al calibrar y desplazado en
 //   horizontal al menos lo que bajó (sentarse no es "otro lugar de pie"). No se re-ancla en el fondo de una
@@ -90,8 +97,9 @@ nonisolated struct HandheldSquatSample: Sendable, Codable, Hashable, TimedSample
 /// Valores más tolerantes (pedido del usuario tras probar en el iPhone: exigía la espalda muy derecha y no
 /// mover el teléfono; después "amplía el rango de los 15 cm"). El anti-fraude principal sigue siendo que la
 /// CARA baje con el cuerpo, la cara viva (micro-expresiones y relieve TrueDepth) y el desafío "Quédese abajo
-/// 2 segundos". Calibrados con 42 intentos honestos reales (iPhone 17 Pro Max: 17-83 cm, 0,9-4,8 s; ver
-/// `RealSquatReplayTests`) y el modelo físico de `HandheldSquatAttackTests`.
+/// 2 segundos". Calibrados con 59 intentos honestos reales (iPhone 17 Pro Max, 6 series: 17-83 cm, 0,9-4,8 s; ver
+/// `RealSquatReplayTests`) y el modelo físico de `HandheldSquatAttackTests` (red team: cabina, bisagra, brazos,
+/// escalón, foto/video, respaldo IMU).
 nonisolated enum HandheldSquatTuning {
     // Calibración de pie
     /// Segundos de pie, quieto y con la cara visible para fijar la referencia.
@@ -100,22 +108,27 @@ nonisolated enum HandheldSquatTuning {
     static let calibrationMaxPhoneRangeY = 0.05
     static let calibrationMaxPhoneDriftXZ = 0.08
     static let calibrationMaxPitchRange = 10.0
-    /// Quieto en respaldo: |aceleración vertical| máxima (m/s²) y RMS de userAccel (g).
-    static let calibrationMaxVerticalAccel = 0.45
-    static let calibrationMaxAccelRMS = 0.08
+    /// Quieto en respaldo: media de |aceleración vertical| (m/s²), |media| (m/s², lo que cambiaría la velocidad en el
+    /// segundo) y RMS medio de userAccel (g). Reales de pie con el teléfono en las manos: |a| p50 0,1-0,34 y p90
+    /// 0,6-2,2 m/s², RMS p50 0,02-0,12 g (con 0,45 m/s² y 0,08 g por muestra una serie real nunca calibraba).
+    static let calibrationMaxVerticalAccel = 0.8
+    static let calibrationMaxMeanVerticalAccel = 0.2
+    static let calibrationMaxAccelRMS = 0.2
     /// Si el seguimiento del mundo nunca llega a `.normal` en este tiempo, se usa el respaldo IMU.
     static let initialWorldGraceSeconds = 3.0
     /// Cabeza razonablemente derecha para calibrar: |cabeceo de la cabeza| ≤ esto (°). Real de pie: −23..+11°;
     /// con lentes de lectura ≈ −45°; sentado a 40° con la cabeza siguiendo al tronco ≈ −68° (no calibra).
-    static let calibrationMaxHeadPitch = 60.0
+    static let calibrationMaxHeadPitch = 50.0
 
     // Señal y repetición
     /// Suavizado exponencial por muestra (≈ 60 Hz).
     static let emaAlpha = 0.3
     /// Entrar: el cuerpo (el menor entre teléfono y cara) baja ≥ esto (m); una sentadilla de 10 cm cuenta.
     static let enterDescent = 0.09
-    /// Entrar en el respaldo IMU (m): sin el mundo el cero se re-ancla en cada quietud y un cuarto de sentadilla con los brazos arriba puede volverse el cero.
-    static let inertialEnterDescent = 0.14
+    /// Entrar en el respaldo IMU (m): sin el mundo no se ve el avance de la cara, y mecerse sentado desde 0-20° baja la
+    /// cara 6-15 cm; las sentadillas reales bajan 17-85 cm (la integración lee 1-3 cm menos). Las más cortas piden bajar
+    /// más o destapar la cámara.
+    static let inertialEnterDescent = 0.16
     /// Salir: el mayor de los descensos vuelve a < esto (m); entre reps la persona no siempre se endereza del todo.
     static let exitDescent = 0.07
     /// Recorrido mínimo de la rep desde el nivel en que estaba antes de bajar (m): oscilar en un cuarto de sentadilla no es rep.
@@ -134,6 +147,8 @@ nonisolated enum HandheldSquatTuning {
     static let abortGraceSeconds = 2.0
     /// La referencia de pie se adapta lento entre reps (deriva del mundo, cambio de postura).
     static let referenceTimeConstant = 3.0
+    /// Con la cara más de esto (m) SOBRE la referencia (subió a la cabina o a una plataforma) se vuelve a calibrar.
+    static let climbRecalibrateRise = 0.15
     /// Re-anclaje: con la ventana abierta (o al abortarla por larga), si teléfono y cara llevan este tiempo
     /// quietos (rango de altura < `reanchorStillRange`) la referencia pasa a esa postura.
     static let reanchorStillSeconds = 1.0
@@ -179,10 +194,14 @@ nonisolated enum HandheldSquatTuning {
     static let torsoMaxPitchDelta = 50.0
     /// Cabeceo de la cabeza respecto de la gravedad (°) en el fondo.
     static let headMaxPitchDelta = 50.0
-    /// Avance de la cara desde el ancla ≤ margen + fracción de lo que bajó (m): de pie ≈ 0,34·sen(tronco); sentado el arco da avance/descenso ≥ 2.
-    static let torsoForwardSlack = 0.10
-    /// Fracción del descenso de la cara que puede avanzar (reales ≤ 0,51; sentado desde derecho, 2-6,5).
-    static let torsoForwardRatio = 0.8
+    /// Avance de la cara desde el ancla ≤ el MAYOR entre (margen + fracción de lo que bajó) y (esta parte del avance que
+    /// explica el giro del tronco que se ve en la cabeza o el teléfono) (m). Reales: avance ≤ 0,53 × descenso (de 21 a
+    /// 78 cm). Mecerse sentado da avance/descenso = cot(inclinación media): ≥ 0,9 desde 35° o menos; bajar un escalón
+    /// hacia adelante, huella/alto ≥ 1. Con el giro a la vista (cabeza o teléfono) avanza más, pero entonces la bisagra
+    /// descuenta lo que bajó por girar.
+    static let torsoForwardSlack = 0.05
+    static let torsoForwardRatio = 0.5
+    static let hingeForwardCredit = 0.8
     /// La cara no puede irse atrás más que esto desde el ancla (m): bajar de espaldas un escalón la lleva 15-25 cm; real ≤ 6 cm.
     static let maxFaceBackwardShift = 0.12
     /// De lado: margen + fracción de lo que bajó (m); bajar de lado un escalón la corre 25 cm; real ≤ 9 cm.
@@ -197,10 +216,20 @@ nonisolated enum HandheldSquatTuning {
     static let hingeRadius = 0.65
     /// Cabeceo de la cabeza de pie mirando el teléfono (°): lo que pase de esto al calibrar es tronco ya inclinado.
     static let hingeNeutralHeadPitch = -40.0
+    /// Descuento de la cabeza que sigue al teléfono: a lo sumo esta fracción del cabeceo de la cabeza y estos grados.
+    static let hingeGazeDiscountFraction = 0.5
+    static let hingeMaxGazeDiscount = 10.0
+    /// ... y solo si el teléfono giró al menos esto (°) con el tronco.
+    static let hingeGazeMinPhoneTurn = 5.0
+    /// Cabeceo del teléfono de pie (°, pantalla hacia arriba): lo que pase de esto al calibrar es tronco ya inclinado
+    /// con el teléfono pegado al pecho (sentado y doblado en la cabina). Real de pie 0-15°; modelo 40°.
+    static let hingeNeutralPhonePitch = 50.0
     /// Inclinación de partida máxima que se infiere de la cabeza al calibrar (°).
     static let hingeMaxStartLean = 60.0
-    /// Las rodillas deben aportar al menos esto del descenso de la cara en el fondo (m)...
-    static let hingeMinKneeDescent = 0.05
+    /// Las rodillas deben aportar al menos esto del descenso de la cara en el fondo (m): una sentadilla de 10 cm aporta
+    /// 9,5-10,5 (con lentes y el tronco a 20°, 9,1); 7 cm de rodillas + cabecear 3 cm + los brazos, 8; 6,5 + 4, 7;
+    /// hundirse 3-7 cm en el asiento y mecerse, 3-7; mecerse sentado con la cabeza siguiendo al tronco, 4-6...
+    static let hingeMinKneeDescent = 0.085
     /// ... y esta fracción: sentadilla con tronco a 45° ≈ 50 %, reales ≈ 95 %; mecerse sentado o bisagra a 45°, 13-38 %.
     static let hingeMinKneeFraction = 0.4
     /// En el respaldo IMU no hay avance de la cara (la otra barrera contra la bisagra): se exige la mitad.
@@ -214,8 +243,16 @@ nonisolated enum HandheldSquatTuning {
     static let staticWindowSeconds = 2.0
     static let staticMinSamples = 20
     /// Relieve 3D (TrueDepth): mediana de las lecturas de los últimos segundos bajo esto (m) = plano.
-    /// Ruido del sensor sobre una pantalla o una foto ≈ 1-3 mm; una cara real ≈ 1 cm.
-    static let flatFaceMaxRelief = 0.004
+    /// Ruido del sensor sobre una pantalla o una foto ≈ 1-3 mm; una foto curvada sobre la mano ≈ 6-7 mm; caras
+    /// reales en el iPhone 17 Pro Max: p5 ≥ 1,07 cm y mediana 1,8-2,7 cm en todas las series.
+    static let flatFaceMaxRelief = 0.008
+    /// Una cara 3D CONFIRMADA en la serie (la ventana de relieve con lecturas suficientes y mediana sobre el umbral
+    /// durante al menos esto, s). Sin confirmar (sin profundidad, o siempre plana) la serie no llega a full.
+    static let reliefConfirmSeconds = 1.0
+    /// Geometría cara-teléfono rígida: en una persona la cara se mueve respecto del teléfono ≥ 3,4 cm por rep
+    /// (reales: mediana 8,8 cm); una foto o una pantalla pegada al teléfono, 1-2 mm. Si TODAS las reps contadas
+    /// cambian menos que esto (m), la serie no llega a full.
+    static let rigidFaceMaxGeometryChange = 0.015
     static let reliefWindowSeconds = 3.0
     static let reliefMinReadings = 8
     /// La rep no cuenta si al menos esta fracción de sus muestras con cara vio una cara plana.
@@ -247,8 +284,11 @@ nonisolated enum HandheldSquatTuning {
     static let shakingAccelRMS = 0.6
     /// La sacudida debe sostenerse esto (s) para la anomalía hard.
     static let shakingSustainSeconds = 0.8
-    /// Inversión de la aceleración vertical: pasa de > +umbral a < −umbral o al revés (m/s²).
+    /// Inversión de la aceleración vertical: pasa de > +umbral a < −umbral o al revés (m/s²)...
     static let shakeAccelThreshold = 3.0
+    /// ... con un cambio de velocidad de al menos esto en el medio ciclo (m/s): el temblor de la mano (1-3 mm a 6-9 Hz,
+    /// operadores mayores, frío, cansancio) llega a ±5 m/s² pero no mueve el teléfono; sacudirlo de verdad, sí.
+    static let shakeMinDeltaV = 0.4
     /// Inversión de la posición del teléfono en un eje del mundo: zigzag con esta histéresis (m).
     static let shakePositionHysteresis = 0.02
     /// Ventana para contar inversiones (s).
@@ -279,14 +319,43 @@ nonisolated enum HandheldSquatTuning {
     /// Paso máximo de integración (una pausa del stream no se integra entera).
     static let maxIntegrationStep = 0.1
 
+    /// Avisa "Sin tapar la cámara de atrás." si el mundo se pierde más que esto (s) con el gate listo (antes de
+    /// pasar al respaldo): los dedos sobre la cámara trasera son la causa más común.
+    static let worldLossCueSeconds = 0.5
+
     // Respaldo IMU (doble integración con corrección de velocidad cero)
-    /// Quieto para el ZUPT: |a vertical| < esto durante `zuptSeconds`.
-    static let zuptAccel = 0.15
+    /// Signo con que llega `verticalAccel` mientras no se aprenda del mundo. `HandheldSquatSource` lo entrega hoy
+    /// INVERTIDO (CoreMotion da `userAcceleration` opuesta a la aceleración física y la fuente resta su
+    /// proyección sobre la gravedad): r ≈ −0,99 contra la aceleración vertical del mundo en todas las
+    /// grabaciones reales del iPhone. Si se corrige la fuente, este valor pasa a +1 (con el mundo visible el
+    /// verificador lo aprende solo, ver `AccelSignEstimator`).
+    static let recordedAccelSign = -1.0
+    /// Aprender el signo: ventanas de 0,4 s con un cambio de velocidad del mundo ≥ 0,2 m/s; 12 votos con |r| ≥ 0,7.
+    static let accelSignWindowSeconds = 0.4
+    static let accelSignMinDeltaV = 0.2
+    static let accelSignMinVotes = 12
+    static let accelSignMinCorrelation = 0.7
+    /// Quieto para el ZUPT: |a vertical| suavizada < esto durante `zuptSeconds` (de pie con el teléfono en las manos el
+    /// IMU real tiembla 0,2-1 m/s²: con 0,15 m/s² el ZUPT nunca llegaba y la altura integrada derivaba 30-50 cm)...
+    static let zuptAccel = 0.4
     static let zuptSeconds = 0.3
+    /// ... y con la velocidad integrada baja (o quieto mucho más): a mitad de una bajada lenta y honda (3 s, 45 cm)
+    /// la aceleración pasa ≈ 0,6 s por cero a 0,28 m/s; el ZUPT la frenaba ahí y una sentadilla contaba dos veces.
+    static let zuptMaxVelocity = 0.08
+    /// Quieto así de largo corrige la deriva aunque la velocidad integrada no sea baja: fuera de la rep (tras una rep
+    /// honda la velocidad residual de 0,1 m/s bajaba la altura integrada 20 cm y abría una rep fantasma) y dentro.
+    static let zuptIdleSeconds = 0.6
+    static let zuptLongSeconds = 2.0
+    /// Suavizado de la aceleración para el ZUPT (el ruido real del IMU en las manos llega a 1-2 m/s² por muestra).
+    static let zuptSmoothAlpha = 0.3
     /// Al quedar quieto tras subir al menos esta fracción del descenso, se da por arriba (corrige la deriva).
     static let fallbackSnapAscentFraction = 0.6
-    /// Sin el mundo, una bajada del teléfono de más de esto (m) no se distingue de un ascensor (con 0,95 m el ascensor de 1,2 m/s² contaba): se pide destapar la cámara.
-    static let maxInertialDescent = 0.6
+    /// Sin el mundo, una bajada del teléfono de más de esto (m) es un ascensor o una escalera: se pide destapar la
+    /// cámara. Reales hasta 0,87 m; un piso de ascensor integra ≥ 3 m (sin ZUPT a mitad del viaje).
+    static let maxInertialDescent = 1.0
+    // Con la cámara trasera tapada se cuentan menos de la mitad de las reps (`HandheldSquatVerifier.inertialRepCap`):
+    // el respaldo no ve el avance de la cara y, sentado en la cabina, no distingue la bisagra ni los baches del
+    // camión de una sentadilla. La serie no se puede terminar sin destaparla.
     /// Cambio máximo del altímetro dentro de una rep en respaldo (m): más es un ascensor.
     static let maxRepAltitudeChange = 1.0
     /// Salida en el respaldo: la cara (teléfono − lo que subió sobre él) vuelve a ≤ `exitDescent` + esto (m)...
@@ -319,11 +388,11 @@ nonisolated enum HandheldSquatCopy {
     static let quicker = "Suba sin quedarse tanto abajo."
     static let comeBackUp = "Vuelva arriba."
     static let useLegs = "Baje con las piernas, no con los brazos."
-    static let bendKnees = "Doble las rodillas, espalda derecha."
+    static let bendKnees = "Doble más las rodillas."
     static let stayInPlace = "Quédese en su lugar."
     static let noShake = "No sacuda el teléfono."
     static let phoneAtChest = "Mantenga el teléfono frente al pecho."
-    static let uncoverCamera = "Sin tapar la cámara de atrás."
+    static let uncoverCamera = "Destape la cámara de atrás."
     static let lookAtScreen = "Mire la pantalla."
     static let standUp = "Párese derecho y mire el teléfono."
     /// Bajo la consigna del desafío (la vista): antes de la pausa, mientras se llena la barra.
@@ -394,7 +463,8 @@ typealias HoldChallenge = SquatHoldChallenge
 /// En una rep elegida al azar (semilla por sesión) la consigna pide quedarse abajo (o atrás); la rep solo
 /// cuenta si se mantiene lo pedido (1,5 s; la sentadilla en las manos usa `HandheldSquatTuning.holdRequiredSeconds`).
 /// Fallarlo 2 veces → `holdChallengeFailed` (hard) y el desafío se cierra; la sentadilla en las manos lo baja a
-/// soft si no hubo otra señal de trampa y limita el nivel a reduced (`HandheldSquatVerifier.limitedSourceLevel`).
+/// soft si no hubo otra señal de trampa (y limita el nivel a reduced solo sin una cara 3D confirmada por la TrueDepth,
+/// `HandheldSquatVerifier.limitedSourceLevel`).
 nonisolated struct SquatHoldChallenge: Sendable, Hashable, Codable {
     static let anomalyKind = "holdChallengeFailed"
     static let requiredSeconds = 1.5
@@ -614,6 +684,9 @@ nonisolated struct OscillationDetector: Sendable, Hashable {
     static let memorySeconds = 2.0
 
     private var accelSign = 0
+    /// Cambio de velocidad (m/s) desde la última inversión: cuánto se movió de verdad en ese medio ciclo.
+    private var lobe = 0.0
+    private var lastAccelT: Double?
     private(set) var accelFlips: [Double] = []
     private var axes = [Zigzag](repeating: Zigzag(), count: 3)
     private(set) var turns: [[Double]] = [[], [], []]
@@ -621,11 +694,17 @@ nonisolated struct OscillationDetector: Sendable, Hashable {
     /// `position` = teléfono en el mundo (nil sin seguimiento del mundo: el zigzag se reinicia).
     mutating func add(t: Double, verticalAccel: Double?, position: SIMD3<Double>?) {
         if let a = verticalAccel {
+            let dt = lastAccelT.map { min(HandheldSquatTuning.maxIntegrationStep, max(0, t - $0)) } ?? 0
+            lastAccelT = t
+            lobe += a * dt
             let threshold = HandheldSquatTuning.shakeAccelThreshold
             let sign = a > threshold ? 1 : (a < -threshold ? -1 : 0)
             if sign != 0, sign != accelSign {
-                if accelSign != 0 { accelFlips.append(t) }
+                // Solo cuenta si el medio ciclo movió el teléfono (temblor de la mano: 1,5 mm a 9 Hz es ±4,8 m/s² pero
+                // cambia la velocidad 0,13 m/s; sacudir 2 cm a 3,5 Hz, 0,85 m/s).
+                if accelSign != 0, abs(lobe) >= HandheldSquatTuning.shakeMinDeltaV { accelFlips.append(t) }
                 accelSign = sign
+                lobe = 0
             }
         }
         if let position {
@@ -680,10 +759,12 @@ nonisolated enum HandheldSquatGeometry {
 /// (gira con el tronco salvo que el cuello compense) o del teléfono (antebrazos pegados al pecho), y la
 /// inclinación de partida con lo que la cabeza ya miraba hacia abajo al calibrar más allá de lo normal.
 nonisolated enum HingeModel {
-    /// Inclinación del tronco al calibrar (°) inferida del cabeceo de la cabeza de pie.
-    static func startLean(referenceHeadPitch head: Double?) -> Double {
-        guard let head else { return 0 }
-        return min(HandheldSquatTuning.hingeMaxStartLean, max(0, HandheldSquatTuning.hingeNeutralHeadPitch - head))
+    /// Inclinación del tronco al calibrar (°): lo que la cabeza mira hacia abajo más allá de lo normal, o lo que el
+    /// teléfono (antebrazos al pecho, gira con el tronco) está más acostado que lo normal; vale la mayor.
+    static func startLean(referenceHeadPitch head: Double?, referencePitch pitch: Double? = nil) -> Double {
+        let fromHead = head.map { HandheldSquatTuning.hingeNeutralHeadPitch - $0 } ?? 0
+        let fromPhone = pitch.map { $0 - HandheldSquatTuning.hingeNeutralPhonePitch } ?? 0
+        return min(HandheldSquatTuning.hingeMaxStartLean, max(0, fromHead, fromPhone))
     }
 
     /// Descenso de la cara explicado por el giro del tronco (m).
@@ -692,7 +773,24 @@ nonisolated enum HingeModel {
         return HandheldSquatTuning.hingeRadius * (cos(a) - cos(b))
     }
 
-    /// Lo que deben aportar las rodillas (m): 5 cm y el 40 % del descenso de la cara (50 % sin el mundo).
+    /// Cuánto más abajo se ve el teléfono desde la cara que en la postura de pie (°, + = más abajo), con la TrueDepth y
+    /// la gravedad (vale en los dos modos). nil sin cara.
+    static func gazeDown(reference ref: HandheldSquatVerifier.Reference, faceAbove: Double?, faceInPhone: SIMD3<Double>?) -> Double? {
+        guard let above = faceAbove, let fip = faceInPhone else { return nil }
+        func elevation(_ above: Double, _ distance: Double) -> Double {
+            let horizontal = max(0.01, (max(0, distance * distance - above * above)).squareRoot())
+            return atan2(-above, horizontal) * 180 / .pi
+        }
+        return elevation(ref.faceAbove, simd_length(ref.faceInPhone)) - elevation(above, simd_length(fip))
+    }
+
+    /// Avance de la cara explicado por el giro del tronco (m), sin contar la cadera que se va atrás.
+    static func forward(startLean: Double, lean: Double) -> Double {
+        let a = startLean * .pi / 180, b = (startLean + max(0, lean)) * .pi / 180
+        return HandheldSquatTuning.hingeRadius * (sin(b) - sin(a))
+    }
+
+    /// Lo que deben aportar las rodillas (m): 8,5 cm y el 40 % del descenso de la cara (50 % sin el mundo).
     static func minKneeDescent(faceDescent: Double, inertial: Bool) -> Double {
         let fraction = inertial ? HandheldSquatTuning.hingeMinKneeFractionInertial : HandheldSquatTuning.hingeMinKneeFraction
         return max(HandheldSquatTuning.hingeMinKneeDescent, fraction * faceDescent)
@@ -709,23 +807,34 @@ nonisolated struct InertialHeightTracker: Sendable, Hashable {
     private(set) var stationary = true
     private var segmentStart: Double?
     private var quietSince: Double?
+    private var smoothed: Double?
 
     mutating func reset() { self = InertialHeightTracker() }
 
-    /// `anchorAllowed`: de pie entre reps (se puede re-anclar a 0).
-    mutating func step(accel a: Double, dt: Double, t: Double, anchorAllowed: Bool) {
+    /// `anchorAllowed`: de pie entre reps (se puede re-anclar a 0). `inRep`: ya bajó la meta (a mitad de una bajada lenta
+    /// la aceleración pasa mucho rato por cero con la velocidad alta: ahí solo un quieto muy largo es quieto).
+    mutating func step(accel a: Double, dt: Double, t: Double, anchorAllowed: Bool, inRep: Bool = false) {
         velocity += a * dt
         position += velocity * dt
-        if abs(a) < HandheldSquatTuning.zuptAccel {
+        let s = smoothed.map { $0 + HandheldSquatTuning.zuptSmoothAlpha * (a - $0) } ?? a
+        smoothed = s
+        if abs(s) < HandheldSquatTuning.zuptAccel {
             if quietSince == nil { quietSince = t }
         } else {
             quietSince = nil
-            if stationary {
-                stationary = false
-                segmentStart = t
-            }
         }
-        if !stationary, let quiet = quietSince, t - quiet >= HandheldSquatTuning.zuptSeconds {
+        // Empieza a moverse: la suavizada sube o la cruda pasa el doble del umbral (sin perder el arranque de la bajada).
+        let moving = abs(s) >= HandheldSquatTuning.zuptAccel || abs(a) >= 2 * HandheldSquatTuning.zuptAccel
+        if stationary, moving {
+            stationary = false
+            segmentStart = t
+        }
+        // Quieto de verdad: aceleración baja y además velocidad integrada baja, o quieto mucho rato (la deriva).
+        let quietFor = quietSince.map { t - $0 } ?? 0
+        let settled = abs(a) < 2 * HandheldSquatTuning.zuptAccel && quietFor >= HandheldSquatTuning.zuptSeconds
+            && (abs(velocity) <= HandheldSquatTuning.zuptMaxVelocity
+                || quietFor >= (inRep ? HandheldSquatTuning.zuptLongSeconds : HandheldSquatTuning.zuptIdleSeconds))
+        if !stationary, settled {
             let segment = max(0, t - (segmentStart ?? t))
             position -= velocity * segment / 2
             velocity = 0
@@ -733,7 +842,9 @@ nonisolated struct InertialHeightTracker: Sendable, Hashable {
         }
         if stationary {
             velocity = 0
-            if anchorAllowed, abs(position) < HandheldSquatTuning.exitDescent { position = 0 }
+            // De pie entre reps: cerca del origen, o MÁS ARRIBA (deriva; nadie queda 10 cm sobre su postura de pie),
+            // vuelve al origen. Quieto más abajo no (un cuarto de sentadilla no puede volverse el cero).
+            if anchorAllowed, position > -HandheldSquatTuning.exitDescent { position = 0 }
         }
     }
 
@@ -741,6 +852,65 @@ nonisolated struct InertialHeightTracker: Sendable, Hashable {
     mutating func snapToTop() {
         position = 0
         velocity = 0
+    }
+}
+
+/// Signo de `verticalAccel` respecto de la aceleración física (+ arriba). Hasta aprenderlo vale
+/// `HandheldSquatTuning.recordedAccelSign` (lo que entrega hoy la fuente); con el mundo siguiendo al teléfono se
+/// compara, en ventanas de 0,4 s, el cambio de velocidad vertical del mundo con la integral de la aceleración
+/// grabada. Con 12 ventanas con movimiento y |r| ≥ 0,7 el signo queda fijo para la serie. Así el respaldo IMU
+/// integra bien con la fuente de hoy y con una fuente corregida.
+nonisolated struct AccelSignEstimator: Sendable, Hashable {
+    private nonisolated struct Point: Sendable, Hashable {
+        var t: Double
+        var y: Double
+        var a: Double
+    }
+
+    private var points: [Point] = []
+    private var lastVoteAt = -Double.infinity
+    private var sxy = 0.0
+    private var sxx = 0.0
+    private var syy = 0.0
+    private(set) var votes = 0
+    private(set) var learned: Double? = nil
+
+    var sign: Double { learned ?? HandheldSquatTuning.recordedAccelSign }
+
+    /// `worldY` = altura del teléfono en el mundo (nil sin seguimiento normal).
+    mutating func add(t: Double, worldY: Double?, accel: Double?) {
+        guard learned == nil else { return }
+        guard let y = worldY, let a = accel else {
+            points = []
+            return
+        }
+        if let last = points.last, abs(y - last.y) > HandheldSquatTuning.maxPhoneJumpPerFrame || t <= last.t { points = [] }
+        points.append(Point(t: t, y: y, a: a))
+        let span = 0.1, window = HandheldSquatTuning.accelSignWindowSeconds
+        while points.count > 2, points[1].t <= t - window - 2 * span { points.removeFirst() }
+        guard let first = points.first, t - first.t >= window + span, t - lastVoteAt >= window / 2 else { return }
+        // Velocidad del mundo (promedio de 0,1 s) al final y al principio de la ventana.
+        func velocity(endingAt end: Double) -> Double? {
+            guard let j = points.lastIndex(where: { $0.t <= end }), let i = points.lastIndex(where: { $0.t <= end - span }),
+                  points[j].t - points[i].t > span / 2 else { return nil }
+            return (points[j].y - points[i].y) / (points[j].t - points[i].t)
+        }
+        guard let v1 = velocity(endingAt: t), let v0 = velocity(endingAt: t - window) else { return }
+        let dvWorld = v1 - v0
+        guard abs(dvWorld) >= HandheldSquatTuning.accelSignMinDeltaV else { return }
+        // Integral de la aceleración entre los centros de las dos velocidades.
+        var dvAccel = 0.0
+        for k in 1..<points.count where points[k].t > t - window - span / 2 && points[k].t <= t - span / 2 {
+            dvAccel += points[k].a * (points[k].t - points[k - 1].t)
+        }
+        lastVoteAt = t
+        sxy += dvWorld * dvAccel
+        sxx += dvWorld * dvWorld
+        syy += dvAccel * dvAccel
+        votes += 1
+        guard votes >= HandheldSquatTuning.accelSignMinVotes, sxx > 0, syy > 0 else { return }
+        let r = sxy / (sxx * syy).squareRoot()
+        if abs(r) >= HandheldSquatTuning.accelSignMinCorrelation { learned = r > 0 ? 1 : -1 }
     }
 }
 
@@ -913,7 +1083,7 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
 
     nonisolated enum Rejection: String, Sendable, Hashable, Codable {
         case tooFast, tooSlow, shaking, moved, faceMissing, trackingLost, notLive, flatFace, faceDistance, armsOnly,
-             torsoBend, holdMissed, shallow, phoneTilted
+             torsoBend, holdMissed, shallow, phoneTilted, inertialLimit
     }
 
     /// Lo medido en una rep o en un intento (tests y calibración en el dispositivo).
@@ -997,6 +1167,17 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         var phone: SIMD3<Double>
     }
 
+    /// Una muestra del fondo: descenso de la cara (desde la referencia), lo que no explica el giro del tronco
+    /// (las rodillas), el avance de la cara desde el ancla (mundo) y el que explica el giro.
+    private nonisolated struct HingePoint: Sendable, Hashable {
+        var faceDescent: Double
+        var knee: Double
+        /// Avance y descenso de la cara desde el ancla (m; nil sin mundo).
+        var forward: Double?
+        var drop: Double?
+        var hingeForward: Double
+    }
+
     private nonisolated struct RepWindow: Sendable, Hashable {
         /// Cuándo se abrió la ventana (abortos, re-anclaje) y cuándo empezó a bajar (duración de la rep).
         var openedAt: Double
@@ -1045,12 +1226,26 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         var maxOscillation = 0
         var bottomSamples = 0
         var bottomFaceSamples = 0
-        /// (descenso de la cara, parte no explicada por el giro del tronco) en el fondo (`HingeModel`).
-        var hingePoints: [SIMD2<Double>] = []
+        /// Muestras del fondo para la bisagra (`HingeModel`) y el avance de la cara.
+        var hingePoints: [HingePoint] = []
 
-        /// Avance de la cara − lo que permite lo que bajó (m; > 0 = bisagra); nil sin ancla.
+        /// Avance de la cara desde el ancla − lo que permiten el giro del tronco y lo que bajaron las rodillas (m; > 0 =
+        /// bisagra o escalón), en la muestra del fondo que MEJOR lo explica. nil sin ancla.
         var forwardExcess: Double? {
-            anchorFace.map { _ in bodyForward - (K.torsoForwardSlack + K.torsoForwardRatio * bodyDrop) }
+            guard anchorFace != nil else { return nil }
+            guard let deepest = hingePoints.map(\.faceDescent).max(), deepest > 0 else {
+                return bodyForward - (K.torsoForwardSlack + K.torsoForwardRatio * bodyDrop)
+            }
+            var best: Double?
+            for p in hingePoints where p.faceDescent >= K.hingeBottomFraction * deepest {
+                guard let forward = p.forward, let drop = p.drop else { continue }
+                // Lo explica la geometría de una sentadilla (avance ≤ margen + fracción de lo que bajó) O el giro del
+                // tronco que se VE (cabeza o teléfono); no la suma: si el giro se esconde (cuello, teléfono frente a la
+                // cara), mecerse sentado avanza más de lo que una sentadilla permite.
+                let allowed = max(K.torsoForwardSlack + K.torsoForwardRatio * drop, K.hingeForwardCredit * p.hingeForward)
+                best = min(best ?? .infinity, forward - allowed)
+            }
+            return best ?? bodyForward - (K.torsoForwardSlack + K.torsoForwardRatio * bodyDrop)
         }
 
         /// La cara recorrió la geometría de una sentadilla desde el ancla (avance dentro de lo que permite el
@@ -1078,6 +1273,9 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
     private(set) var barometer = HandheldSquatBarometer()
     /// La TrueDepth ve un plano donde debería haber una cara (foto o pantalla pegada al teléfono).
     private(set) var faceLooksFlat = false
+    /// Segundos con la ventana de relieve mostrando una cara 3D, y reps contadas con la cara moviéndose respecto del teléfono.
+    private(set) var reliefLiveSeconds = 0.0
+    private(set) var nonRigidReps = 0
 
     private var startT: Double?
     private var lastT: Double?
@@ -1096,14 +1294,18 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
     private var oscillation = OscillationDetector()
     /// Esta muestra cae en una oscilación franca (≥ `shakeMinReversals` inversiones en 1 s).
     private var oscillatingNow = false
-    private var inertial = InertialHeightTracker()
+    private(set) var inertial = InertialHeightTracker()
+    /// Signo de `verticalAccel` (la fuente de hoy lo invierte; se aprende con el mundo).
+    private(set) var accelSign = AccelSignEstimator()
     private var calibration: [CalibrationPoint] = []
     /// Muestras recientes con cara y mundo (re-anclaje de la referencia).
     private var recent: [CalibrationPoint] = []
     /// Señal, cara y teléfono de los últimos segundos sin ventana: el ancla y el nivel de pie de la próxima rep.
     private var preWindow: [PreWindowPoint] = []
     private var window: RepWindow?
-    private var regularity = RegularityDetector()
+    /// Metrónomo: solo un ritmo de máquina (σ < 0,06 s y CV < 2 %). Una persona lenta y pareja varía más que
+    /// eso y nunca debe quedar sospechosa (meta real de 10 reps).
+    private var regularity = RegularityDetector(maxCoefficientOfVariation: 0.02, maxStandardDeviation: 0.06)
     /// Último descenso medido de la cara (se mantiene si la cara se pierde un momento).
     private var lastFaceDescent: Double?
 
@@ -1112,10 +1314,13 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
     private var worldEverNormal = false
     private var worldBadSince: Double?
     private var worldGoodSince: Double?
+    private var worldLossCued = false
     private var lastWorldJumpAt: Double?
     private var energyWindow: [(t: Double, e: Double)] = []
     private var energySum = 0.0
     private var reliefReadings: [(t: Double, r: Double)] = []
+    private var reliefLiveNow = false
+    private var lastReliefT: Double?
     private var staticReported = false
     private var shakingSince: Double?
     private var shakingReported = false
@@ -1138,16 +1343,31 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
     // MARK: Lecturas
 
     var isLive: Bool { !staticReported }
+    /// Hay un intento en curso (ventana abierta) y si ya entró a la rep (depuración y tests).
+    var isAttemptOpen: Bool { window != nil }
+    var isRepEntered: Bool { window?.entered ?? false }
     var minPeakDescent: Double? { repPeaks.min() }
     var meanRepSeconds: Double? { repSeconds.isEmpty ? nil : repSeconds.reduce(0, +) / Double(repSeconds.count) }
 
     /// Si alguna rep se midió con el respaldo IMU (sin seguimiento del mundo), la fuente no puede quedar
     /// `.live` aunque el resto de la serie lo fuera: tapar la cámara trasera solo en las reps baja a reduced.
-    /// Igual si el desafío "Quédese abajo" se falló: un video o un mecanismo no llega a `full`, pero una persona
-    /// que no lo logró tampoco queda `suspicious` (en el teléfono, 3 de 4 series honestas lo fallaron).
+    /// Tampoco sin una cara 3D confirmada por la TrueDepth (sin profundidad, o plana: un video o una foto) ni con la
+    /// cara rígida respecto del teléfono en todas las reps (montaje pegado). Fallar el desafío "Quédese abajo" ya no
+    /// baja el nivel por sí solo: el video sin profundidad queda en reduced por lo anterior, y una persona con la cara
+    /// confirmada que no se quedó abajo (en el teléfono, casi siempre) queda en full.
     func limitedSourceLevel(_ declared: SourceLevel) -> SourceLevel {
-        declared == .live && (inertialReps > 0 || challengeFailed) ? .fallback : declared
+        declared == .live && (inertialReps > 0 || !faceDepthConfirmed || rigidFaceSeries) ? .fallback : declared
     }
+
+    /// La TrueDepth vio una cara 3D (relieve) al menos `reliefConfirmSeconds` en la serie.
+    var faceDepthConfirmed: Bool { reliefLiveSeconds >= K.reliefConfirmSeconds }
+    /// Todas las reps contadas con la cara inmóvil respecto del teléfono (foto, pantalla o máscara pegada).
+    var rigidFaceSeries: Bool { count > 0 && nonRigidReps == 0 }
+
+    /// Reps que se pueden contar con el respaldo IMU: menos de la mitad de la meta (al menos 1; meta 5 → 2, 10 → 4).
+    /// Con la cámara trasera tapada no se cuenta ninguna sentadilla: sin el mundo no se distingue de alguien
+    /// sentado meciéndose. La app pide destaparla.
+    var inertialRepCap: Int { 0 }
 
     /// Se falló el desafío el máximo de veces sin cumplirlo.
     var challengeFailed: Bool { challenge.isEnabled && !challenge.passed && challenge.failures >= SquatHoldChallenge.maxFailures }
@@ -1172,8 +1392,9 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         trackLiveness(s, t, &events)
         trackRelief(s, t)
         updateMode(s, t, &events)
-        if let a = s.verticalAccel {
-            inertial.step(accel: a, dt: dt, t: t, anchorAllowed: window == nil)
+        accelSign.add(t: t, worldY: s.worldTrackingNormal ? Double(s.phonePos.y) : nil, accel: s.verticalAccel)
+        if let a = physicalAccel(s) {
+            inertial.step(accel: a, dt: dt, t: t, anchorAllowed: window == nil, inRep: window?.entered ?? false)
         }
         trackFace(s)
         pitchSmooth.update(s.phonePitchDeg)
@@ -1275,6 +1496,11 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         if let head = s.headPitchDeg { headSmooth.update(head) }
     }
 
+    /// Aceleración vertical física (m/s², + arriba): la grabada por el signo aprendido (o el de la fuente de hoy).
+    private func physicalAccel(_ s: HandheldSquatSample) -> Double? {
+        s.verticalAccel.map { $0 * accelSign.sign }
+    }
+
     private static func faceAbove(_ s: HandheldSquatSample) -> Double {
         HandheldSquatGeometry.faceAbovePhone(faceInPhone: d3(s.faceInPhone), pitchDeg: s.phonePitchDeg, rollDeg: s.phoneRollDeg)
     }
@@ -1285,6 +1511,7 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         if s.worldTrackingNormal {
             worldEverNormal = true
             worldBadSince = nil
+            worldLossCued = false
             if worldGoodSince == nil { worldGoodSince = t }
         } else {
             worldGoodSince = nil
@@ -1293,6 +1520,11 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         switch mode {
         case .world:
             let bad = t - (worldBadSince ?? t)
+            // Datos reales: con los dedos sobre la cámara trasera nunca se decía qué pasaba.
+            if worldEverNormal, worldBadSince != nil, bad >= K.worldLossCueSeconds, !worldLossCued, progress.gate == .ready {
+                worldLossCued = true
+                events.append(.cue(Cue(text: Copy.uncoverCamera, symbol: "camera.metering.unknown")))
+            }
             let lostAfterNormal = worldEverNormal && worldBadSince != nil && bad >= K.worldLossToFallbackSeconds
             let neverStarted = !worldEverNormal && t - (startT ?? t) >= K.initialWorldGraceSeconds
             guard lostAfterNormal || neverStarted else { return }
@@ -1367,12 +1599,13 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         }
         calibration.append(CalibrationPoint(t: t, phone: Self.d3(s.phonePos), face: Self.d3(s.facePos),
                                             faceInPhone: Self.d3(s.faceInPhone), pitch: s.phonePitchDeg,
-                                            head: s.headPitchDeg, accel: s.verticalAccel ?? 0, rms: s.userAccelRMS,
+                                            head: s.headPitchDeg, accel: physicalAccel(s) ?? 0, rms: s.userAccelRMS,
                                             faceAbove: Self.faceAbove(s)))
         while calibration.count > 1, calibration[1].t <= t - K.calibrationSeconds {
             calibration.removeFirst()
         }
-        progress.hint = Copy.holdStill
+        // Sin el mundo lo útil es destapar la cámara trasera (en el teléfono "Quieto un segundo." tapaba ese aviso).
+        progress.hint = mode == .inertial ? Copy.uncoverCamera : Copy.holdStill
         guard let first = calibration.first, t - first.t >= K.calibrationSeconds * 0.95, isStill(calibration) else { return }
 
         reference = Self.reference(from: calibration)
@@ -1424,8 +1657,13 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
             let mean = points.map(\.phone).reduce(SIMD3<Double>(repeating: 0), +) / Double(points.count)
             return points.allSatisfy { simd_length(SIMD2($0.phone.x - mean.x, $0.phone.z - mean.z)) <= K.calibrationMaxPhoneDriftXZ }
         case .inertial:
-            guard points.allSatisfy({ abs($0.accel) <= K.calibrationMaxVerticalAccel }) else { return false }
-            return points.allSatisfy { ($0.rms ?? 0) <= K.calibrationMaxAccelRMS }
+            // En las manos el IMU tiembla (|a| real de pie hasta 1-2 m/s² por muestra): se mira el promedio.
+            let n = Double(max(1, points.count))
+            let meanAbs = points.map { abs($0.accel) }.reduce(0, +) / n
+            let mean = points.map(\.accel).reduce(0, +) / n
+            let rms = points.map { $0.rms ?? 0 }.reduce(0, +) / n
+            return meanAbs <= K.calibrationMaxVerticalAccel && abs(mean) <= K.calibrationMaxMeanVerticalAccel
+                && rms <= K.calibrationMaxAccelRMS
         }
     }
 
@@ -1545,6 +1783,12 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
             preWindow.append(PreWindowPoint(t: t, signal: signal, face: mode == .world ? face : nil, phone: Self.d3(s.phonePos)))
             while let first = preWindow.first, first.t < t - K.anchorLookbackSeconds { preWindow.removeFirst() }
             guard moved > K.windowStartDescent else {
+                // Subió mucho sobre la postura de pie (a la cabina, a una plataforma): no se sigue adaptando la referencia
+                // hacia allá (llevaba a la postura sentada e inclinada sin pasar por la calibración): se vuelve a calibrar.
+                if mode == .world, let faceDescent = lastFaceDescent, -faceDescent > K.climbRecalibrateRise {
+                    recalibrate(hint: Copy.holdStill, &events)
+                    return
+                }
                 adaptReference(&ref, s, face: face, fip: fip, pitch: pitch, head: head, dt: dt)
                 reference = ref
                 return
@@ -1587,6 +1831,8 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         if oscillatingNow { w.shaking = true }
         w.maxOscillation = max(w.maxOscillation, oscillation.reversals(within: K.shakeWindowSeconds, at: t))
         w.maxPitchDelta = max(w.maxPitchDelta, pitchDelta)
+        var anchorForward: Double?
+        var anchorDrop: Double?
         if mode == .world, let face {
             // Antes de entrar el ancla sube con la cara (se enderezó antes de bajar).
             if w.anchorFace == nil || (!w.entered && face.y > (w.anchorFace?.y ?? 0)) {
@@ -1596,10 +1842,12 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
                 let shift = SIMD2(face.x - a.x, face.z - a.z)
                 if let facing = w.anchorFacing {
                     let forward = simd_dot(shift, facing)
+                    anchorForward = forward
                     w.bodyForward = max(w.bodyForward, forward)
                     w.bodyBackward = max(w.bodyBackward, -forward)
                     w.bodyLateral = max(w.bodyLateral, abs(shift.x * facing.y - shift.y * facing.x))
                 }
+                anchorDrop = a.y - face.y
                 w.bodyDrop = max(w.bodyDrop, a.y - face.y)
                 w.phoneTravel = max(w.phoneTravel, simd_length(SIMD2(Double(s.phonePos.x) - p.x, Double(s.phonePos.z) - p.z)))
             }
@@ -1634,11 +1882,24 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
             if let faceDescent, faceDescent > 0 {
                 // Bisagra: giro del tronco ≈ lo que la cabeza mira más abajo o lo que el teléfono (antebrazos
                 // pegados al pecho) cabecea hacia arriba, desde la inclinación que ya traía al calibrar.
-                let headDown = head.flatMap { h in ref.headPitch.map { AngleMath.delta($0, h) } } ?? 0
+                // Con el teléfono girando con el tronco (antebrazos al pecho), la cabeza que además baja SIGUIENDO al
+                // teléfono (que cae respecto de la cara al inclinarse) es cuello, no tronco: se descuenta lo que bajó la
+                // mirada hacia el teléfono (con tope). Así Marco no paga una bisagra que no hizo. Sin giro del teléfono
+                // no se descuenta (cabecear y bajar el teléfono con los brazos no puede esconder un cuarto de sentadilla).
+                let rawHeadDown = head.flatMap { h in ref.headPitch.map { AngleMath.delta($0, h) } } ?? 0
+                var headDown = rawHeadDown
                 let phoneUp = AngleMath.delta(pitch, ref.pitch)
-                let hinge = HingeModel.drop(startLean: HingeModel.startLean(referenceHeadPitch: ref.headPitch),
-                                            lean: max(0, headDown, phoneUp))
-                w.hingePoints.append(SIMD2(faceDescent, faceDescent - hinge))
+                if headDown > phoneUp, phoneUp >= K.hingeGazeMinPhoneTurn,
+                   let gaze = HingeModel.gazeDown(reference: ref, faceAbove: above, faceInPhone: fip) {
+                    headDown -= min(max(0, gaze), K.hingeGazeDiscountFraction * headDown, K.hingeMaxGazeDiscount)
+                }
+                let start = HingeModel.startLean(referenceHeadPitch: ref.headPitch, referencePitch: ref.pitch)
+                let lean = max(0, headDown, phoneUp)
+                let hinge = HingeModel.drop(startLean: start, lean: lean)
+                // El avance que explica el giro se cuenta con todo lo que se vio girar (sin descontar el cuello).
+                let seen = max(0, rawHeadDown, phoneUp)
+                w.hingePoints.append(HingePoint(faceDescent: faceDescent, knee: faceDescent - hinge, forward: anchorForward,
+                                                drop: anchorDrop, hingeForward: HingeModel.forward(startLean: start, lean: seen)))
             }
         }
         w.hold.band = max(K.holdBandMin, K.holdBandFraction * w.peakSignal)
@@ -1730,7 +1991,10 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
         }
         if s.faceTracked, let fip { ref.faceInPhone += k * (fip - ref.faceInPhone) }
         if s.faceTracked, let above = aboveSmooth.value { ref.faceAbove += k * (above - ref.faceAbove) }
-        if s.faceTracked, let head, let head0 = ref.headPitch { ref.headPitch = head0 + k * AngleMath.delta(head, head0) }
+        // La cabeza de referencia sigue derecha como al calibrar (no se adapta hacia una postura doblada).
+        if s.faceTracked, let head, let head0 = ref.headPitch, abs(head) <= K.calibrationMaxHeadPitch {
+            ref.headPitch = head0 + k * AngleMath.delta(head, head0)
+        }
         ref.pitch += k * AngleMath.delta(pitch, ref.pitch)
     }
 
@@ -1807,6 +2071,9 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
             rejection = .tooSlow
         } else if w.challengeArmed, w.hold.best < K.holdRequiredSeconds {
             rejection = .holdMissed
+        } else if w.mode == .inertial, inertialReps >= inertialRepCap {
+            // Con la cámara tapada no se termina la serie: hay que destaparla.
+            rejection = .inertialLimit
         }
 
         appendDiagnostics(w, at: t, rejection: rejection)
@@ -1820,11 +2087,11 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
     /// Bisagra en el fondo (muestras con la cara a ≥ 90 % de su descenso máximo): vale la que MÁS aporta de
     /// las rodillas (un instante con la cabeza agachada no rechaza una sentadilla). nil sin cara en el fondo.
     private static func hingeAtBottom(_ w: RepWindow) -> (isHinge: Bool, knee: Double?) {
-        guard let deepest = w.hingePoints.map(\.x).max(), deepest > 0 else { return (false, nil) }
+        guard let deepest = w.hingePoints.map(\.faceDescent).max(), deepest > 0 else { return (false, nil) }
         var best: (margin: Double, knee: Double)?
-        for p in w.hingePoints where p.x >= K.hingeBottomFraction * deepest {
-            let margin = p.y - HingeModel.minKneeDescent(faceDescent: p.x, inertial: w.mode == .inertial)
-            if best.map({ margin > $0.margin }) ?? true { best = (margin, p.y) }
+        for p in w.hingePoints where p.faceDescent >= K.hingeBottomFraction * deepest {
+            let margin = p.knee - HingeModel.minKneeDescent(faceDescent: p.faceDescent, inertial: w.mode == .inertial)
+            if best.map({ margin > $0.margin }) ?? true { best = (margin, p.knee) }
         }
         guard let best else { return (false, nil) }
         return (best.margin < 0, best.knee)
@@ -1851,6 +2118,7 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
 
     private mutating func countRep(_ w: RepWindow, seconds: Double, at t: Double, _ events: inout [VerifierEvent]) {
         count += 1
+        if w.maxGeometryChange >= K.rigidFaceMaxGeometryChange { nonRigidReps += 1 }
         repPeaks.append(w.peakSignal)
         repSeconds.append(seconds)
         if w.challengeArmed {
@@ -1907,11 +2175,15 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
             events.append(.cue(Cue(text: Copy.lookAtScreen, symbol: "face.smiling")))
         case .holdMissed:
             // Al 2º fallo el desafío se cierra. Solo es hard si además hubo otra señal de trampa (brazos, cara plana
-            // o sin micro-movimiento, metrónomo, sacudidas); si no, soft y el nivel queda en reduced
-            // (`limitedSourceLevel`): un video que no sigue la consigna no llega a full, una persona que no lo
-            // logró no queda sospechosa.
+            // o sin micro-movimiento, metrónomo, sacudidas); si no, soft. El nivel lo limita `limitedSourceLevel`
+            // solo sin una cara 3D confirmada (el video sin profundidad no llega a full); una persona con la cara
+            // confirmada por la TrueDepth que no lo logró queda en full.
             if var a = challenge.fail(at: t) {
-                let corroborated = anomalies.contains { HandheldSquatAnomaly.challengeCorroborating.contains($0.kind) }
+                // Bajar el teléfono una vez con los brazos (soft) no agrava un desafío fallido; sí cuando ya es reiterado (hard).
+                let corroborated = anomalies.contains {
+                    HandheldSquatAnomaly.challengeCorroborating.contains($0.kind)
+                        && ($0.kind != HandheldSquatAnomaly.armsOnly || $0.severity == .hard)
+                }
                 if !corroborated {
                     a.severity = .soft
                     a.detail = "No se quedó abajo cuando se le pidió (sin otra señal de trampa)"
@@ -1938,7 +2210,7 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
             events.append(.cue(Cue(text: Copy.stayInPlace, symbol: "figure.stand")))
         case .faceMissing:
             events.append(.cue(Cue(text: Copy.keepFace, symbol: "face.dashed")))
-        case .trackingLost:
+        case .trackingLost, .inertialLimit:
             events.append(.cue(Cue(text: Copy.uncoverCamera, symbol: "camera.metering.unknown")))
         case .notLive:
             events.append(.cue(Cue(text: Copy.lookAtScreen, symbol: "face.smiling")))
@@ -2047,13 +2319,18 @@ nonisolated struct HandheldSquatVerifier: ActivityVerifier, SourceLevelLimiting 
             reliefReadings.removeFirst()
             changed = true
         }
+        let dt = lastReliefT.map { min(K.maxIntegrationStep, max(0, t - $0)) } ?? 0
+        lastReliefT = t
+        if reliefLiveNow, s.faceTracked { reliefLiveSeconds += dt }
         guard changed else { return }
         guard reliefReadings.count >= K.reliefMinReadings else {
             faceLooksFlat = false
+            reliefLiveNow = false
             return
         }
         let sorted = reliefReadings.map(\.r).sorted()
         faceLooksFlat = sorted[sorted.count / 2] < K.flatFaceMaxRelief
+        reliefLiveNow = !faceLooksFlat
     }
 
     // MARK: Utilidades
@@ -2220,6 +2497,12 @@ nonisolated enum HandheldSquatSynth {
                 face.y -= drop
             }
 
+            if style != .photo {
+                // Las manos no son un soporte: en el fondo el teléfono cae ≈ 2 cm respecto de la cara y se acerca al pecho
+                // (reales: la cara se mueve ≥ 3,4 cm por rep respecto del teléfono). La foto pegada, no.
+                phone += SIMD3(0.004 * sin(1.7 * t), -0.018 * x + 0.003 * sin(1.1 * t), 0.024 * x)
+            }
+
             let walking = options.walkSpeed > 0 && t >= options.leadInSeconds
             if walking {
                 let w = t - options.leadInSeconds
@@ -2256,7 +2539,8 @@ nonisolated enum HandheldSquatSynth {
             var rms: Double? = nil
             var vertical: Double? = nil
             if options.includeMotion {
-                vertical = accel + options.accelBias + rng.symmetric(options.accelNoise)
+                // Como la entrega la fuente de hoy (signo invertido, `HandheldSquatTuning.recordedAccelSign`).
+                vertical = HandheldSquatTuning.recordedAccelSign * (accel + options.accelBias + rng.symmetric(options.accelNoise))
                 let base = walking ? 0.25 : 0.02
                 rms = shaking ? options.shakeRMS + rng.symmetric(0.1) : (base * base + (accel / 9.80665) * (accel / 9.80665)).squareRoot()
             }

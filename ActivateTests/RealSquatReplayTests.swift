@@ -389,6 +389,9 @@ struct RealSquatReplayTests {
             let r = RealSquatReplay.replay(rec, mode: mode)
             #expect(r.hardKinds.isEmpty, "\(rec.name) rep del desafío \(r.challengeRep): \(r.hardKinds)")
             #expect(r.level != .suspicious, "\(rec.name): \(r.level)")
+            // La TrueDepth confirmó una cara 3D (relieve real 1,8-2,7 cm) que se mueve respecto del teléfono: no quedarse
+            // abajo ya no baja la serie a reduced (antes 4 de 6 series honestas).
+            #expect(r.level == .full, "\(rec.name): \(r.level)")
             #expect(r.extraCounted == 0, "\(rec.name): reps contadas que no son intentos reales")
             // Sin otra razón, solo el desafío puede dejar una rep honesta sin contar.
             for (i, attempt) in rec.phoneAttempts.enumerated() where !expected.flippedStarts.contains(where: { abs($0 - attempt.start) <= 0.5 }) {
@@ -432,37 +435,61 @@ struct RealSquatReplayTests {
 
     /// `verticalAccel` grabado contra la aceleración vertical del mundo (segunda derivada de la altura del teléfono):
     /// deben correlacionar fuerte. En el build del 23-10-2026 el signo sale INVERTIDO (r ≈ −0,99: CoreMotion entrega
-    /// `userAcceleration` con el signo opuesto al que suma `HandheldMotionTap`), así que en el teléfono el respaldo
-    /// IMU integra una trayectoria espejada y no cuenta sentadillas honestas. Pendiente en `HandheldSquatSource`.
+    /// `userAcceleration` con el signo opuesto al que suma `HandheldMotionTap`). El verificador lo corrige
+    /// (`HandheldSquatTuning.recordedAccelSign`) y, con el mundo visible, aprende el signo de la grabación.
     @Test func laAceleracionVerticalGrabadaSigueAlMundo() throws {
         for url in RealSquatData.files where RealSquatData.honest[url.lastPathComponent] != nil {
             let rec = try RealSquatRecording.load(url)
             let r = Self.accelCorrelation(rec.samples)
             print("\(rec.name): r(verticalAccel, mundo) = \(String(format: "%.3f", r))\(r < 0 ? " (signo invertido en la fuente)" : "")")
             #expect(abs(r) > 0.9, "\(rec.name): r = \(r)")
+            let (v, _) = RealSquatReplay.run(rec, challengeRep: 0, target: 99)
+            #expect(v.accelSign.learned == (r < 0 ? -1 : 1), "\(rec.name): aprendido \(String(describing: v.accelSign.learned))")
+            #expect(v.accelSign.sign == HandheldSquatTuning.recordedAccelSign || r > 0)
         }
     }
 
-    /// Con la cámara trasera tapada (sin mundo, con el signo de la aceleración corregido como lo entregaría la fuente
-    /// arreglada), ninguna sentadilla real se toma por "solo brazos" y las de hasta 60 cm cuentan (en reduced).
+    /// Temblor de la mano (±3-4 m/s² a 6-9 Hz sumado a la aceleración grabada): no es sacudida (antes: hard en 3-6 de 6
+    /// series y ninguna rep contada) y cuentan las mismas reps.
+    @Test func elTemblorDeLaManoNoEsSacudida() throws {
+        for url in RealSquatData.files {
+            guard RealSquatData.honest[url.lastPathComponent] != nil else { continue }
+            let rec = try RealSquatRecording.load(url)
+            let base = RealSquatReplay.run(rec, challengeRep: 0, target: 99).0.count
+            for (amp, hz) in [(3.0, 6.0), (4.0, 9.0)] {
+                var shaken = rec
+                for i in shaken.samples.indices {
+                    shaken.samples[i].verticalAccel = shaken.samples[i].verticalAccel.map { $0 + amp * sin(2 * .pi * hz * shaken.samples[i].t) }
+                }
+                var (v, cues) = RealSquatReplay.run(shaken, challengeRep: 0, target: 99)
+                let outcome = v.finish(at: shaken.samples.last?.t ?? 0, reason: .timeout)
+                #expect(!outcome.anomalies.contains { $0.kind == HandheldSquatAnomaly.shaking }, "\(rec.name) \(amp) m/s² \(hz) Hz")
+                #expect(!cues.contains(HandheldSquatCopy.noShake), "\(rec.name) \(amp) \(hz)")
+                #expect(v.count >= base - 1, "\(rec.name) \(amp) \(hz): \(v.count) de \(base)")
+            }
+        }
+    }
+
+    /// Con la cámara trasera tapada toda la serie (sin mundo) y la aceleración tal como la graba el teléfono (signo
+    /// invertido; el verificador lo corrige), no se cuenta ninguna sentadilla: se pide destapar la cámara.
+    /// "Solo brazos" solo en los intentos con el teléfono volteado o bajado hacia los muslos (cabeceo > 45°).
     @Test func conLaCamaraTraseraTapadaLasSentadillasRealesNoSonBrazos() throws {
-        var counted = 0
+        var counted = 0, attempts = 0
         for url in RealSquatData.files where RealSquatData.honest[url.lastPathComponent] != nil {
             var rec = try RealSquatRecording.load(url)
-            let r = Self.accelCorrelation(rec.samples)
-            for i in rec.samples.indices {
-                rec.samples[i].worldTrackingNormal = false
-                if r < 0 { rec.samples[i].verticalAccel = rec.samples[i].verticalAccel.map { -$0 } }
-            }
+            for i in rec.samples.indices { rec.samples[i].worldTrackingNormal = false }
             let (v, _) = RealSquatReplay.run(rec, challengeRep: 0, target: 99)
             let rejections = v.diagnostics.compactMap(\.rejection)
-            print("\(rec.name) tapada: \(v.count) contadas, rechazos \(rejections.map(\.rawValue))")
+            print("\(rec.name) tapada: \(v.count) de \(rec.phoneAttempts.count) contadas, rechazos \(rejections.map(\.rawValue))")
             #expect(v.mode == .inertial)
-            #expect(!rejections.contains(.armsOnly), "\(rec.name): \(rejections)")
+            #expect(v.diagnostics.filter { $0.rejection == .armsOnly }.allSatisfy { $0.pitchDelta > 45 }, "\(rec.name): \(rejections)")
             #expect(!rejections.contains(.shaking), "\(rec.name): \(rejections)")
             counted += v.count
+            attempts += rec.phoneAttempts.count
         }
-        #expect(counted >= 10)
+        // Regla nueva (pedido del usuario: correcciones simples): con la cámara trasera tapada no se cuenta ninguna
+        // sentadilla; la app pide "Destape la cámara de atrás." (sin el mundo no se distingue de alguien sentado).
+        #expect(counted == 0, "\(counted) de \(attempts)")
     }
 
     /// Correlación (con el mejor desfase de ±12 frames) entre `verticalAccel` suavizado y la segunda derivada de la
