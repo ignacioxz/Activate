@@ -60,6 +60,13 @@ struct KineSheetScreen: View {
 
     private var isPrepared: Bool { sheet?.consult.backend == .foundationModels }
 
+    /// El reporte (hallazgos, cifras, vista previa y compartir) se ve recién después de "Preparar"; sin Apple
+    /// Intelligence se muestra la plantilla con las cifras de hoy (no hay nada que preparar).
+    private var showsReport: Bool { isPrepared || !coach.kineModelReady }
+
+    /// "Para la consulta" se ve también mientras Apple Intelligence escribe, apareciendo a medida que llega.
+    private var showsConsult: Bool { showsReport || phase != .idle }
+
     /// Resumen vigente: existe y corresponde al texto actual.
     private var currentSummary: PatientNote? {
         guard let n = sheet?.note, n.original == trimmedNote, !trimmedNote.isEmpty,
@@ -87,10 +94,18 @@ struct KineSheetScreen: View {
                         .fixedSize(horizontal: false, vertical: true)
                     levelCard
                     assistantCard(sheet)
-                    consultSection(sheet)
+                    if showsConsult {
+                        consultSection(sheet)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
                     noteSection
-                    factsSection(sheet)
-                    previewLink
+                    if showsReport {
+                        Group {
+                            factsSection(sheet)
+                            previewLink
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
                 } else {
                     ProgressView("Preparando el reporte")
                         .frame(maxWidth: .infinity, minHeight: 200)
@@ -111,7 +126,7 @@ struct KineSheetScreen: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if focus == nil { shareBar }
+            if focus == nil, showsReport { shareBar }
         }
         .task {
             load()
@@ -233,7 +248,7 @@ struct KineSheetScreen: View {
                 return reason + " Mientras tanto, el reporte usa una plantilla con sus cifras."
             }
             if modelFailed { return "Apple Intelligence no pudo redactar esta vez. El reporte muestra la plantilla con sus cifras." }
-            return "Apple Intelligence elige los 3 datos más importantes para su reporte y le sugiere preguntas para el kine. Todo queda en su iPhone."
+            return "Apple Intelligence elige los 3 datos más importantes para su reporte y le sugiere preguntas para el personal de la salud. Todo queda en su iPhone."
         }
     }
 
@@ -249,6 +264,7 @@ struct KineSheetScreen: View {
             if phase == .writing, let draft {
                 ForEach(0..<KineConsultRules.findingsCount, id: \.self) { i in
                     draftFinding(draft.findings.indices.contains(i) ? draft.findings[i] : nil)
+                        .transition(.opacity)
                 }
             } else if sheet.consult.findings.isEmpty {
                 Text("Cuando registre pausas y cuestionarios, aquí aparecen los datos más importantes.")
@@ -289,13 +305,14 @@ struct KineSheetScreen: View {
 
     private func questionsCard(_ sheet: KineSheet) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("Preguntas para el kine", systemImage: "questionmark.bubble")
+            Label("Preguntas para el personal de la salud", systemImage: "questionmark.bubble")
                 .font(.headline)
             if phase == .writing, let draft {
                 ForEach(0..<KineConsultRules.questionsCount, id: \.self) { i in
                     questionRow(i) {
                         Text(draft.questions.indices.contains(i) ? draft.questions[i] : "…")
                             .foregroundStyle(draft.questions.indices.contains(i) ? .primary : .tertiary)
+                            .contentTransition(.opacity)
                     }
                 }
             } else {
@@ -330,6 +347,7 @@ struct KineSheetScreen: View {
             if phase == .writing, let draft {
                 Text(draft.focus ?? "…")
                     .foregroundStyle(draft.focus == nil ? .tertiary : .primary)
+                    .contentTransition(.opacity)
             } else {
                 TextField("Foco de la próxima sesión", text: focusBinding, axis: .vertical)
                     .focused($focus, equals: .focus)
@@ -345,7 +363,7 @@ struct KineSheetScreen: View {
     private var noteSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionTitle(title: "En sus palabras",
-                         subtitle: "Opcional. Lo que quiere contarle al kine; va en el reporte.")
+                         subtitle: "Opcional. Lo que quiere contarle al personal de la salud; va en el reporte.")
             VStack(alignment: .trailing, spacing: 6) {
                 TextField("Por ejemplo: me duele la espalda al bajar del camión y de noche me cuesta dormir.",
                           text: $noteText, axis: .vertical)
@@ -361,7 +379,7 @@ struct KineSheetScreen: View {
 
             if let note = currentSummary {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Resumen para el kine", systemImage: Self.aiSymbol)
+                    Label("Resumen para el personal de la salud", systemImage: Self.aiSymbol)
                         .font(.headline)
                     TextField("Resumen", text: noteSummaryBinding, axis: .vertical)
                         .focused($focus, equals: .noteSummary)
@@ -466,7 +484,7 @@ struct KineSheetScreen: View {
                         .frame(width: 30)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Ver el reporte completo").font(.headline)
-                        Text("Así lo recibe el kinesiólogo o la mutual, con las cifras por turno.")
+                        Text("Así lo recibe el personal de la salud, con las cifras por turno.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -541,14 +559,10 @@ struct KineSheetScreen: View {
         summary = computed
         facts = built
         level = LevelProgress.compute(sessions: store.data.sessions, calendar: store.calendar, now: now)
-        if let cached = KineSheetCache.decode(store.data.lastKineSheetJSON), KineSheetCache.usable(cached, facts: built) {
-            sheet = cached
-            if let original = cached.note?.original, !original.isEmpty { noteText = original }
-            dataChanged = cached.factsSignature != signature
-        } else {
-            sheet = KineSheet(consult: KineConsultRules.template(built, profile: store.profile), note: nil,
-                              factsSignature: signature, preparedAt: now)
-        }
+        // Nunca se muestra un reporte anterior (pedido del usuario): cada vez parte de las cifras de hoy y, con
+        // Apple Intelligence disponible, hay que tocar "Preparar" para verlo.
+        sheet = KineSheet(consult: KineConsultRules.template(built, profile: store.profile), note: nil,
+                          factsSignature: signature, preparedAt: now)
     }
 
     /// La generación puede terminar con la pantalla ya cerrada: el `Task` no lee `@Environment` ni
@@ -564,11 +578,14 @@ struct KineSheetScreen: View {
         let previous = sheet
         modelFailed = false
         noteFailed = false
-        draft = KineConsultDraft()
-        phase = .writing
+        withAnimation(.easeOut(duration: 0.3)) {
+            draft = KineConsultDraft()
+            phase = .writing
+        }
         Task {
+            // Cada trozo que escribe Apple Intelligence aparece con una animación suave (texto fluido).
             let consult = await coach.kineConsult(facts, profile: profile) { partial in
-                draft = partial
+                withAnimation(.easeOut(duration: 0.25)) { draft = partial }
             }
             var note = previous?.note
             var failedNote = false
@@ -586,12 +603,14 @@ struct KineSheetScreen: View {
                 // El modelo falló: se conserva lo que había (plantilla o una preparación anterior).
                 next?.note = note
             }
-            draft = nil
-            sheet = next
-            modelFailed = consult.backend != .foundationModels
-            noteFailed = failedNote
-            if consult.backend == .foundationModels { dataChanged = false }
-            phase = .idle
+            withAnimation(.easeInOut(duration: 0.4)) {
+                draft = nil
+                sheet = next
+                modelFailed = consult.backend != .foundationModels
+                noteFailed = failedNote
+                if consult.backend == .foundationModels { dataChanged = false }
+                phase = .idle
+            }
             if let next { Self.persist(next, noteText: text, store: store) }
         }
     }
@@ -617,6 +636,9 @@ struct KineSheetScreen: View {
         }
     }
 
+    /// Antes se recuperaba el último reporte preparado al abrir; ahora siempre se prepara de nuevo.
+    static let keepsPreviousReport = false
+
     /// Cachea lo preparado o editado (la plantilla sin cambios no se guarda: se recalcula).
     private func save() {
         guard let s = sheet, phase == .idle else { return }
@@ -632,6 +654,8 @@ struct KineSheetScreen: View {
     }
 
     static func persist(_ sheet: KineSheet, noteText: String, store: AppStore) {
+        // El reporte ya no se guarda entre aperturas: siempre se prepara de nuevo (pedido del usuario).
+        if Self.keepsPreviousReport == false { return }
         var s = sheet
         s.note = resolvedNote(s, noteText: noteText)
         guard s.consult.backend == .foundationModels || s.edited || s.note != nil,

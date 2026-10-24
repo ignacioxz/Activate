@@ -12,6 +12,8 @@ struct HomeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var activeMoment: Moment?
     @State private var showPainSheet = false
+    /// Reporte de Salud (para el kinesiólogo o la mutual), abierto desde Hoy.
+    @State private var showHealthReport = false
     /// Pausa pedida sin consentimiento: se muestra `ConsentView` en una hoja.
     @State private var consentFor: Moment?
     /// Pausa que arranca cuando se cierra la hoja de consentimiento aceptado.
@@ -33,6 +35,16 @@ struct HomeView: View {
         }
         .sheet(isPresented: $showPainSheet) {
             PainNowSheet()
+        }
+        .sheet(isPresented: $showHealthReport) {
+            NavigationStack {
+                KineSheetScreen()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cerrar") { showHealthReport = false }
+                        }
+                    }
+            }
         }
         .sensoryFeedback(.success, trigger: painLogsToday)
         .task {
@@ -68,6 +80,8 @@ struct HomeView: View {
                 }
 
                 TurnoPathCard(path: snapshot.path, cascos: store.profile.cascos)
+
+                HealthReportRow { showHealthReport = true }
 
                 LevelCard(level: snapshot.level)
 

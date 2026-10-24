@@ -174,24 +174,19 @@ struct KineSheetTests {
         #expect(pdf?.prefix(4) == Data("%PDF".utf8))
     }
 
-    @Test @MainActor func soloSeGuardaLoPreparadoOEditado() {
+    @Test @MainActor func elReporteNoSeGuardaEntreAperturas() {
+        // Pedido del usuario: nunca se muestra el reporte anterior; siempre se prepara de nuevo, así que no se guarda.
         let store = AppStore(inMemory: true)
-        let template = content().sheet
-        KineSheetScreen.persist(template, noteText: "  ", store: store)
+        KineSheetScreen.persist(content().sheet, noteText: "Me duele el cuello.", store: store)
+        KineSheetScreen.persist(content(backend: .foundationModels).sheet, noteText: "", store: store)
         #expect(store.data.lastKineSheetJSON == nil)
+        #expect(!KineSheetScreen.keepsPreviousReport)
 
-        // Con nota escrita sí se guarda (texto tal cual, sin resumen).
-        KineSheetScreen.persist(template, noteText: "Me duele el cuello.", store: store)
-        let withNote = KineSheetCache.decode(store.data.lastKineSheetJSON)
-        #expect(withNote?.note?.original == "Me duele el cuello." && withNote?.note?.summary == "")
-
-        // Un resumen que ya no corresponde al texto se cambia por el texto tal cual.
+        // La nota resumida sigue resolviéndose dentro de la misma apertura.
         var ai = content(backend: .foundationModels).sheet
         ai.note = PatientNote(original: "Texto viejo", summary: "Resumen viejo", zones: [.cuello], moments: [], backend: .foundationModels)
         #expect(KineSheetScreen.resolvedNote(ai, noteText: "Texto viejo")?.summary == "Resumen viejo")
         #expect(KineSheetScreen.resolvedNote(ai, noteText: "Texto nuevo")?.summary == "")
-        KineSheetScreen.persist(ai, noteText: "Texto viejo", store: store)
-        #expect(KineSheetCache.decode(store.data.lastKineSheetJSON)?.consult.backend == .foundationModels)
     }
 
     @Test func cacheJSONIdaYVueltaEIgnoraElFormatoAntiguo() {

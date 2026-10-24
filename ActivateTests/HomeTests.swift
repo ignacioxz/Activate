@@ -79,7 +79,7 @@ struct HomeTests {
         #expect(Set(notices.map(\.workDayKey)).count == notices.count)
         #expect(notices.first?.dayInBlock == 2)
         #expect(notices.first?.fireDate == date(13, 20, 30))
-        #expect(notices.first?.body == "Día 2 está a 5 minutos.")
+        #expect(notices.first?.body == "Día 2 está a 7 minutos.")
         #expect(notices.first?.title == "Le queda el campamento.")
         #expect(notices.first?.id == "daily-notice-2026-10-13")
         #expect(notices.allSatisfy { $0.dayInBlock >= 2 && $0.dayInBlock <= 7 })

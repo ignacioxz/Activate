@@ -12,7 +12,7 @@ import SwiftUI
 nonisolated enum HealthReport {
     static let title = "Reporte de Salud"
     /// Subtítulo corto bajo el título (pantalla, PNG y PDF).
-    static let audience = "Para el kinesiólogo o la mutual"
+    static let audience = "Para el personal de la salud"
 }
 
 /// Todo lo que necesita la hoja exportada (Sendable: viaja en `Transferable`).

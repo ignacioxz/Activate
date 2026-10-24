@@ -76,7 +76,7 @@ enum DailyNotice {
     }
 
     nonisolated static func body(dayInBlock: Int) -> String {
-        "Día \(dayInBlock) está a 5 minutos."
+        "Día \(dayInBlock) está a 7 minutos."
     }
 
     /// La demo silencia los avisos solo mientras está activa: `notificationsMuted` vale `true`
